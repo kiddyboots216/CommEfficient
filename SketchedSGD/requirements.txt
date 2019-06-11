@@ -1,0 +1,4 @@
+!pip install ray[debug]
+!pip install track-ml
+!pip install pydot
+# !pip install -I torchvision==0.2.1
