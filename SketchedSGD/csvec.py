@@ -35,7 +35,7 @@ class CSVec(object):
         if device is None:
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
         else:
-            assert(device == "cuda" or device == "cpu")
+            assert("cuda" in device or device == "cpu")
         self.device = device
 
         if not doInitialize:
@@ -152,14 +152,21 @@ class CSVec(object):
         if isinstance(other, CSVec):
             self.accumulateCSVec(other)
         elif isinstance(other, torch.Tensor):
+#             self.accumulateTable(other)
             self.accumulateVec(other)
         else:
-            raise ValueError("Can't add this to a CSVec: {}".format(other))
+#             from IPython.core.debugger import set_trace; set_trace()
+            raise ValueError(f"Can't add this to a CSVec: {other} because it is not a {CSVec}")
         return self
 
     def accumulateVec(self, vec):
         # updating the sketch
-        assert(len(vec.size()) == 1 and vec.size()[0] == self.d)
+        try:
+            assert(len(vec.size()) == 1 and vec.size()[0] == self.d), f"Len of {vec} was {len(vec.size())} instead of 1 or size was {vec.size()[0]} instead of {self.d}"
+        except AssertionError:
+            return self.accumulateTable(vec)
+#             vec = torch.squeeze(vec, 0)
+#             assert(len(vec.size()) == 1 and vec.size()[0] == self.d), f"After squeeze, Len was {len(vec.size())} instead of 1 or size was {vec.size()[0]} instead of {self.d}"
         for r in range(self.r):
             buckets = self.buckets[r,:].to(self.device)
             signs = self.signs[r,:].to(self.device)
@@ -196,7 +203,10 @@ class CSVec(object):
                 #self.table[r,:] += torch.ones(self.c)
                 #pass
         """
-
+    def accumulateTable(self, table):
+        assert self.table.size() == table.size(), f"This CSVec is {self.table.size()} but the table is {table.size()}"
+        self.table += table
+    
     def accumulateCSVec(self, csVec):
         # merges csh sketch into self
         assert(self.d == csVec.d)

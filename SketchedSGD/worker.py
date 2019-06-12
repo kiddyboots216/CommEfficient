@@ -67,8 +67,9 @@ class Worker(Sketcher):
         self.candidateSketch = self.v[self.sketchMask]
         self.sketch.zero()
         self.sketch += self.candidateSketch
-        # COMMUNICATE
-        return self.sketch
+        # COMMUNICATE ONLY THE TABLE
+#         print(self.sketch.table.size())
+        return self.sketch.table
 #     @ray.remote
     def send_topkAndUnsketched(self, hhcoords):
         # directly send whatever wasn't sketched

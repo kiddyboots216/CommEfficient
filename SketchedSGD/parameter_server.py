@@ -19,13 +19,20 @@ class ParameterServer(Sketcher):
         super().__init__(params, k, p2, numCols, numRows, lr,
                  momentum, dampening, weight_decay, nesterov,
                  numBlocks, p1)
+        self.sketch = CSVec(d=self.sketchMask.sum().item(), c=numCols, r=numRows, 
+                            device=self.device, nChunks=1, numBlocks=numBlocks)
         
         
 #     @ray.remote
     def compute_hhcoords(self, sketches):
         # THIS ON SERVER
+#         sketches.append(self.sketch)
+#         print(sketches)
+        self.sketch += np.sum(sketches)
+#         for sketch in sketches:
+#             self.sketch += sketch
 #         candidateTopK = self.sketch.unSketch(k=self.p2*self.k)
-        self.candidateTopK = np.sum(sketches).unSketch(k=self.p2*self.k)
+        self.candidateTopK = self.sketch.unSketch(k=self.p2*self.k)
         self.candidateHHCoords = self.candidateTopK.nonzero()
         # don't need to stack or sum
         # COMMUNICATE
@@ -33,7 +40,7 @@ class ParameterServer(Sketcher):
 #     @ray.remote
     def compute_update(self, sketchesAndUnsketched):
 #         from IPython.core.debugger import set_trace; set_trace()
-        sketches, unsketched = sketchesAndUnsketched[0]
+        sketches, unsketched = sketchesAndUnsketched
         self.candidateTopK[self.candidateHHCoords] = torch.sum(
             torch.stack(sketches),dim=0)
 #         del vs
@@ -50,17 +57,18 @@ class ParameterServer(Sketcher):
         return weightUpdate
 
 if __name__ == "__main__":
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    # this unit test runs a single round of sketched SGD
     ray.init(ignore_reinit_error=True)
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     # CONSTANTS
     epochs = 1
     batch_size = 1
-    D_in, D_out, H_sizes = 1, 1, [1,1]
+    D_in, D_out, H_sizes = 2, 4, [2,4]
 
     x = torch.randn(batch_size, D_in, device=device)
     y = torch.randn(batch_size, D_out, device=device)
-    num_workers = 1
-    # Create a parameter server.
+    num_workers = 2
+    import torch.nn as nn
 
     class FCNet(nn.Module):
         def __init__(self, in_size, out_size, hidden_sizes):
@@ -89,11 +97,11 @@ if __name__ == "__main__":
         # workers do backward passes and calculate sketches
     sketches = [ray.get(worker.forward.remote(x, y)) for worker in workers]
         # server initiates second round of communication
-    # hhcoords = ray.get(ps.compute_hhcoords.remote(sketches))
+    hhcoords = ray.get(ps.compute_hhcoords.remote(sketches))
         # workers answer, also giving the unsketched params
-    # topkAndUnsketched = list(zip(*ray.get([worker.send_topkAndUnsketched.remote(hhcoords) for worker in workers])))
+    topkAndUnsketched = list(zip(*ray.get([worker.send_topkAndUnsketched.remote(hhcoords) for worker in workers])))
         # server compute weight update, put it into ray
-    #     weightUpdate = ps.compute_update.remote(topkAndUnsketched)
+    weightUpdate = ray.get(ps.compute_update.remote(topkAndUnsketched))
         # workers apply weight update (can be merged with 1st line)
-    #     ray.get([worker.apply_update.remote(weightUpdate) for worker in workers])
+    ray.get([worker.apply_update.remote(weightUpdate) for worker in workers])
         # server computes validation accuracy (only one per epoch)
