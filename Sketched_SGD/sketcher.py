@@ -27,9 +27,14 @@ class _RequiredParameter(object):
 required = _RequiredParameter()
 
 class Sketcher(object):
-    def __init__(self, params, k, p2, numCols, numRows, lr,
-                 momentum=0, dampening=0, weight_decay=0, nesterov=False,
-                 numBlocks=1, p1=0):
+    def __init__(self, model_maker, model_config, 
+                 k=0, p2=0, numCols=0, numRows=0, p1=0, numBlocks=1, # sketched_params
+                 lr=0, momentum=0, dampening=0, weight_decay=0, nesterov=False): # opt_params
+        model = model_maker(model_config)
+        self.sketchedModel = SketchedModel(model)
+        trainable_params = lambda model: filter(lambda p: p.requires_grad, model.parameters())
+        params = trainable_params(self.sketchedModel)
+#         params = sketchedModel.parameters()
         # checking before default Optimizer init
         if lr < 0.0:
             raise ValueError("Invalid learning rate: {}".format(lr))
@@ -61,7 +66,7 @@ class Sketcher(object):
         # SketchedSGD-specific
         # set device
         if self.param_groups[0]["params"][0].is_cuda:
-            self.device = "cuda"
+            self.device = "cuda:0"
         else:
             self.device = "cpu"
         # set all the regular SGD params as instance vars
@@ -86,10 +91,13 @@ class Sketcher(object):
                     grad_size += size
         self.grad_size = grad_size
         self.sketchMask = torch.cat(sketchMask).byte().to(self.device)
+        self.sketch = CSVec(d=self.sketchMask.sum().item(), c=numCols, r=numRows, 
+                            device=self.device, nChunks=1, numBlocks=numBlocks)
         
     """
     Helper functions below
     """
+    
     def add_param_group(self, param_group):
         r"""Add a param group to the :class:`Optimizer` s `param_groups`.
 

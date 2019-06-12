@@ -10,19 +10,13 @@ from worker import Worker
 
 @ray.remote(num_gpus=1.0)
 class ParameterServer(Sketcher):
-    def __init__(self, model_maker, model_config, num_workers, k, p2, numCols, numRows, lr,
-                 momentum=0, dampening=0, weight_decay=0, nesterov=False,
-                 numBlocks=1, p1=0):
-        model = model_maker(model_config)
-        sketchedModel = SketchedModel(model)
-        params = sketchedModel.parameters()
-        super().__init__(params, k, p2, numCols, numRows, lr,
-                 momentum, dampening, weight_decay, nesterov,
-                 numBlocks, p1)
-        self.sketch = CSVec(d=self.sketchMask.sum().item(), c=numCols, r=numRows, 
-                            device=self.device, nChunks=1, numBlocks=numBlocks)
+    def __init__(self, model_maker, model_config, kwargs, step_number=0):
+        self.step_number = step_number
+        super().__init__(model_maker, model_config, **self.param_values(kwargs))
         
-        
+    def param_values(self, params):
+        return {k: v(self.step_number) if callable(v) else v
+                for k,v in params.items()}    
 #     @ray.remote
     def compute_hhcoords(self, sketches):
         # THIS ON SERVER

@@ -7,35 +7,38 @@ from sketched_model import SketchedModel
 
 @ray.remote(num_gpus=1.0)
 class Worker(Sketcher):
-    def __init__(self, worker_index, model_maker, model_config, k, p2, numCols, numRows, lr,
-                 momentum=0, dampening=0, weight_decay=0, nesterov=False,
-                 numBlocks=1, p1=0, step_number=0):
+    def __init__(self, worker_index, model_maker, model_config, kwargs, step_number=0):
         self.worker_index = worker_index
-        self.lr = lr
-        trainable_params = lambda model: filter(lambda p: p.requires_grad, model.parameters())
         self.step_number = step_number
-        model = model_maker(model_config)
-        self.sketchedModel = SketchedModel(model)
-        params = trainable_params(self.sketchedModel)
-        super().__init__(params, k, p2, numCols, numRows, lr,
-                 momentum, dampening, weight_decay, nesterov,
-                 numBlocks, p1)
+        super().__init__(model_maker, model_config, **self.param_values(kwargs))
+#         k, p2, numCols, numRows, lr,
+#                  momentum=0, dampening=0, weight_decay=0, nesterov=False,
+#                  numBlocks=1, p1=0, step_number=0):
+        
+        # get params and set param_groups, self.sketch via Sketcher
+#         trainable_params = lambda model: filter(lambda p: p.requires_grad, model.parameters())        
+#         model = model_maker(model_config)
+#         self.sketchedModel = SketchedModel(model)
+#         params = trainable_params(self.sketchedModel)
+#         super().__init__(model_maker, model_config, **)
+        # make u, v, sketch
         self.u = torch.zeros(self.grad_size, device=self.device)
         self.v = torch.zeros(self.grad_size, device=self.device)
-        self.sketch = CSVec(d=self.sketchMask.sum().item(), c=numCols, r=numRows, 
-                            device=self.device, nChunks=1, numBlocks=numBlocks)
-        
+    def param_values(self, params):
+        return {k: v(self.step_number) if callable(v) else v
+                for k,v in params.items()}    
 #     @ray.remote
-    def forward(self, x, y):
+    def forward(self, loss_fn, accuracy_fn, inputs, targets, training=True):
         self.zero_grad()
-        criterion = torch.nn.MSELoss(reduction='sum')
-        loss = criterion(self.sketchedModel(x), y)
-#         return loss
-        loss.backward()
-        return self.compute_sketch()
+        outputs = self.sketchedModel(inputs)
+        loss = loss_fn(outputs, targets)
+        accuracy = accuracy_fn(outputs, targets)
+        if training:
+            loss.backward()
+            return loss, accuracy, self.compute_sketch()
+        else:
+            return loss, accuracy
     
-    def param_values(self):
-            return {"lr": self.lr(self.step_number) if callable(self.lr) else self.lr}
     
     def compute_sketch(self):
         """

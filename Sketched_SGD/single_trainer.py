@@ -257,6 +257,7 @@ class SGD_Sketched(Optimizer):
                 p.data.add_(-p.grad.data)
 
 if __name__ == "__main__":
+    # this unit tests does one optimization pass of the single/centralized trainer
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     class FCNet(nn.Module):
         def __init__(self, in_size, out_size, hidden_sizes):
