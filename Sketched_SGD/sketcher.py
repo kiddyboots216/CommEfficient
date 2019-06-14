@@ -65,10 +65,12 @@ class Sketcher(object):
             self.add_param_group(param_group)
         # SketchedSGD-specific
         # set device
-        if self.param_groups[0]["params"][0].is_cuda:
-            self.device = "cuda:0"
-        else:
-            self.device = "cpu"
+        self.device = model_config["device"]
+#         print(f"I am using backend of {self.device}")
+#         if self.param_groups[0]["params"][0].is_cuda:
+#             self.device = "cuda:0"
+#         else:
+#             self.device = "cpu"
         # set all the regular SGD params as instance vars
         self.momentum = momentum
         self.weight_decay = weight_decay
@@ -91,13 +93,19 @@ class Sketcher(object):
                     grad_size += size
         self.grad_size = grad_size
         self.sketchMask = torch.cat(sketchMask).byte().to(self.device)
+#         print(f"Make CSVec of dim{numRows}, {numCols}")
         self.sketch = CSVec(d=self.sketchMask.sum().item(), c=numCols, r=numRows, 
                             device=self.device, nChunks=1, numBlocks=numBlocks)
         
     """
     Helper functions below
     """
-    
+    def param_values(self):
+#         print(f"Kwargs are {self.params}")
+        params = {k: v(self.step_number) if callable(v) else v
+                for k,v in self.params.items()}
+#         print(f"Params are {params}")
+        return params
     def add_param_group(self, param_group):
         r"""Add a param group to the :class:`Optimizer` s `param_groups`.
 

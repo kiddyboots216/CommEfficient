@@ -3,26 +3,41 @@ import torch
 import torch.nn as nn
 import ray
 
-from csvec import CSVec
 from sketcher import Sketcher
-from sketched_model import SketchedModel
 from worker import Worker
 
-@ray.remote(num_gpus=1.0)
+@ray.remote(
+    num_gpus=0.2, 
+    num_cpus=0.4
+)
 class ParameterServer(Sketcher):
-    def __init__(self, model_maker, model_config, kwargs, step_number=0):
-        self.step_number = step_number
-        super().__init__(model_maker, model_config, **self.param_values(kwargs))
+    def __init__(self, model_maker, model_config, kwargs):
+        print(f"Received args {kwargs}")
+        self.step_number = 0
+        self.params = kwargs
+#         print(f"Now my params are {self.params}")
+        super().__init__(model_maker, model_config, **self.param_values())
+        warmed_up = False
+        while not warmed_up:
+            try:
+                for size in [512, 256]:
+                        warmup_cudnn(self.sketchedModel, size)
+                warmed_up = True
+            except RuntimeError as e:
+                print(e)
+        del self.sketchedModel
+        del self.param_groups
         
-    def param_values(self, params):
-        return {k: v(self.step_number) if callable(v) else v
-                for k,v in params.items()}    
 #     @ray.remote
     def compute_hhcoords(self, sketches):
+#         from IPython.core.debugger import set_trace; set_trace()
+        sketches = [sketch.to(self.device) for sketch in sketches]
         # THIS ON SERVER
 #         sketches.append(self.sketch)
 #         print(sketches)
-        self.sketch += np.sum(sketches)
+#         for sketch in sketches:
+#             self.sketch += sketch
+        self.sketch += torch.sum(torch.stack(sketches, dim=0), dim=0)
 #         for sketch in sketches:
 #             self.sketch += sketch
 #         candidateTopK = self.sketch.unSketch(k=self.p2*self.k)
@@ -30,11 +45,13 @@ class ParameterServer(Sketcher):
         self.candidateHHCoords = self.candidateTopK.nonzero()
         # don't need to stack or sum
         # COMMUNICATE
-        return self.candidateHHCoords
+        return self.candidateHHCoords.cpu()
 #     @ray.remote
     def compute_update(self, sketchesAndUnsketched):
 #         from IPython.core.debugger import set_trace; set_trace()
         sketches, unsketched = sketchesAndUnsketched
+        sketches = [sketch.to(self.device) for sketch in sketches]
+        unsketched = [unsketch.to(self.device) for unsketch in unsketched]
         self.candidateTopK[self.candidateHHCoords] = torch.sum(
             torch.stack(sketches),dim=0)
 #         del vs
@@ -48,7 +65,7 @@ class ParameterServer(Sketcher):
         weightUpdate[self.sketchMask] = weights
         weightUpdate[~self.sketchMask] = torch.sum(torch.stack(unsketched), dim=0)
         # COMMUNICATE
-        return weightUpdate
+        return weightUpdate.cpu()
 
 if __name__ == "__main__":
     # this unit test runs a single round of sketched SGD

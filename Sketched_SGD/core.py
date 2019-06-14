@@ -9,15 +9,13 @@ import torch
 import torch.nn as nn
 import track
 
-from sketched_sgd.single_trainer import SGD_Sketched
+# from sketched_sgd.single_trainer import SGD_Sketched
 
 #####################
 # utils
 #####################
 
-class Correct(nn.Module):
-    def forward(self, classifier, target):
-        return classifier.max(dim = 1)[1] == target
+
 
 class Timer():
     def __init__(self):
@@ -168,7 +166,6 @@ def build_graph(net):
 #####################
 ## training utils
 #####################
-
 @singledispatch
 def cat(*xs):
     raise NotImplementedError
@@ -184,44 +181,19 @@ class PiecewiseLinear(namedtuple('PiecewiseLinear', ('knots', 'vals'))):
 
 class StatsLogger():
     def __init__(self, keys):
-        self._stats = {k:[] for k in keys}
+        self.stats = {k:[] for k in keys}
 
     def append(self, output):
-        for k,v in self._stats.items():
-            v.append(output[k].detach())
+        for k,v in self.stats.items():
+            v.append(output[k])
+#             v.append(output[k].detach())
 
-    def stats(self, key):
-        return cat(*self._stats[key])
-
-    def mean(self, key):
-        return np.mean(to_numpy(self.stats(key)), dtype=np.float)
-
-@singledispatch
-def cat(*xs):
-    raise NotImplementedError
-
-@singledispatch
-def to_numpy(x):
-    raise NotImplementedError
-
-
-class PiecewiseLinear(namedtuple('PiecewiseLinear', ('knots', 'vals'))):
-    def __call__(self, t):
-        return np.interp([t], self.knots, self.vals)[0]
-
-class StatsLogger():
-    def __init__(self, keys):
-        self._stats = {k:[] for k in keys}
-
-    def append(self, output):
-        for k,v in self._stats.items():
-            v.append(output[k].detach())
-
-    def stats(self, key):
-        return cat(*self._stats[key])
+#     def stats(self, key):
+#         return cat(*self._stats[key])
 
     def mean(self, key):
-        return np.mean(to_numpy(self.stats(key)), dtype=np.float)
+        return np.mean(self.stats[key])
+#         return np.mean(to_numpy(self.stats(key)), dtype=np.float)
 
 import numpy as np
 import torch
@@ -231,7 +203,7 @@ import torchvision
 #from core import build_graph
 
 torch.backends.cudnn.benchmark = True
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+# device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 # device = "cpu"
 @cat.register(torch.Tensor)
 def _(*xs):
@@ -246,10 +218,12 @@ def warmup_cudnn(model, batch_size):
     #to allow benchmarking of cudnn kernels
     inp = torch.Tensor(np.random.rand(batch_size, 3, 32, 32)).cuda()
     target = torch.LongTensor(np.random.randint(0, 10, batch_size)).cuda()
-    batch = {'input': inp, 'target': target}
-    model.train(True)
-    o = model(batch)
-    o['loss'].sum().backward()
+#     batch = {'input': inp, 'target': target}
+#     model.train(True)
+    o = model(inp)
+    criterion = nn.CrossEntropyLoss(reduction='mean')
+    loss = criterion(o, target)
+    loss.backward()
     model.zero_grad()
     torch.cuda.synchronize()
 
@@ -282,12 +256,14 @@ class Batches():
         self.set_random_choices = set_random_choices
         self.dataloader = torch.utils.data.DataLoader(
             dataset, batch_size=batch_size, num_workers=num_workers,
-            pin_memory=True, shuffle=shuffle, drop_last=drop_last
+#             pin_memory=True, 
+            shuffle=shuffle, drop_last=drop_last
         )
 
     def __iter__(self):
         if self.set_random_choices:
             self.dataset.set_random_choices()
+        device = "cpu"
         return ({'input': x.to(device), 'target': y.to(device).long()}
                 for (x,y) in self.dataloader)
 

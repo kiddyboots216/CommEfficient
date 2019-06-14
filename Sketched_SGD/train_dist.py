@@ -11,13 +11,10 @@ import torch
 import torch.nn as nn
 
 from core import *
-from sketched_sgd.parameter_server import ParameterServer
-from sketched_sgd.worker import Worker
+from parameter_server import ParameterServer
+from worker import Worker
 
-criterion = nn.CrossEntropyLoss(reduction='sum')
-correctCriterion = Correct()
-
-def run_batches(ps, workers, batches, training):
+def run_batches(ps, workers, batches, minibatch_size, training):
     stats = StatsLogger(('loss', 'correct'))
 #     model.train(training)
     for batchId, batch in enumerate(batches):
@@ -26,42 +23,39 @@ def run_batches(ps, workers, batches, training):
         if training:
             # workers do backward passes and calculate sketches
             losses, accuracies, sketches = list(zip(*ray.get([worker.forward.remote(
-                                                criterion,
-                                                correctCriterion,
-                                                inputs[worker_id * minibatch_size : (worker_id + 1) * minibatch_size], 
-                                                targets[worker_id * minibatch_size : (worker_id + 1) * minibatch_size],
+                                                inputs[int(worker_id * minibatch_size) : int((worker_id + 1) * minibatch_size)], 
+                                                targets[int(worker_id * minibatch_size) : int((worker_id + 1) * minibatch_size)],
                                                 training)
                                             for worker_id, worker in enumerate(workers)])))
             # server initiates second round of communication
-            hhcoords = ray.get(ps.compute_hhcoords.remote(sketches))
-            # workers answer, also giving the unsketched params
+            hhcoords = ray.get(ps.compute_hhcoords.remote((sketches)))
+#             workers answer, also giving the unsketched params
             topkAndUnsketched = list(zip(*ray.get([worker.send_topkAndUnsketched.remote(hhcoords) for worker in workers])))
             # server compute weight update, put it into ray
             weightUpdate = ray.get(ps.compute_update.remote(topkAndUnsketched))
             # workers apply weight update (can be merged with 1st line)
-            ray.get([worker.apply_update.remote(weightUpdate) for worker in workers])
+            ray.wait([worker.apply_update.remote(weightUpdate) for worker in workers])
         else:
+#             pass
             losses, accuracies = list(zip(*ray.get([worker.forward.remote(
-                                        criterion,
-                                        correctCriterion,
-                                        inputs[worker_id * minibatch_size : (worker_id + 1) * minibatch_size], 
-                                        targets[worker_id * minibatch_size : (worker_id + 1) * minibatch_size],
-                                        training)
-                                    for worker_id, worker in enumerate(workers)])))
+                                                inputs[int(worker_id * minibatch_size) : int((worker_id + 1) * minibatch_size)], 
+                                                targets[int(worker_id * minibatch_size) : int((worker_id + 1) * minibatch_size)],
+                                                training)
+                                            for worker_id, worker in enumerate(workers)])))
 #         loss = criterion(outputs, targets)
 #         nCorrect = correctCriterion(outputs, targets)
-        iterationStats = {"loss": np.mean(losses), "correct": np.mean(accuracies)}
+        iterationStats = {"loss": np.mean((losses))/512, "correct": np.mean((accuracies))}
 #         if training:
 #             loss.sum().backward()
 #             optimizer.step()
         stats.append(iterationStats)
     return stats
 
-def train_epoch(ps, workers, train_batches, test_batches,
+def train_epoch(ps, workers, train_batches, test_batches, minibatch_size,
                 timer, test_time_in_total=True):
-    train_stats = run_batches(ps, workers, train_batches, True)
+    train_stats = run_batches(ps, workers, train_batches, minibatch_size, True)
     train_time = timer()
-    test_stats = run_batches(ps, workers, test_batches, False)
+    test_stats = run_batches(ps, workers, test_batches, minibatch_size, False)
     test_time = timer(test_time_in_total)
     stats ={'train_time': train_time,
             'train_loss': train_stats.mean('loss'),
@@ -72,14 +66,14 @@ def train_epoch(ps, workers, train_batches, test_batches,
             'total_time': timer.total_time}
     return stats
 
-def train(ps, workers, train_batches, test_batches, epochs,
+def train(ps, workers, train_batches, test_batches, epochs, minibatch_size,
           loggers=(), test_time_in_total=True, timer=None):
     timer = timer or Timer()
     for epoch in range(epochs):
-        epoch_stats = train_epoch(ps, workers, train_batches, test_batches,
+        epoch_stats = train_epoch(ps, workers, train_batches, test_batches, minibatch_size,
                                   timer,
                                   test_time_in_total=test_time_in_total)
-        lr = workers[0].param_values()['lr'] * train_batches.batch_size
+        lr = ray.get(workers[0].param_values.remote())['lr'] * train_batches.batch_size
         summary = union({'epoch': epoch+1, 'lr': lr}, epoch_stats)
 #         track.metric(iteration=epoch, **summary)
         for logger in loggers:
@@ -87,23 +81,38 @@ def train(ps, workers, train_batches, test_batches, epochs,
     return summary
 
 if __name__ == "__main__":
-    from easydict import EasyDict as edict
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    model_maker = lambda model_config: Net().to(device)
-    model_config = {}
-    # sketched_args = edict({
-        
-    # })
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--sketched", action="store_true")
+    parser.add_argument("--sketch_biases", action="store_true")
+    parser.add_argument("--sketch_params_larger_than", action="store_true")
+    parser.add_argument("-k", type=int, default=5000)
+    parser.add_argument("--p2", type=int, default=4)
+    parser.add_argument("--p1", type=int, default=0)
+    parser.add_argument("--cols", type=int, default=50000)
+    parser.add_argument("--rows", type=int, default=5)
+    parser.add_argument("--num_workers", type=int, default=7)
+    parser.add_argument("--num_blocks", type=int, default=1)
+    parser.add_argument("--batch_size", type=int, default=512)
+    parser.add_argument("--epochs", type=int, default=24)
+    args = parser.parse_args()
+
+    model_maker = lambda model_config: Net(
+    #     {'prep': 4, 'layer1': 8,
+    #                                 'layer2': 16, 'layer3': 32}
+    ).to(model_config["device"])
+    model_config = {
+    #     "device": "cpu",
+        "device": torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
+    }
 
     print('Downloading datasets')
     DATA_DIR = "sample_data"
     dataset = cifar10(DATA_DIR)
 
-    epochs = 24
     lr_schedule = PiecewiseLinear([0, 5, epochs], [0, 0.4, 0])
-    batch_size = 512
     train_transforms = [Crop(32, 32), FlipLR(), Cutout(8, 8)]
-    lr = lambda step: lr_schedule(step/len(train_batches))/batch_size
+    lr = lambda step: lr_schedule(step/len(train_batches))/args.batch_size
     print('Starting timer')
     timer = Timer()
 
@@ -124,27 +133,42 @@ if __name__ == "__main__":
                             set_random_choices=True, drop_last=True)
     test_batches = Batches(test_set, batch_size, shuffle=False,
                            drop_last=False)
-    optim_args = edict({
-        "k": 50000,
-        "p2": 4,
-        "p1": 0,
-        "numCols": 500000,
-        "numRows": 5,
-        "numBlocks": 1,
+
+    optim_args = {
+        "k": args.k,
+        "p2": args.p2,
+        "p1": args.p1,
+        "numCols": args.cols,
+        "numRows": args.rows,
+        "numBlocks": args.num_blocks,
         "lr": lr,
         "momentum": 0.9,
         "weight_decay": 5e-4*batch_size,
         "nesterov": True,
         "dampening": 0,
-    })
+    }
+
+    # warmed_up = False
+    # while not warmed_up:
+    #     try:
+    #         for size in [batch_size, len(dataset['test']['labels']) % batch_size]:
+    #                 warmup_cudnn(model_maker(model_config), size)
+    #         warmed_up = True
+    #     except RuntimeError as e:
+    #         print(e)
     ray.init(ignore_reinit_error=True)
-    num_workers = 1
+    num_workers = args.num_workers
+    minibatch_size = args.batch_size/num_workers
+    print(f"Passing in args {optim_args}")
     ps = ParameterServer.remote(model_maker, model_config, optim_args)
+    # ps = ParameterServer(model_maker, model_config, optim_args)
     # Create workers.
     workers = [Worker.remote(worker_index, model_maker, model_config, optim_args) for worker_index in range(num_workers)]
+    # workers = [Worker(worker_index, model_maker, model_config, optim_args) for worker_index in range(num_workers)]
 
     # track_dir = "sample_data"
     # with track.trial(track_dir, None, param_map=vars(optim_args)):
-    train(ps, workers, train_batches, test_batches, epochs,
+
+    train(ps, workers, train_batches, test_batches, epochs, minibatch_size,
           loggers=(TableLogger(), TSV), timer=timer,
           test_time_in_total=False)

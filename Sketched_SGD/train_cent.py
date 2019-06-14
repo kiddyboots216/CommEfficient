@@ -11,8 +11,8 @@ import torch
 import torch.nn as nn
 
 from core import *
-from sketched_sgd.parameter_server import ParameterServer
-from sketched_sgd.worker import Worker
+from . import ParameterServer
+from . import Worker
 
 if __name__ == "__main__":
 	print('Downloading datasets')

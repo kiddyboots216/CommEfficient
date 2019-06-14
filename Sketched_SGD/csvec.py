@@ -32,17 +32,19 @@ class CSVec(object):
         # them to be repetitions of a single block
         self.numBlocks = numBlocks
 
-        if device is None:
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        else:
-            assert("cuda" in device or device == "cpu")
+#         if device is None:
+#             device = 'cuda' if torch.cuda.is_available() else 'cpu'
+#         else:
+#         assert("cuda" in device or device == "cpu")
         self.device = device
+#         print(f"CSVec is using backend {self.device}")
 
         if not doInitialize:
             return
 
         # initialize the sketch
-        self.table = torch.zeros((r, c), device=self.device)
+        self.table = torch.zeros((self.r, self.c), device=self.device)
+#         print(f"Making table of dim{self.r,self.c} which is {self.table}")
 
         # if we already have these, don't do the same computation
         # again (wasting memory storing the same data several times)
@@ -275,12 +277,14 @@ class CSVec(object):
         return vals
 
     def _findAllValues(self):
+#         from IPython.core.debugger import set_trace; set_trace()
         if self.nChunks == 1:
             if self.numBlocks == 1:
                 vals = torch.zeros(self.r, self.d, device=self.device)
                 for r in range(self.r):
                     vals[r] = (self.table[r, self.buckets[r,:]]
                                * self.signs[r,:])
+#                 print(f"Table of size {self.r, self.d} is {self.table}")
                 return vals.median(dim=0)[0]
             else:
                 medians = torch.zeros(self.d, device=self.device)
@@ -319,7 +323,7 @@ class CSVec(object):
         hhs = self.findHHs(k=k, thr=thr)
 
         if k is not None:
-            assert(len(hhs[1]) == k)
+            assert(len(hhs[1]) == k), f"Should have found {k} hhs but only found {len(hhs[1])}"
         if epsilon is not None:
             assert((hhs[1] < thr).sum() == 0)
 
