@@ -1,0 +1,13 @@
+name: comm-efficient
+channels:
+  - pytorch
+  - anaconda
+  - defaults
+dependencies:
+  - pytorch=1.0
+  - ray=0.8.0
+  - cython=0.29.0
+  - numpy=1.15.1
+  - torchvision=0.2.1
+  - pip:
+    - torch==1.0
