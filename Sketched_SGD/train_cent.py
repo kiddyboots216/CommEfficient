@@ -11,8 +11,8 @@ import torch
 import torch.nn as nn
 
 from core import *
-from . import ParameterServer
-from . import Worker
+from sketched_model import SketchedModel
+from single_trainer import SGD_Sketched
 
 if __name__ == "__main__":
 	print('Downloading datasets')
@@ -21,10 +21,10 @@ if __name__ == "__main__":
 
 	epochs = 24
 	lr_schedule = PiecewiseLinear([0, 5, epochs], [0, 0.4, 0])
-	batch_size = 512
+	batch_size = 256
 	train_transforms = [Crop(32, 32), FlipLR(), Cutout(8, 8)]
-
-	#model = Network(union(net(), losses)).to(device)
+        device = 'cuda:0' 
+        #if torch.cuda.is_available() else 'cpu' #model = Network(union(net(), losses)).to(device)
 	model = Net().to(device)
 	model = SketchedModel(model)
 
@@ -53,22 +53,22 @@ if __name__ == "__main__":
 	test_batches = Batches(test_set, batch_size, shuffle=False,
 	                       drop_last=False)
 	lr = lambda step: lr_schedule(step/len(train_batches))/batch_size
-	from easydict import EasyDict as edict
-	sketched_args = edict({
+	#from easydict import EasyDict as edict
+	sketched_args = {
 	    "sketched": True,
 	    "k": 50000,
 	    "p2": 4,
 	    "numCols": 500000,
 	    "numRows": 5,
 	    "numBlocks": 1,
-	})
+	}
 	weights = trainable_params(model)
 	opt = SGD(weights, lr=lr, momentum=0.9,
 	                           weight_decay=5e-4*batch_size,
 	                           nesterov=True, dampening=0, **sketched_args)
 
 	track_dir = "sample_data"
-	with track.trial(track_dir, None, param_map=vars(sketched_args)):
+	with track.trial(track_dir, None, param_map=sketched_args):
 	    train(model, opt, train_batches, test_batches, epochs,
 	          loggers=(TableLogger(), TSV), timer=timer,
 	          test_time_in_total=False)

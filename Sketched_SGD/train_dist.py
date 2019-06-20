@@ -110,7 +110,7 @@ if __name__ == "__main__":
     DATA_DIR = "sample_data"
     dataset = cifar10(DATA_DIR)
 
-    lr_schedule = PiecewiseLinear([0, 5, epochs], [0, 0.4, 0])
+    lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
     train_transforms = [Crop(32, 32), FlipLR(), Cutout(8, 8)]
     lr = lambda step: lr_schedule(step/len(train_batches))/args.batch_size
     print('Starting timer')
@@ -129,9 +129,9 @@ if __name__ == "__main__":
     TSV = TSVLogger()
 
     train_batches = Batches(Transform(train_set, train_transforms),
-                            batch_size, shuffle=True,
+                            args.batch_size, shuffle=True,
                             set_random_choices=True, drop_last=True)
-    test_batches = Batches(test_set, batch_size, shuffle=False,
+    test_batches = Batches(test_set, args.batch_size, shuffle=False,
                            drop_last=False)
 
     optim_args = {
@@ -143,7 +143,7 @@ if __name__ == "__main__":
         "numBlocks": args.num_blocks,
         "lr": lr,
         "momentum": 0.9,
-        "weight_decay": 5e-4*batch_size,
+        "weight_decay": 5e-4*args.batch_size,
         "nesterov": True,
         "dampening": 0,
     }
@@ -169,6 +169,6 @@ if __name__ == "__main__":
     # track_dir = "sample_data"
     # with track.trial(track_dir, None, param_map=vars(optim_args)):
 
-    train(ps, workers, train_batches, test_batches, epochs, minibatch_size,
+    train(ps, workers, train_batches, test_batches, args.epochs, minibatch_size,
           loggers=(TableLogger(), TSV), timer=timer,
           test_time_in_total=False)

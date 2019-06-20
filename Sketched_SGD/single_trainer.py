@@ -34,6 +34,7 @@ class SGD_Sketched(Optimizer):
             self.device = "cuda"
         else:
             self.device = "cpu"
+        print(f"Using backend of type {self.device}")
         # set all the regular SGD params as instance vars
         self.momentum = momentum
         self.weight_decay = weight_decay

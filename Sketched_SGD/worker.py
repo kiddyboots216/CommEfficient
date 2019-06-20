@@ -3,20 +3,21 @@ import torch.nn as nn
 import ray
 
 from sketcher import Sketcher
-
+from core import warmup_cudnn
 class Correct(nn.Module):
     def forward(self, classifier, target):
         return classifier.max(dim = 1)[1] == target
 
 @ray.remote(
-    num_gpus=0.4, 
-    num_cpus=0.8,
+    num_gpus=0.8, 
+    num_cpus=1.0,
 )
 class Worker(Sketcher):
     def __init__(self, worker_index, model_maker, model_config, kwargs):
         self.worker_index = worker_index
         self.step_number = 0
         self.params = kwargs
+        print(f"Initializing worker {worker_index}")
         super().__init__(model_maker, model_config, **self.param_values())
         warmed_up = False
         while not warmed_up:

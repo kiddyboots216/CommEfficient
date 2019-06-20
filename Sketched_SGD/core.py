@@ -8,8 +8,8 @@ from collections import OrderedDict
 import torch
 import torch.nn as nn
 import track
-
-# from sketched_sgd.single_trainer import SGD_Sketched
+import torch.nn.functional as F
+from single_trainer import SGD_Sketched
 
 #####################
 # utils
@@ -388,6 +388,60 @@ class TSVLogger():
         self.log.append('{}\t{:.8f}\t{:.2f}'.format(epoch, hours, acc))
     def __str__(self):
         return '\n'.join(self.log)
+class Correct(nn.Module):
+    def forward(self, classifier, target):
+        return classifier.max(dim = 1)[1] == target
+criterion = nn.CrossEntropyLoss(reduce=False)
+correctCriterion = Correct()
+def run_batches(model, batches, training, optimizer):
+    stats = StatsLogger(('loss', 'correct'))
+    model.train(training)
+    for batchId, batch in enumerate(batches):
+        inputs = batch["input"]
+        targets = batch["target"]
+        optimizer.zero_grad()
+        outputs = model(inputs)
+        loss = criterion(outputs, targets.cuda())
+        nCorrect = correctCriterion(outputs, targets.cuda())
+        iterationStats = {"loss": loss, "correct": nCorrect}
+        if training:
+#             else:
+            loss.sum().backward()
+#                 optimizer.backward(loss)
+            optimizer.step()
+#             model.zero_grad()
+        stats.append(iterationStats)
+    return stats
+
+def train_epoch(model, train_batches, test_batches, optimizer,
+                timer, test_time_in_total=True):
+    train_stats = run_batches(model, train_batches, True, optimizer)
+    train_time = timer()
+    test_stats = run_batches(model, test_batches, False, optimizer)
+    test_time = timer(test_time_in_total)
+    stats ={'train_time': train_time,
+            'train_loss': train_stats.mean('loss'),
+            'train_acc': train_stats.mean('correct'),
+            'test_time': test_time,
+            'test_loss': test_stats.mean('loss'),
+            'test_acc': test_stats.mean('correct'),
+            'total_time': timer.total_time}
+    return stats
+
+def train(model, optimizer, train_batches, test_batches, epochs,
+          loggers=(), test_time_in_total=True, timer=None):
+    timer = timer or Timer()
+    for epoch in range(epochs):
+        epoch_stats = train_epoch(model, train_batches, test_batches,
+                                  optimizer, timer,
+                                  test_time_in_total=test_time_in_total)
+        lr = optimizer.param_values()['lr'] * train_batches.batch_size
+        summary = union({'epoch': epoch+1, 'lr': lr}, epoch_stats)
+        track.metric(iteration=epoch, **summary)
+        for logger in loggers:
+            logger.append(summary)
+    return summary
+
 
 trainable_params = lambda model: filter(lambda p: p.requires_grad, model.parameters())
 

@@ -5,10 +5,10 @@ import ray
 
 from sketcher import Sketcher
 from worker import Worker
-
+from core import warmup_cudnn
 @ray.remote(
-    num_gpus=0.2, 
-    num_cpus=0.4
+    num_gpus=0.5, 
+    num_cpus=1.0
 )
 class ParameterServer(Sketcher):
     def __init__(self, model_maker, model_config, kwargs):
@@ -58,7 +58,7 @@ class ParameterServer(Sketcher):
 #         del candidateSketch
         # this is w
         del self.candidateHHCoords
-        weights = topk(self.candidateTopK, k=self.k)
+        weights = self.topk(self.candidateTopK, k=self.k)
         del self.candidateTopK
         weightUpdate = torch.zeros(self.grad_size, device=self.device)
 #         weightUpdate = torch.zeros_like(self.vs[0])
@@ -66,6 +66,16 @@ class ParameterServer(Sketcher):
         weightUpdate[~self.sketchMask] = torch.sum(torch.stack(unsketched), dim=0)
         # COMMUNICATE
         return weightUpdate.cpu()
+    def topk(self, vec, k):
+        """ Return the largest k elements (by magnitude) of vec"""
+        ret = torch.zeros_like(vec)
+
+        # on a gpu, sorting is faster than pytorch's topk method
+        topkIndices = torch.sort(vec**2)[1][-k:]
+        #_, topkIndices = torch.topk(vec**2, k)
+
+        ret[topkIndices] = vec[topkIndices]
+        return ret
 
 if __name__ == "__main__":
     # this unit test runs a single round of sketched SGD

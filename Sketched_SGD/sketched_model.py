@@ -7,7 +7,7 @@ class SketchedModel:
     # doesn't actually add "model" to self.__dict__ -- instead, nn.Module
     # creates a key/value pair in some internal dictionary that keeps
     # track of submodules
-    def __init__(self, model, sketchBiases=False, sketchParamsLargerThan=0):
+    def __init__(self, model, sketchBiases=False, sketchParamsLargerThan=0, device='cuda'):
         self.model = model
         # sketch everything larger than sketchParamsLargerThan
         for p in model.parameters():
@@ -18,18 +18,20 @@ class SketchedModel:
             if isinstance(m, torch.nn.Linear):
                 if m.bias is not None:
                     m.bias.do_sketching = sketchBiases
+        self.device = device
 
     def __call__(self, *args, **kwargs):
+        args = [v.to(self.device) for v in args]
         return self.model(*args, **kwargs)
 
     def __getattr__(self, name):
         return getattr(self.model, name)
 
-    def __setattr__(self, name, value):
-        if name == "model":
-            self.__dict__[name] = value
-        else:
-            self.model.setattr(name, value)
+    #def __setattr__(self, name, value):
+    #    if name == "model":
+    #        self.__dict__[name] = value
+    #    else:
+    #        self.model.setattr(name, value)
             
 def topk(vec, k):
     """ Return the largest k elements (by magnitude) of vec"""
