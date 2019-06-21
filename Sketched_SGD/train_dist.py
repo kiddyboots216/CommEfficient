@@ -14,6 +14,28 @@ from core import *
 from parameter_server import ParameterServer
 from worker import Worker
 
+# ALL THE STUFF THAT BREAKS
+
+class PiecewiseLinear(namedtuple('PiecewiseLinear', ('knots', 'vals'))):
+    def __call__(self, t):
+        return np.interp([t], self.knots, self.vals)[0]
+
+class StatsLogger():
+    def __init__(self, keys):
+        self.stats = {k:[] for k in keys}
+
+    def append(self, output):
+        for k,v in self.stats.items():
+            v.append(output[k])
+#             v.append(output[k].detach())
+
+#     def stats(self, key):
+#         return cat(*self._stats[key])
+
+    def mean(self, key):
+        return np.mean(self.stats[key])
+#         return np.mean(to_numpy(self.stats(key)), dtype=np.float)
+
 def run_batches(ps, workers, batches, minibatch_size, training):
     stats = StatsLogger(('loss', 'correct'))
 #     model.train(training)
