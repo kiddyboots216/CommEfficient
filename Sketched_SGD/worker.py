@@ -40,7 +40,7 @@ class Worker(Sketcher):
         # make u, v, sketch
         self.u = torch.zeros(self.grad_size, device=self.device)
         self.v = torch.zeros(self.grad_size, device=self.device)
-        self.criterion = nn.CrossEntropyLoss(reduction='sum')
+        self.criterion = nn.CrossEntropyLoss(reduce=False)
         self.correctCriterion = Correct()
 #     def param_values(self):
 #         return {k: v(self.step_number) if callable(v) else v
@@ -54,7 +54,7 @@ class Worker(Sketcher):
         loss = self.criterion(outputs, targets)
         accuracy = self.correctCriterion(outputs, targets)
         if training:
-            loss.backward()
+            loss.sum().backward()
 #             return self.compute_sketch()
             return loss.detach().cpu().numpy(), accuracy.detach().cpu().numpy(), self.compute_sketch()
         else:

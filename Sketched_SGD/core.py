@@ -8,14 +8,14 @@ from collections import OrderedDict
 import torch
 import torch.nn as nn
 import track
-import torch.nn.functional as F
-from single_trainer import SGD_Sketched
 
 #####################
 # utils
 #####################
 
-
+class Correct(nn.Module):
+    def forward(self, classifier, target):
+        return classifier.max(dim = 1)[1] == target
 
 class Timer():
     def __init__(self):
@@ -166,6 +166,7 @@ def build_graph(net):
 #####################
 ## training utils
 #####################
+
 @singledispatch
 def cat(*xs):
     raise NotImplementedError
@@ -181,19 +182,150 @@ class PiecewiseLinear(namedtuple('PiecewiseLinear', ('knots', 'vals'))):
 
 class StatsLogger():
     def __init__(self, keys):
-        self.stats = {k:[] for k in keys}
+        self._stats = {k:[] for k in keys}
 
     def append(self, output):
-        for k,v in self.stats.items():
-            v.append(output[k])
-#             v.append(output[k].detach())
+        for k,v in self._stats.items():
+            v.append(output[k].detach())
 
-#     def stats(self, key):
-#         return cat(*self._stats[key])
+    def stats(self, key):
+        return cat(*self._stats[key])
 
     def mean(self, key):
-        return np.mean(self.stats[key])
-#         return np.mean(to_numpy(self.stats(key)), dtype=np.float)
+        return np.mean(to_numpy(self.stats(key)), dtype=np.float)
+
+criterion = nn.CrossEntropyLoss(reduce=False)
+correctCriterion = Correct()
+
+def run_batches(model, batches, training, optimizer):
+    stats = StatsLogger(('loss', 'correct'))
+    model.train(training)
+    for batchId, batch in enumerate(batches):
+        inputs = batch["input"]
+        targets = batch["target"]
+        optimizer.zero_grad()
+        outputs = model(inputs)
+        loss = criterion(outputs, targets)
+        nCorrect = correctCriterion(outputs, targets)
+        iterationStats = {"loss": loss, "correct": nCorrect}
+        if training:
+#             else:
+            loss.sum().backward()
+#                 optimizer.backward(loss)
+            optimizer.step()
+#             model.zero_grad()
+        stats.append(iterationStats)
+    return stats
+
+def train_epoch(model, train_batches, test_batches, optimizer,
+                timer, test_time_in_total=True):
+    train_stats = run_batches(model, train_batches, True, optimizer)
+    train_time = timer()
+    test_stats = run_batches(model, test_batches, False, optimizer)
+    test_time = timer(test_time_in_total)
+    stats ={'train_time': train_time,
+            'train_loss': train_stats.mean('loss'),
+            'train_acc': train_stats.mean('correct'),
+            'test_time': test_time,
+            'test_loss': test_stats.mean('loss'),
+            'test_acc': test_stats.mean('correct'),
+            'total_time': timer.total_time}
+    return stats
+
+def train(model, optimizer, train_batches, test_batches, epochs,
+          loggers=(), test_time_in_total=True, timer=None):
+    timer = timer or Timer()
+    for epoch in range(epochs):
+        epoch_stats = train_epoch(model, train_batches, test_batches,
+                                  optimizer, timer,
+                                  test_time_in_total=test_time_in_total)
+        lr = optimizer.param_values()['lr'] * train_batches.batch_size
+        summary = union({'epoch': epoch+1, 'lr': lr}, epoch_stats)
+        track.metric(iteration=epoch, **summary)
+        for logger in loggers:
+            logger.append(summary)
+    return summary
+
+#####################
+## network visualisation (requires pydot)
+#####################
+class ColorMap(dict):
+    palette = (
+        'bebada,ffffb3,fb8072,8dd3c7,80b1d3,fdb462,b3de69,fccde5,bc80bd,ccebc5,ffed6f,1f78b4,33a02c,e31a1c,ff7f00,'
+        '4dddf8,e66493,b07b87,4e90e3,dea05e,d0c281,f0e189,e9e8b1,e0eb71,bbd2a4,6ed641,57eb9c,3ca4d4,92d5e7,b15928'
+    ).split(',')
+    def __missing__(self, key):
+        self[key] = self.palette[len(self) % len(self.palette)]
+        return self[key]
+
+def make_pydot(nodes, edges, direction='LR', sep=sep, **kwargs):
+    import pydot
+    parent = lambda path: path[:-1]
+    stub = lambda path: path[-1]
+    class Subgraphs(dict):
+        def __missing__(self, path):
+            subgraph = pydot.Cluster(sep.join(path), label=stub(path),
+                                     style='rounded, filled',
+                                     fillcolor='#77777744')
+            self[parent(path)].add_subgraph(subgraph)
+            return subgraph
+    subgraphs = Subgraphs()
+    subgraphs[()] = g = pydot.Dot(rankdir=direction, directed=True,
+                                  **kwargs)
+    g.set_node_defaults(
+        shape='box', style='rounded, filled', fillcolor='#ffffff')
+    for node, attr in nodes:
+        path = tuple(node.split(sep))
+        subgraphs[parent(path)].add_node(
+            pydot.Node(name=node, label=stub(path), **attr))
+    for src, dst, attr in edges:
+        g.add_edge(pydot.Edge(src, dst, **attr))
+    return g
+
+get_params = lambda mod: {p.name: getattr(mod, p.name, '?')
+                          for p in signature(type(mod)).parameters.values()
+                         }
+
+
+class DotGraph():
+    colors = ColorMap()
+    def __init__(self, net, size=15, direction='LR'):
+        graph = build_graph(net)
+        self.nodes = [(k, {
+            'tooltip': '%s %.1000r' % (type(n).__name__, get_params(n)),
+            'fillcolor': '#'+self.colors[type(n)],
+        }) for k, (n, i) in graph.items()]
+        self.edges = [(src, k, {})
+                      for (k, (n, i)) in graph.items()
+                      for src in i]
+        self.size, self.direction = size, direction
+
+    def dot_graph(self, **kwargs):
+        return make_pydot(self.nodes, self.edges, size=self.size,
+                            direction=self.direction, **kwargs)
+
+    def svg(self, **kwargs):
+        return self.dot_graph(**kwargs).create(format='svg').decode('utf-8')
+
+    try:
+        import pydot
+        def _repr_svg_(self):
+            return self.svg()
+    except ImportError:
+        def __repr__(self):
+            return 'pydot is needed for network visualisation'
+
+walk = lambda dict_, key: walk(dict_, dict_[key]) if key in dict_ else key
+
+def remove_by_type(net, node_type):
+    #remove identity nodes for more compact visualisations
+    graph = build_graph(net)
+    remap = {k: i[0]
+             for k,(v,i) in graph.items()
+             if isinstance(v, node_type)}
+    return {k: (v, [walk(remap, x) for x in i])
+            for k, (v,i) in graph.items()
+            if not isinstance(v, node_type)}
 
 import numpy as np
 import torch
@@ -203,7 +335,7 @@ import torchvision
 #from core import build_graph
 
 torch.backends.cudnn.benchmark = True
-# device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 # device = "cpu"
 @cat.register(torch.Tensor)
 def _(*xs):
@@ -218,12 +350,10 @@ def warmup_cudnn(model, batch_size):
     #to allow benchmarking of cudnn kernels
     inp = torch.Tensor(np.random.rand(batch_size, 3, 32, 32)).cuda()
     target = torch.LongTensor(np.random.randint(0, 10, batch_size)).cuda()
-#     batch = {'input': inp, 'target': target}
-#     model.train(True)
-    o = model(inp)
-    criterion = nn.CrossEntropyLoss(reduction='mean')
-    loss = criterion(o, target)
-    loss.backward()
+    batch = {'input': inp, 'target': target}
+    model.train(True)
+    o = model(batch)
+    o['loss'].sum().backward()
     model.zero_grad()
     torch.cuda.synchronize()
 
@@ -256,14 +386,12 @@ class Batches():
         self.set_random_choices = set_random_choices
         self.dataloader = torch.utils.data.DataLoader(
             dataset, batch_size=batch_size, num_workers=num_workers,
-#             pin_memory=True, 
-            shuffle=shuffle, drop_last=drop_last
+            pin_memory=True, shuffle=shuffle, drop_last=drop_last
         )
 
     def __iter__(self):
         if self.set_random_choices:
             self.dataset.set_random_choices()
-        device = "cpu"
         return ({'input': x.to(device), 'target': y.to(device).long()}
                 for (x,y) in self.dataloader)
 
@@ -307,6 +435,68 @@ def batch_norm(num_channels, bn_bias_init=None, bn_bias_freeze=False,
         m.weight.requires_grad = False
 
     return m
+
+
+
+"""
+class Network(nn.Module):
+    def __init__(self, net):
+        self.graph = build_graph(net)
+        super().__init__()
+        for n, (v, _) in self.graph.items():
+            setattr(self, n, v)
+    def forward(self, inputs):
+        self.cache = dict(inputs)
+        for n, (_, i) in self.graph.items():
+            #import ipdb
+            #ipdb.set_trace()
+            print(n)
+            self.cache[n] = getattr(self, n)(*[self.cache[x] for x in i])
+        return self.cache
+    def half(self):
+        for module in self.children():
+            if not isinstance(module, nn.BatchNorm2d):
+                module.half()
+        return self
+"""
+
+trainable_params = lambda model: filter(lambda p: p.requires_grad, model.parameters())
+
+class TorchOptimiser():
+    def __init__(self, weights, optimizer, sketched,
+                 k, p2, numCols, numRows, step_number=0, **opt_params):
+        self.weights = weights
+        self.step_number = step_number
+        self.opt_params = opt_params
+#         self._opt = optimizer(weights, **self.param_values())
+        if sketched:
+            assert(optimizer == torch.optim.SGD)
+            assert(opt_params["dampening"] == 0)
+#             assert(opt_params["nesterov"] == False)
+            self._opt = SGD_Sketched(weights, k, p2, numCols, numRows, 
+                                     **self.param_values())
+
+    def param_values(self):
+        return {k: v(self.step_number) if callable(v) else v
+                for k,v in self.opt_params.items()}
+
+    def step(self, loss=None):
+        self.step_number += 1
+        self._opt.param_groups[0].update(**self.param_values())
+        self._opt.step(loss)
+
+    def __repr__(self):
+        return repr(self._opt)
+    
+    def __getattr__(self, key):
+        return getattr(self._opt, key)
+
+def SGD(weights, lr, momentum, weight_decay, nesterov, dampening,
+        sketched, k, p2, numCols, numRows, numBlocks):
+    return TorchOptimiser(weights, torch.optim.SGD, sketched=sketched, k=k, p2=p2, 
+                          numCols=numCols, numRows=numRows, lr=lr,
+                          momentum=momentum, weight_decay=weight_decay,
+                          dampening=dampening, nesterov=nesterov)
 
 #Network definition
 class ConvBN(nn.Module):
@@ -388,95 +578,3 @@ class TSVLogger():
         self.log.append('{}\t{:.8f}\t{:.2f}'.format(epoch, hours, acc))
     def __str__(self):
         return '\n'.join(self.log)
-class Correct(nn.Module):
-    def forward(self, classifier, target):
-        return classifier.max(dim = 1)[1] == target
-criterion = nn.CrossEntropyLoss(reduce=False)
-correctCriterion = Correct()
-def run_batches(model, batches, training, optimizer):
-    stats = StatsLogger(('loss', 'correct'))
-    model.train(training)
-    for batchId, batch in enumerate(batches):
-        inputs = batch["input"]
-        targets = batch["target"]
-        optimizer.zero_grad()
-        outputs = model(inputs)
-        loss = criterion(outputs, targets.cuda())
-        nCorrect = correctCriterion(outputs, targets.cuda())
-        iterationStats = {"loss": loss, "correct": nCorrect}
-        if training:
-#             else:
-            loss.sum().backward()
-#                 optimizer.backward(loss)
-            optimizer.step()
-#             model.zero_grad()
-        stats.append(iterationStats)
-    return stats
-
-def train_epoch(model, train_batches, test_batches, optimizer,
-                timer, test_time_in_total=True):
-    train_stats = run_batches(model, train_batches, True, optimizer)
-    train_time = timer()
-    test_stats = run_batches(model, test_batches, False, optimizer)
-    test_time = timer(test_time_in_total)
-    stats ={'train_time': train_time,
-            'train_loss': train_stats.mean('loss'),
-            'train_acc': train_stats.mean('correct'),
-            'test_time': test_time,
-            'test_loss': test_stats.mean('loss'),
-            'test_acc': test_stats.mean('correct'),
-            'total_time': timer.total_time}
-    return stats
-
-def train(model, optimizer, train_batches, test_batches, epochs,
-          loggers=(), test_time_in_total=True, timer=None):
-    timer = timer or Timer()
-    for epoch in range(epochs):
-        epoch_stats = train_epoch(model, train_batches, test_batches,
-                                  optimizer, timer,
-                                  test_time_in_total=test_time_in_total)
-        lr = optimizer.param_values()['lr'] * train_batches.batch_size
-        summary = union({'epoch': epoch+1, 'lr': lr}, epoch_stats)
-        track.metric(iteration=epoch, **summary)
-        for logger in loggers:
-            logger.append(summary)
-    return summary
-
-
-trainable_params = lambda model: filter(lambda p: p.requires_grad, model.parameters())
-
-class TorchOptimiser():
-    def __init__(self, weights, optimizer, sketched,
-                 k, p2, numCols, numRows, step_number=0, **opt_params):
-        self.weights = weights
-        self.step_number = step_number
-        self.opt_params = opt_params
-#         self._opt = optimizer(weights, **self.param_values())
-        if sketched:
-            assert(optimizer == torch.optim.SGD)
-            assert(opt_params["dampening"] == 0)
-#             assert(opt_params["nesterov"] == False)
-            self._opt = SGD_Sketched(weights, k, p2, numCols, numRows, 
-                                     **self.param_values())
-
-    def param_values(self):
-        return {k: v(self.step_number) if callable(v) else v
-                for k,v in self.opt_params.items()}
-
-    def step(self, loss=None):
-        self.step_number += 1
-        self._opt.param_groups[0].update(**self.param_values())
-        self._opt.step(loss)
-
-    def __repr__(self):
-        return repr(self._opt)
-    
-    def __getattr__(self, key):
-        return getattr(self._opt, key)
-
-def SGD(weights, lr, momentum, weight_decay, nesterov, dampening,
-        sketched, k, p2, numCols, numRows, numBlocks):
-    return TorchOptimiser(weights, torch.optim.SGD, sketched=sketched, k=k, p2=p2, 
-                          numCols=numCols, numRows=numRows, lr=lr,
-                          momentum=momentum, weight_decay=weight_decay,
-                          dampening=dampening, nesterov=nesterov)
