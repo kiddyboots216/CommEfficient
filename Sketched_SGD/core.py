@@ -8,7 +8,8 @@ from collections import OrderedDict
 import torch
 import torch.nn as nn
 import track
-
+import torch.nn.functional as F
+from single_trainer import SGD_Sketched
 #####################
 # utils
 #####################
@@ -350,13 +351,14 @@ def warmup_cudnn(model, batch_size):
     #to allow benchmarking of cudnn kernels
     inp = torch.Tensor(np.random.rand(batch_size, 3, 32, 32)).cuda()
     target = torch.LongTensor(np.random.randint(0, 10, batch_size)).cuda()
-    batch = {'input': inp, 'target': target}
-    model.train(True)
-    o = model(batch)
-    o['loss'].sum().backward()
+#     batch = {'input': inp, 'target': target}
+#     model.train(True)
+    o = model(inp)
+    criterion = nn.CrossEntropyLoss(reduction='mean')
+    loss = criterion(o, target)
+    loss.backward()
     model.zero_grad()
     torch.cuda.synchronize()
-
 
 #####################
 ## dataset
