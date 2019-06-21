@@ -19,6 +19,9 @@ from torch.autograd import Variable
 import torch.nn as nn
 import torch.nn.functional as F
 
+from sketched_model import SketchedModel
+from csvec import CSVec
+
 class _RequiredParameter(object):
     """Singleton class representing a required parameter for an Optimizer."""
     def __repr__(self):
