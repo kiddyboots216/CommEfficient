@@ -9,7 +9,7 @@ class Correct(nn.Module):
         return classifier.max(dim = 1)[1] == target
 
 @ray.remote(
-    num_gpus=0.8, 
+    num_gpus=0.5, 
     num_cpus=1.0,
 )
 class Worker(Sketcher):

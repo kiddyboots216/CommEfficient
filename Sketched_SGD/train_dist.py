@@ -15,6 +15,9 @@ from core import *
 from parameter_server import ParameterServer
 from worker import Worker
 
+import os
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
+os.environ["CUDA_VISIBLE_DEVICES"]="0,1,2,3,4,5,6"
 # ALL THE STUFF THAT BREAKS
 
 class PiecewiseLinear(namedtuple('PiecewiseLinear', ('knots', 'vals'))):
@@ -133,15 +136,15 @@ if __name__ == "__main__":
     parser.add_argument("--p1", type=int, default=0)
     parser.add_argument("--cols", type=int, default=500000)
     parser.add_argument("--rows", type=int, default=5)
-    parser.add_argument("--num_workers", type=int, default=7)
+    parser.add_argument("--num_workers", type=int, default=1)
     parser.add_argument("--num_blocks", type=int, default=1)
     parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--epochs", type=int, default=24)
     args = parser.parse_args()
     #args.batch_size = math.ceil(args.batch_size/args.num_workers) * args.num_workers
     model_maker = lambda model_config: Net(
-         #{'prep': 4, 'layer1': 8,
-          #                           'layer2': 16, 'layer3': 32}
+         #{'prep': 1, 'layer1': 1,
+          #                           'layer2': 1, 'layer3': 1}
     ).to(model_config["device"])
     model_config = {
     #     "device": "cpu",

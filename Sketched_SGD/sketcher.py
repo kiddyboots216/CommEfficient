@@ -254,8 +254,8 @@ class Sketcher(object):
         """Update parameters with the gradient"""
         for group in self.param_groups:
             for p in group["params"]:
-                if p.grad is None:
-                    continue
+#                if p.grad is None:
+#                    continue
 #                 try:
                 p.data.add_(-p.grad.data)
 #                 except:

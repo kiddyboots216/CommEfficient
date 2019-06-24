@@ -8,7 +8,7 @@ from worker import Worker
 from core import warmup_cudnn
 @ray.remote(
     num_gpus=0.5, 
-    num_cpus=1.0
+    num_cpus=2.0
 )
 class ParameterServer(Sketcher):
     def __init__(self, model_maker, model_config, kwargs):
@@ -37,6 +37,7 @@ class ParameterServer(Sketcher):
 #         print(sketches)
 #         for sketch in sketches:
 #             self.sketch += sketch
+        self.sketch.zero()
         self.sketch += torch.sum(torch.stack(sketches, dim=0), dim=0)
 #         for sketch in sketches:
 #             self.sketch += sketch
