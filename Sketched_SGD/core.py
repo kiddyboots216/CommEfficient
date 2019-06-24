@@ -470,7 +470,7 @@ class TorchOptimiser():
         self.weights = weights
         self.step_number = step_number
         self.opt_params = opt_params
-#         self._opt = optimizer(weights, **self.param_values())
+        self._opt = optimizer(weights, **self.param_values())
         if sketched:
             assert(optimizer == torch.optim.SGD)
             assert(opt_params["dampening"] == 0)

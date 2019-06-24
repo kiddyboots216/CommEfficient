@@ -56,7 +56,7 @@ if __name__ == "__main__":
     lr = lambda step: lr_schedule(step/len(train_batches))/batch_size
     from easydict import EasyDict as edict
     sketched_args = edict({
-        "sketched": True,
+        "sketched": False,
         "k": 50000,
         "p2": 4,
         "numCols": 500000,

@@ -9,6 +9,7 @@ import track
 import ray
 import torch
 import torch.nn as nn
+import math
 
 from core import *
 from parameter_server import ParameterServer
@@ -33,7 +34,7 @@ class StatsLogger():
 #         return cat(*self._stats[key])
 
     def mean(self, key):
-        return np.mean(self.stats[key])
+        return np.mean(self.stats[key], dtype=np.float)
 #         return np.mean(to_numpy(self.stats(key)), dtype=np.float)
 
 def run_batches(ps, workers, batches, minibatch_size, training):
@@ -41,14 +42,28 @@ def run_batches(ps, workers, batches, minibatch_size, training):
 #     model.train(training)
     for batchId, batch in enumerate(batches):
         inputs = batch["input"]
-        targets = batch["target"]
+        targets = batch["target"]    
+        input_minibatches = []
+        target_minibatches = []
+        batch_size = len(inputs)
+        num_workers = len(workers)
+        for i, _ in enumerate(workers):
+            start = i * batch_size // num_workers
+            end = (i+1) * batch_size // num_workers
+            input_minibatches.append(inputs[start:end])
+            target_minibatches.append(targets[start:end])
         if training:
             # workers do backward passes and calculate sketches
             losses, accuracies, sketches = list(zip(*ray.get([worker.forward.remote(
-                                                inputs[int(worker_id * minibatch_size) : int((worker_id + 1) * minibatch_size)], 
-                                                targets[int(worker_id * minibatch_size) : int((worker_id + 1) * minibatch_size)],
-                                                training)
-                                            for worker_id, worker in enumerate(workers)])))
+                input_minibatches[worker_id],
+                target_minibatches[worker_id],
+                training)
+                for worker_id, worker in enumerate(workers)])))
+            #losses, accuracies, sketches = list(zip(*ray.get([worker.forward.remote(
+             #                                   inputs[int(worker_id * minibatch_size) : int((worker_id + 1) * minibatch_size)], 
+              #                                  targets[int(worker_id * minibatch_size) : int((worker_id + 1) * minibatch_size)],
+               #                                 training)
+                #                            for worker_id, worker in enumerate(workers)])))
             # server initiates second round of communication
             hhcoords = ray.get(ps.compute_hhcoords.remote((sketches)))
 #             workers answer, also giving the unsketched params
@@ -59,14 +74,19 @@ def run_batches(ps, workers, batches, minibatch_size, training):
             ray.wait([worker.apply_update.remote(weightUpdate) for worker in workers])
         else:
 #             pass
-            losses, accuracies = list(zip(*ray.get([worker.forward.remote(
-                                                inputs[int(worker_id * minibatch_size) : int((worker_id + 1) * minibatch_size)], 
-                                                targets[int(worker_id * minibatch_size) : int((worker_id + 1) * minibatch_size)],
-                                                training)
-                                            for worker_id, worker in enumerate(workers)])))
+            losses, accuracies= list(zip(*ray.get([worker.forward.remote(
+                input_minibatches[worker_id],
+                target_minibatches[worker_id],
+                training)
+                for worker_id, worker in enumerate(workers)])))
+            #losses, accuracies = list(zip(*ray.get([worker.forward.remote(
+             #                                   inputs[int(worker_id * minibatch_size) : int((worker_id + 1) * minibatch_size)], 
+              #                                  targets[int(worker_id * minibatch_size) : int((worker_id + 1) * minibatch_size)],
+               #                                 training)
+                #                            for worker_id, worker in enumerate(workers)])))
 #         loss = criterion(outputs, targets)
 #         nCorrect = correctCriterion(outputs, targets)
-        iterationStats = {"loss": np.mean((losses))/512, "correct": np.mean((accuracies))}
+        iterationStats = {"loss": np.mean((losses)), "correct": np.mean((accuracies))}
 #         if training:
 #             loss.sum().backward()
 #             optimizer.step()
@@ -118,10 +138,10 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--epochs", type=int, default=24)
     args = parser.parse_args()
-
+    #args.batch_size = math.ceil(args.batch_size/args.num_workers) * args.num_workers
     model_maker = lambda model_config: Net(
-    #     {'prep': 4, 'layer1': 8,
-    #                                 'layer2': 16, 'layer3': 32}
+         #{'prep': 4, 'layer1': 8,
+          #                           'layer2': 16, 'layer3': 32}
     ).to(model_config["device"])
     model_config = {
     #     "device": "cpu",
