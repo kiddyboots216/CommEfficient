@@ -29,14 +29,19 @@ from worker import Worker
 from core import warmup_cudnn
 
 
-@ray.remote(
-    num_gpus=2.0, 
-    num_cpus=2.0
-)
+class _RequiredParameter(object):
+    """Singleton class representing a required parameter for an Optimizer."""
+    def __repr__(self):
+        return "<required parameter>"
+
+required = _RequiredParameter()
+@ray.remote(num_gpus=2.0)
 class ParameterServer(object):
     def __init__(self, kwargs):
         print(f"Received args {kwargs}")
         self.step_number = 0
+        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join([str(i) for i in ray.get_gpu_ids()])
+        print(os.environ["CUDA_VISIBLE_DEVICES"])
         self.params = kwargs
         self.sketcher_init(**self.param_values())
         # super().__init__(**self.param_values())

@@ -15,9 +15,6 @@ from core import *
 from parameter_server import ParameterServer
 from worker import Worker
 
-import os
-os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
-os.environ["CUDA_VISIBLE_DEVICES"]="0,1,2,3,4,5,6,7"
 # ALL THE STUFF THAT BREAKS
 
 class PiecewiseLinear(namedtuple('PiecewiseLinear', ('knots', 'vals'))):
@@ -186,7 +183,7 @@ if __name__ == "__main__":
         "dampening": 0,
     }
 
-    ray.init(ignore_reinit_error=True, num_gpus=8)
+    ray.init(num_gpus=8)
     num_workers = args.num_workers
     minibatch_size = args.batch_size/num_workers
     print(f"Passing in args {optim_args}")

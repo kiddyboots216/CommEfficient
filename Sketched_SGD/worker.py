@@ -30,16 +30,21 @@ import os
 from core import warmup_cudnn
 
 
+class _RequiredParameter(object):
+    """Singleton class representing a required parameter for an Optimizer."""
+    def __repr__(self):
+        return "<required parameter>"
+
+required = _RequiredParameter()
 class Correct(nn.Module):
     def forward(self, classifier, target):
         return classifier.max(dim = 1)[1] == target
 
-@ray.remote(
-    num_gpus=1.0, 
-    num_cpus=2.0,
-)
+@ray.remote(num_gpus=1.0)
 class Worker(object):
     def __init__(self, num_workers, worker_index, kwargs):
+        #os.environ["CUDA_VISIBLE_DEVICES"] = ",".join([str(i) for i in ray.get_gpu_ids()])
+        #print(os.environ["CUDA_VISIBLE_DEVICES"])
         self.worker_index = worker_index 
         self.num_workers = num_workers
         self.step_number = 0
@@ -62,8 +67,8 @@ class Worker(object):
     def sketcher_init(self, 
                  k=0, p2=0, numCols=0, numRows=0, p1=0, numBlocks=1, # sketched_params
                  lr=0, momentum=0, dampening=0, weight_decay=0, nesterov=False): # opt_params
-        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, ray.get_gpu_ids())) 
-        print(ray.get_gpu_ids())
+        #os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, ray.get_gpu_ids())) 
+        #print(ray.get_gpu_ids())
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model = Net().cuda()
         self.sketchedModel = SketchedModel(model)
