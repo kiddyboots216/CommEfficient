@@ -95,7 +95,9 @@ class Sketcher(object):
                         sketchMask.append(torch.zeros(size))
                     grad_size += size
         self.grad_size = grad_size
+        print(f"Total dimension is {self.grad_size}")
         self.sketchMask = torch.cat(sketchMask).byte().to(self.device)
+        print(f"sketchMask.sum(): {self.sketchMask.sum())}")
 #         print(f"Make CSVec of dim{numRows}, {numCols}")
         self.sketch = CSVec(d=self.sketchMask.sum().item(), c=numCols, r=numRows, 
                             device=self.device, nChunks=1, numBlocks=numBlocks)

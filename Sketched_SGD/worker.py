@@ -66,7 +66,7 @@ class Worker(Sketcher):
         self.v = torch.zeros_like(self.v, device=self.device)
         return
     def forward(self, inputs, targets, training=True):
-        self.zero_grad()
+        self.sketchedModel.train(training)
         inputs = inputs.to(self.device)
         targets = targets.to(self.device)
         outputs = self.sketchedModel(inputs)
@@ -98,16 +98,16 @@ class Worker(Sketcher):
         self.step_number += 1
         self.param_groups[0].update(**self.param_values())
         gradVec = self._getGradVec()
-        self.v = gradVec
+        #self.v = gradVec
         # weight decay
-        #if self.weight_decay != 0:
-        #    gradVec.add_(self.weight_decay/self.num_workers, self._getParamVec())
+        if self.weight_decay != 0:
+            gradVec.add_(self.weight_decay/self.num_workers, self._getParamVec())
         # TODO: Pretty sure this momentum/residual formula is wrong
         if self.nesterov:
             self.u.add_(gradVec).mul_(self.momentum)
             self.v.add_(self.u).add_(gradVec)
-#             self.us[0].add_(gradVec).mul_(self.momentum)
-#             self.vs[0].add_(self.us[0]).add_(gradVec)
+#       #      self.us[0].add_(gradVec).mul_(self.momentum)
+#       #      self.vs[0].add_(self.us[0]).add_(gradVec)
         else:
             self.u.mul_(self.momentum).add_(gradVec)
             self.v.add_(self.u)
@@ -120,7 +120,7 @@ class Worker(Sketcher):
         self.sketch += self.candidateSketch
         # COMMUNICATE ONLY THE TABLE
 #         print(self.sketch.table.size())
-        import pdb; pdb.set_trace()
+       # import pdb; pdb.set_trace()
         return self.sketch.table
     #.cpu()
 #     @ray.remote
@@ -141,6 +141,7 @@ class Worker(Sketcher):
         self.v[~self.sketchMask] = 0
         self._setGradVec(weightUpdate * self._getLRVec())
         self._updateParamsWithGradVec()
+        self.sketchedModel.zero_grad()
     def apply_grad(self, weightUpdate): 
         self.u = torch.zeros_like(self.u, device=self.device)
         self.v = torch.zeros_like(self.v, device=self.device)

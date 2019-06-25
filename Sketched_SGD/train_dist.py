@@ -76,11 +76,15 @@ def run_batches(ps, workers, batches, minibatch_size, training):
     """
         #if training:
             # workers do backward passes and calculate sketches
-        losses, accuracies, sketches = list(zip(*ray.get([worker.forward.remote(
+        losses, accuracies, sketches = list(zip(
+            *ray.get(
+                [worker.forward.remote(
                 input_minibatches[worker_id],
                 target_minibatches[worker_id],
                 training)
-                for worker_id, worker in enumerate(workers)])))
+                for worker_id, worker in enumerate(workers)]
+                )
+            ))
         if training:
             #losses, accuracies, sketches = list(zip(*ray.get([worker.forward.remote(
              #                                   inputs[int(worker_id * minibatch_size) : int((worker_id + 1) * minibatch_size)], 
@@ -88,11 +92,15 @@ def run_batches(ps, workers, batches, minibatch_size, training):
                #                                 training)
                 #                            for worker_id, worker in enumerate(workers)])))
             # server initiates second round of communication
-            hhcoords = ray.get(ps.compute_hhcoords.remote((sketches)))
+            hhcoords = ps.compute_hhcoords.remote((sketches))
 #             workers answer, also giving the unsketched params
-            topkAndUnsketched = list(zip(*ray.get([worker.send_topkAndUnsketched.remote(hhcoords) for worker in workers])))
+            topkAndUnsketched = list(zip(
+                *ray.get(
+                    [worker.send_topkAndUnsketched.remote(hhcoords) for worker in workers]
+                    )
+                ))
             # server compute weight update, put it into ray
-            weightUpdate = ray.get(ps.compute_update.remote(topkAndUnsketched))
+            weightUpdate = ps.compute_update.remote(topkAndUnsketched)
             # workers apply weight update (can be merged with 1st line)
             ray.wait([worker.apply_update.remote(weightUpdate) for worker in workers])
         #else:
@@ -159,13 +167,20 @@ if __name__ == "__main__":
     parser.add_argument("--num_workers", type=int, default=1)
     parser.add_argument("--num_blocks", type=int, default=1)
     parser.add_argument("--batch_size", type=int, default=512)
+    parser.add_argument("--nesterov", type=bool, default=False)
     parser.add_argument("--epochs", type=int, default=24)
+    parser.add_argument("--test", action="store_true")
     args = parser.parse_args()
     #args.batch_size = math.ceil(args.batch_size/args.num_workers) * args.num_workers
-    model_maker = lambda model_config: Net(
-         {'prep': 1, 'layer1': 1,
+    if args.test:
+        args.k = 50
+        args.cols = 500
+        model_maker = lambda model_config: Net(
+        {'prep': 1, 'layer1': 1,
                                      'layer2': 1, 'layer3': 1}
-    ).to(model_config["device"])
+        ).to(model_config["device"])
+    else:
+        model_maker = lambda model_config: Net().to(model_config["device"])
     model_config = {
     #     "device": "cpu",
         "device": torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
@@ -209,7 +224,7 @@ if __name__ == "__main__":
         "lr": lr,
         "momentum": 0.9,
         "weight_decay": 5e-4*args.batch_size,
-        "nesterov": True,
+        "nesterov": args.nesterov,
         "dampening": 0,
     }
 
