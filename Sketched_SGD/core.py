@@ -335,8 +335,8 @@ import torchvision
 # from core import cat, to_numpy
 #from core import build_graph
 
-torch.backends.cudnn.benchmark = True
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+# torch.backends.cudnn.benchmark = True
+# device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 # device = "cpu"
 @cat.register(torch.Tensor)
 def _(*xs):
