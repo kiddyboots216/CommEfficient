@@ -4,6 +4,11 @@ import ray
 
 from sketcher import Sketcher
 from core import warmup_cudnn
+
+import os
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
+os.environ["CUDA_VISIBLE_DEVICES"]="0,1,2,3,4,5,6,7"
+
 class Correct(nn.Module):
     def forward(self, classifier, target):
         return classifier.max(dim = 1)[1] == target
@@ -28,25 +33,12 @@ class Worker(Sketcher):
                 warmed_up = True
             except RuntimeError as e:
                 print(e)
-#         k, p2, numCols, numRows, lr,
-#                  momentum=0, dampening=0, weight_decay=0, nesterov=False,
-#                  numBlocks=1, p1=0, step_number=0):
-        
-        # get params and set param_groups, self.sketch via Sketcher
-#         trainable_params = lambda model: filter(lambda p: p.requires_grad, model.parameters())        
-#         model = model_maker(model_config)
-#         self.sketchedModel = SketchedModel(model)
-#         params = trainable_params(self.sketchedModel)
-#         super().__init__(model_maker, model_config, **)
-        # make u, v, sketch
         self.u = torch.zeros(self.grad_size, device=self.device)
         self.v = torch.zeros(self.grad_size, device=self.device)
         self.criterion = nn.CrossEntropyLoss(reduction='none')
         self.correctCriterion = Correct()
-#     def param_values(self):
-#         return {k: v(self.step_number) if callable(v) else v
-#                 for k,v in self.params.items()}    
-#     @ray.remote
+
+    # below two functions are only used for debugging to confirm that this works when we send full grad
     def step(self):
         self.step_number += 1
         self.param_groups[0].update(**self.param_values())
@@ -65,6 +57,7 @@ class Worker(Sketcher):
         self._updateParamsWithGradVec()
         self.v = torch.zeros_like(self.v, device=self.device)
         return
+    
     def forward(self, inputs, targets, training=True):
         self.sketchedModel.train(training)
         inputs = inputs.to(self.device)
@@ -72,58 +65,35 @@ class Worker(Sketcher):
         outputs = self.sketchedModel(inputs)
         loss = self.criterion(outputs, targets)
         accuracy = self.correctCriterion(outputs, targets)
-        loss.sum().backward()
-        """
-        return loss.detach().cpu().numpy(), accuracy.detach().cpu().numpy()
-        if training: 
-            loss.sum().backward()
-            return loss.detach().cpu().numpy(), accuracy.detach().cpu().numpy(), self.compute_sketch() 
-        else:
-            return loss.detach().cpu().numpy(), accuracy.detach().cpu().numpy(), "bleh" 
-        """
+        sketch = "bleh"
         if training:
-         #   loss.sum().backward()
-#             return self.compute_sketch()
-            return loss.detach().cpu().numpy(), accuracy.detach().cpu().numpy(), self.compute_sketch()
-        else:
-#             pass
-            return loss.detach().cpu().numpy(), accuracy.detach().cpu().numpy(), "bleh"
-        #"""
+            sketch = self.compute_sketch()
+            loss.sum().backward()
+        return loss.detach().cpu().numpy(), accuracy.detach().cpu().numpy(), sketch
     
     def compute_sketch(self): 
         """
         Calls _backwardWorker inside backward
         """
-        
         self.step_number += 1
         self.param_groups[0].update(**self.param_values())
         gradVec = self._getGradVec()
-        #self.v = gradVec
         # weight decay
         if self.weight_decay != 0:
             gradVec.add_(self.weight_decay/self.num_workers, self._getParamVec())
-        # TODO: Pretty sure this momentum/residual formula is wrong
         if self.nesterov:
             self.u.add_(gradVec).mul_(self.momentum)
             self.v.add_(self.u).add_(gradVec)
-#       #      self.us[0].add_(gradVec).mul_(self.momentum)
-#       #      self.vs[0].add_(self.us[0]).add_(gradVec)
         else:
             self.u.mul_(self.momentum).add_(gradVec)
-            self.v.add_(self.u)
-#             self.us[0].mul_(self.momentum).add_(gradVec)
-#             self.vs[0].add_(self.us[0])
+            self.v += (self.u)
         # this is v
-#         vs = [v[self.sketchMask] for v in self.vs]
         self.candidateSketch = self.v[self.sketchMask]
         self.sketch.zero()
         self.sketch += self.candidateSketch
         # COMMUNICATE ONLY THE TABLE
-#         print(self.sketch.table.size())
-       # import pdb; pdb.set_trace()
         return self.sketch.table
-    #.cpu()
-#     @ray.remote
+
     def send_topkAndUnsketched(self, hhcoords):
     #    hhcoords = hhcoords.to(self.device)
         # directly send whatever wasn't sketched
@@ -133,8 +103,6 @@ class Worker(Sketcher):
     #.cpu()
 #     @ray.remote
     def apply_update(self, weightUpdate):
-        #weightUpdate = weightUpdate.to(self.device)
-#         assert False
         # zero out the coords that are getting communicated
         self.u[weightUpdate.nonzero()] = 0
         self.v[weightUpdate.nonzero()] = 0
@@ -142,8 +110,3 @@ class Worker(Sketcher):
         self._setGradVec(weightUpdate * self._getLRVec())
         self._updateParamsWithGradVec()
         self.sketchedModel.zero_grad()
-    def apply_grad(self, weightUpdate): 
-        self.u = torch.zeros_like(self.u, device=self.device)
-        self.v = torch.zeros_like(self.v, device=self.device)
-        self._setGradVec(weightUpdate * self._getLRVec())
-        self._updateParamsWithGradVec()

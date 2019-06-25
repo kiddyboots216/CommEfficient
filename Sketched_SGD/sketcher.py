@@ -22,6 +22,10 @@ import torch.nn.functional as F
 from sketched_model import SketchedModel
 from csvec import CSVec
 
+import os
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
+os.environ["CUDA_VISIBLE_DEVICES"]="0,1,2,3,4,5,6,7"
+
 class _RequiredParameter(object):
     """Singleton class representing a required parameter for an Optimizer."""
     def __repr__(self):
@@ -97,7 +101,7 @@ class Sketcher(object):
         self.grad_size = grad_size
         print(f"Total dimension is {self.grad_size}")
         self.sketchMask = torch.cat(sketchMask).byte().to(self.device)
-        print(f"sketchMask.sum(): {self.sketchMask.sum())}")
+        print(f"sketchMask.sum(): {self.sketchMask.sum()}")
 #         print(f"Make CSVec of dim{numRows}, {numCols}")
         self.sketch = CSVec(d=self.sketchMask.sum().item(), c=numCols, r=numRows, 
                             device=self.device, nChunks=1, numBlocks=numBlocks)

@@ -12,6 +12,10 @@ cache = {}
 #profile = line_profiler.LineProfiler()
 #atexit.register(profile.print_stats)
 
+import os
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
+os.environ["CUDA_VISIBLE_DEVICES"]="0,1,2,3,4,5,6,7"
+
 class CSVec(object):
     """ Simple Count Sketched Vector """
     def __init__(self, d, c, r, doInitialize=True, device=None,

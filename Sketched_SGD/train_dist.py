@@ -17,7 +17,7 @@ from worker import Worker
 
 import os
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
-os.environ["CUDA_VISIBLE_DEVICES"]="0,1,2,3,4,5,6"
+os.environ["CUDA_VISIBLE_DEVICES"]="0,1,2,3,4,5,6,7"
 # ALL THE STUFF THAT BREAKS
 
 class PiecewiseLinear(namedtuple('PiecewiseLinear', ('knots', 'vals'))):
@@ -55,27 +55,7 @@ def run_batches(ps, workers, batches, minibatch_size, training):
             end = (i+1) * batch_size // num_workers
             input_minibatches.append(inputs[start:end])
             target_minibatches.append(targets[start:end])
-        #losses, accuracies= list(zip(*ray.get([worker.forward.remote(
-                #input_minibatches[worker_id],
-                #target_minibatches[worker_id],
-                #training) 
-                #for worker_id, worker in enumerate(workers)])))
-        """
-        if training:
-            grads = ray.get([worker.step.remote() for worker in workers])
-            weightUpdate = ray.get(ps.average_grads.remote(grads))
-            ray.wait([worker.update.remote(weightUpdate) for worker in workers])
-        # workers apply weight update (can be merged with 1st line)
-            #ray.wait([worker.apply_grad.remote(weightUpdate) for worker in workers])
-        iterationStats = {"loss": np.mean((losses)), "correct": np.mean((accuracies))}
-#         if training:
-#             loss.sum().backward()
-#             optimizer.step()
-        stats.append(iterationStats)
-    return stats
-    """
-        #if training:
-            # workers do backward passes and calculate sketches
+        # workers do backward passes and calculate sketches
         losses, accuracies, sketches = list(zip(
             *ray.get(
                 [worker.forward.remote(
@@ -86,14 +66,9 @@ def run_batches(ps, workers, batches, minibatch_size, training):
                 )
             ))
         if training:
-            #losses, accuracies, sketches = list(zip(*ray.get([worker.forward.remote(
-             #                                   inputs[int(worker_id * minibatch_size) : int((worker_id + 1) * minibatch_size)], 
-              #                                  targets[int(worker_id * minibatch_size) : int((worker_id + 1) * minibatch_size)],
-               #                                 training)
-                #                            for worker_id, worker in enumerate(workers)])))
             # server initiates second round of communication
             hhcoords = ps.compute_hhcoords.remote((sketches))
-#             workers answer, also giving the unsketched params
+            # workers answer, also giving the unsketched params
             topkAndUnsketched = list(zip(
                 *ray.get(
                     [worker.send_topkAndUnsketched.remote(hhcoords) for worker in workers]
@@ -103,24 +78,7 @@ def run_batches(ps, workers, batches, minibatch_size, training):
             weightUpdate = ps.compute_update.remote(topkAndUnsketched)
             # workers apply weight update (can be merged with 1st line)
             ray.wait([worker.apply_update.remote(weightUpdate) for worker in workers])
-        #else:
-#             pass
-        #    losses, accuracies= list(zip(*ray.get([worker.forward.remote(
-        #        input_minibatches[worker_id],
-         #       target_minibatches[worker_id],
-          #      training)
-           #     for worker_id, worker in enumerate(workers)])))
-            #losses, accuracies = list(zip(*ray.get([worker.forward.remote(
-             #                                   inputs[int(worker_id * minibatch_size) : int((worker_id + 1) * minibatch_size)], 
-              #                                  targets[int(worker_id * minibatch_size) : int((worker_id + 1) * minibatch_size)],
-               #                                 training)
-                #                            for worker_id, worker in enumerate(workers)])))
-#         loss = criterion(outputs, targets)
-#         nCorrect = correctCriterion(outputs, targets)
         iterationStats = {"loss": np.mean((losses)), "correct": np.mean((accuracies))}
-#         if training:
-#             loss.sum().backward()
-#             optimizer.step()
         stats.append(iterationStats)
     return stats
 #"""
@@ -228,23 +186,13 @@ if __name__ == "__main__":
         "dampening": 0,
     }
 
-    # warmed_up = False
-    # while not warmed_up:
-    #     try:
-    #         for size in [batch_size, len(dataset['test']['labels']) % batch_size]:
-    #                 warmup_cudnn(model_maker(model_config), size)
-    #         warmed_up = True
-    #     except RuntimeError as e:
-    #         print(e)
     ray.init(ignore_reinit_error=True)
     num_workers = args.num_workers
     minibatch_size = args.batch_size/num_workers
     print(f"Passing in args {optim_args}")
     ps = ParameterServer.remote(model_maker, model_config, optim_args)
-    # ps = ParameterServer(model_maker, model_config, optim_args)
     # Create workers.
     workers = [Worker.remote(num_workers, worker_index, model_maker, model_config, optim_args) for worker_index in range(num_workers)]
-    # workers = [Worker(worker_index, model_maker, model_config, optim_args) for worker_index in range(num_workers)]
 
     # track_dir = "sample_data"
     # with track.trial(track_dir, None, param_map=vars(optim_args)):
