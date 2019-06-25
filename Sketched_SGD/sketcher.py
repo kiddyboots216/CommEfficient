@@ -19,12 +19,11 @@ from torch.autograd import Variable
 import torch.nn as nn
 import torch.nn.functional as F
 
+from core import *
 from sketched_model import SketchedModel
 from csvec import CSVec
 
 import os
-os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
-os.environ["CUDA_VISIBLE_DEVICES"]="0,1,2,3,4,5,6,7"
 
 class _RequiredParameter(object):
     """Singleton class representing a required parameter for an Optimizer."""
@@ -32,12 +31,15 @@ class _RequiredParameter(object):
         return "<required parameter>"
 
 required = _RequiredParameter()
-
+@ray.remote(num_gpus=1, num_cpus=2)
 class Sketcher(object):
-    def __init__(self, model_maker, model_config, 
+    def __init__(self, 
                  k=0, p2=0, numCols=0, numRows=0, p1=0, numBlocks=1, # sketched_params
                  lr=0, momentum=0, dampening=0, weight_decay=0, nesterov=False): # opt_params
-        model = model_maker(model_config)
+        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, ray.get_gpu_ids())) 
+        print(ray.get_gpu_ids())
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = Net().cuda()
         self.sketchedModel = SketchedModel(model)
         trainable_params = lambda model: filter(lambda p: p.requires_grad, model.parameters())
         params = trainable_params(self.sketchedModel)
@@ -72,7 +74,7 @@ class Sketcher(object):
             self.add_param_group(param_group)
         # SketchedSGD-specific
         # set device
-        self.device = model_config["device"]
+        #self.device = model_config
 #         print(f"I am using backend of {self.device}")
 #         if self.param_groups[0]["params"][0].is_cuda:
 #             self.device = "cuda:0"

@@ -123,7 +123,7 @@ if __name__ == "__main__":
     parser.add_argument("--cols", type=int, default=500000)
     parser.add_argument("--rows", type=int, default=5)
     parser.add_argument("--num_workers", type=int, default=1)
-    parser.add_argument("--num_blocks", type=int, default=1)
+    parser.add_argument("--num_blocks", type=int, default=2)
     parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--nesterov", type=bool, default=False)
     parser.add_argument("--epochs", type=int, default=24)
@@ -134,8 +134,8 @@ if __name__ == "__main__":
         args.k = 50
         args.cols = 500
         model_maker = lambda model_config: Net(
-        {'prep': 1, 'layer1': 1,
-                                     'layer2': 1, 'layer3': 1}
+        {'prep': 1, 'layer1': 2,
+                                     'layer2': 4, 'layer3': 8}
         ).to(model_config["device"])
     else:
         model_maker = lambda model_config: Net().to(model_config["device"])
@@ -186,13 +186,13 @@ if __name__ == "__main__":
         "dampening": 0,
     }
 
-    ray.init(ignore_reinit_error=True)
+    ray.init(ignore_reinit_error=True, num_gpus=8)
     num_workers = args.num_workers
     minibatch_size = args.batch_size/num_workers
     print(f"Passing in args {optim_args}")
-    ps = ParameterServer.remote(model_maker, model_config, optim_args)
+    ps = ParameterServer.remote(optim_args)
     # Create workers.
-    workers = [Worker.remote(num_workers, worker_index, model_maker, model_config, optim_args) for worker_index in range(num_workers)]
+    workers = [Worker.remote(num_workers, worker_index, optim_args) for worker_index in range(num_workers)]
 
     # track_dir = "sample_data"
     # with track.trial(track_dir, None, param_map=vars(optim_args)):

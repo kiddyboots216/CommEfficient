@@ -3,29 +3,26 @@ import torch
 import torch.nn as nn
 import ray
 
-import line_profiler
-profile = line_profiler.LineProfiler()
-import atexit
-atexit.register(profile.print_stats)
+#import line_profiler
+#profile = line_profiler.LineProfiler()
+#import atexit
+#atexit.register(profile.print_stats)
 
 from sketcher import Sketcher
 from worker import Worker
 from core import warmup_cudnn
 
-import os
-os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
-os.environ["CUDA_VISIBLE_DEVICES"]="0,1,2,3,4,5,6,7"
 
 @ray.remote(
     num_gpus=2.0, 
     num_cpus=2.0
 )
 class ParameterServer(Sketcher):
-    def __init__(self, model_maker, model_config, kwargs):
+    def __init__(self, kwargs):
         print(f"Received args {kwargs}")
         self.step_number = 0
         self.params = kwargs
-        super().__init__(model_maker, model_config, **self.param_values())
+        super().__init__(**self.param_values())
         warmed_up = False
         while not warmed_up:
             try:

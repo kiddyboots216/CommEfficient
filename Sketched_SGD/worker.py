@@ -5,9 +5,6 @@ import ray
 from sketcher import Sketcher
 from core import warmup_cudnn
 
-import os
-os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
-os.environ["CUDA_VISIBLE_DEVICES"]="0,1,2,3,4,5,6,7"
 
 class Correct(nn.Module):
     def forward(self, classifier, target):
@@ -18,13 +15,13 @@ class Correct(nn.Module):
     num_cpus=2.0,
 )
 class Worker(Sketcher):
-    def __init__(self, num_workers, worker_index, model_maker, model_config, kwargs):
-        self.worker_index = worker_index
+    def __init__(self, num_workers, worker_index, kwargs):
+        self.worker_index = worker_index 
         self.num_workers = num_workers
         self.step_number = 0
         self.params = kwargs
-        print(f"Initializing worker {worker_index}")
-        super().__init__(model_maker, model_config, **self.param_values())
+        print(f"Initializing worker {self.worker_index}")
+        super().__init__(**self.param_values())
         warmed_up = False
         while not warmed_up:
             try:
@@ -35,8 +32,8 @@ class Worker(Sketcher):
                 print(e)
         self.u = torch.zeros(self.grad_size, device=self.device)
         self.v = torch.zeros(self.grad_size, device=self.device)
-        self.criterion = nn.CrossEntropyLoss(reduction='none')
-        self.correctCriterion = Correct()
+        self.criterion = nn.CrossEntropyLoss(reduction='none').cuda()
+        self.correctCriterion = Correct().cuda()
 
     # below two functions are only used for debugging to confirm that this works when we send full grad
     def step(self):
