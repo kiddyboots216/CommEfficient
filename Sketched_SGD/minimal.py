@@ -1417,6 +1417,27 @@ class Worker(object):
         self.sketch = CSVec(d=self.sketchMask.sum().item(), c=numCols, r=numRows, 
                             device=self.device, nChunks=1, numBlocks=numBlocks)
 
+
+    # below two functions are only used for debugging to confirm that this works when we send full grad
+    def step(self):
+        self.step_number += 1
+        self.param_groups[0].update(**self.param_values())
+        gradVec = self._getGradVec()
+        # weight decay
+        if self.weight_decay != 0:
+            gradVec.add_(self.weight_decay, self._getParamVec())
+        # TODO: Pretty sure this momentum/residual formula is wrong
+        self.u.mul_(self.momentum).add_(gradVec)
+        self.v.add_(self.momentum, self.u)
+        weightUpdate = self.v
+        return weightUpdate
+    def update(self, weightUpdate):
+        #import ipdb; ipdb.set_trace()
+        self._setGradVec(weightUpdate * self._getLRVec())
+        self._updateParamsWithGradVec()
+        self.v = torch.zeros_like(self.v, device=self.device)
+        return
+
     def forward(self, inputs, targets, training=True):
         self.sketchedModel.train(training)
         self.zero_grad()
@@ -1706,6 +1727,9 @@ def run_batches(ps, workers, batches, minibatch_size, training):
                 )
             ))
         if training:
+            weightUpdate = [worker.step() for worker in workers]
+            ray.wait([worker.update(weightUpdate) for worker in workers])
+            """
             # server initiates second round of communication
             hhcoords = ps.compute_hhcoords.remote((sketches))
             # workers answer, also giving the unsketched params
@@ -1718,6 +1742,7 @@ def run_batches(ps, workers, batches, minibatch_size, training):
             weightUpdate = ps.compute_update.remote(topkAndUnsketched)
             # workers apply weight update (can be merged with 1st line)
             ray.wait([worker.apply_update.remote(weightUpdate) for worker in workers])
+            """
         iterationStats = {"loss": np.mean((losses)), "correct": np.mean((accuracies))}
         stats.append(iterationStats)
     return stats
