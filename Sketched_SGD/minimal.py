@@ -628,7 +628,7 @@ class StatsLogger():
 #         track.metric(iteration=epoch, **summary)
 #         for logger in loggers:
 #             logger.append(summary)
-    return summary
+    # return summary
 
 #####################
 ## network visualisation (requires pydot)
@@ -1778,91 +1778,91 @@ def train(ps, workers, train_batches, test_batches, epochs, minibatch_size,
             logger.append(summary)
     return summary
 
-# import argparse
-# parser = argparse.ArgumentParser()
-# parser.add_argument("--sketched", action="store_true")
-# parser.add_argument("--sketch_biases", action="store_true")
-# parser.add_argument("--sketch_params_larger_than", action="store_true")
-# parser.add_argument("-k", type=int, default=50000)
-# parser.add_argument("--p2", type=int, default=1)
-# parser.add_argument("--p1", type=int, default=0)
-# parser.add_argument("--cols", type=int, default=500000)
-# parser.add_argument("--rows", type=int, default=5)
-# parser.add_argument("--num_workers", type=int, default=1)
-# parser.add_argument("--num_blocks", type=int, default=2)
-# parser.add_argument("--batch_size", type=int, default=512)
-# parser.add_argument("--nesterov", type=bool, default=False)
-# parser.add_argument("--epochs", type=int, default=24)
-# parser.add_argument("--test", action="store_true")
-# args = parser.parse_args()
-# #args.batch_size = math.ceil(args.batch_size/args.num_workers) * args.num_workers
-# if args.test:
-#     args.k = 50
-#     args.cols = 500
-#     model_maker = lambda model_config: Net(
-#     {'prep': 1, 'layer1': 2,
-#                                  'layer2': 4, 'layer3': 8}
-#     ).to(model_config["device"])
-# else:
-#     model_maker = lambda model_config: Net().to(model_config["device"])
-# model_config = {
-# #     "device": "cpu",
-#     "device": torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
-# }
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument("--sketched", action="store_true")
+parser.add_argument("--sketch_biases", action="store_true")
+parser.add_argument("--sketch_params_larger_than", action="store_true")
+parser.add_argument("-k", type=int, default=50000)
+parser.add_argument("--p2", type=int, default=1)
+parser.add_argument("--p1", type=int, default=0)
+parser.add_argument("--cols", type=int, default=500000)
+parser.add_argument("--rows", type=int, default=5)
+parser.add_argument("--num_workers", type=int, default=1)
+parser.add_argument("--num_blocks", type=int, default=2)
+parser.add_argument("--batch_size", type=int, default=512)
+parser.add_argument("--nesterov", type=bool, default=False)
+parser.add_argument("--epochs", type=int, default=24)
+parser.add_argument("--test", action="store_true")
+args = parser.parse_args()
+#args.batch_size = math.ceil(args.batch_size/args.num_workers) * args.num_workers
+if args.test:
+    args.k = 50
+    args.cols = 500
+    model_maker = lambda model_config: Net(
+    {'prep': 1, 'layer1': 2,
+                                 'layer2': 4, 'layer3': 8}
+    ).to(model_config["device"])
+else:
+    model_maker = lambda model_config: Net().to(model_config["device"])
+model_config = {
+#     "device": "cpu",
+    "device": torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
+}
 
-# print('Downloading datasets')
-# DATA_DIR = "sample_data"
-# dataset = cifar10(DATA_DIR)
+print('Downloading datasets')
+DATA_DIR = "sample_data"
+dataset = cifar10(DATA_DIR)
 
-# lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
-# train_transforms = [Crop(32, 32), FlipLR(), Cutout(8, 8)]
-# lr = lambda step: lr_schedule(step/len(train_batches))/args.batch_size
-# print('Starting timer')
-# timer = Timer()
+lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
+train_transforms = [Crop(32, 32), FlipLR(), Cutout(8, 8)]
+lr = lambda step: lr_schedule(step/len(train_batches))/args.batch_size
+print('Starting timer')
+timer = Timer()
 
-# print('Preprocessing training data')
-# train_set = list(zip(
-#         transpose(normalise(pad(dataset['train']['data'], 4))),
-#         dataset['train']['labels']))
-# print('Finished in {:.2f} seconds'.format(timer()))
-# print('Preprocessing test data')
-# test_set = list(zip(transpose(normalise(dataset['test']['data'])),
-#                     dataset['test']['labels']))
-# print('Finished in {:.2f} seconds'.format(timer()))
+print('Preprocessing training data')
+train_set = list(zip(
+        transpose(normalise(pad(dataset['train']['data'], 4))),
+        dataset['train']['labels']))
+print('Finished in {:.2f} seconds'.format(timer()))
+print('Preprocessing test data')
+test_set = list(zip(transpose(normalise(dataset['test']['data'])),
+                    dataset['test']['labels']))
+print('Finished in {:.2f} seconds'.format(timer()))
 
-# TSV = TSVLogger()
+TSV = TSVLogger()
 
-# train_batches = Batches(Transform(train_set, train_transforms),
-#                         args.batch_size, shuffle=True,
-#                         set_random_choices=True, drop_last=True)
-# test_batches = Batches(test_set, args.batch_size, shuffle=False,
-#                        drop_last=False)
+train_batches = Batches(Transform(train_set, train_transforms),
+                        args.batch_size, shuffle=True,
+                        set_random_choices=True, drop_last=True)
+test_batches = Batches(test_set, args.batch_size, shuffle=False,
+                       drop_last=False)
 
-# optim_args = {
-#     "k": args.k,
-#     "p2": args.p2,
-#     "p1": args.p1,
-#     "numCols": args.cols,
-#     "numRows": args.rows,
-#     "numBlocks": args.num_blocks,
-#     "lr": lr,
-#     "momentum": 0.9,
-#     "weight_decay": 5e-4*args.batch_size,
-#     "nesterov": args.nesterov,
-#     "dampening": 0,
-# }
+optim_args = {
+    "k": args.k,
+    "p2": args.p2,
+    "p1": args.p1,
+    "numCols": args.cols,
+    "numRows": args.rows,
+    "numBlocks": args.num_blocks,
+    "lr": lr,
+    "momentum": 0.9,
+    "weight_decay": 5e-4*args.batch_size,
+    "nesterov": args.nesterov,
+    "dampening": 0,
+}
 
-# ray.init(num_gpus=8)
-# num_workers = args.num_workers
-# minibatch_size = args.batch_size/num_workers
-# print(f"Passing in args {optim_args}")
-# ps = ParameterServer.remote(optim_args)
-# # Create workers.
-# workers = [Worker.remote(num_workers, worker_index, optim_args) for worker_index in range(num_workers)]
+ray.init(num_gpus=8)
+num_workers = args.num_workers
+minibatch_size = args.batch_size/num_workers
+print(f"Passing in args {optim_args}")
+ps = ParameterServer.remote(optim_args)
+# Create workers.
+workers = [Worker.remote(num_workers, worker_index, optim_args) for worker_index in range(num_workers)]
 
-# # track_dir = "sample_data"
-# # with track.trial(track_dir, None, param_map=vars(optim_args)):
+# track_dir = "sample_data"
+# with track.trial(track_dir, None, param_map=vars(optim_args)):
 
-# train(ps, workers, train_batches, test_batches, args.epochs, minibatch_size,
-#       loggers=(TableLogger(), TSV), timer=timer,
-#       test_time_in_total=False)
+train(ps, workers, train_batches, test_batches, args.epochs, minibatch_size,
+      loggers=(TableLogger(), TSV), timer=timer,
+      test_time_in_total=False)
