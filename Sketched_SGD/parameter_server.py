@@ -19,14 +19,13 @@ from torch.autograd import Variable
 import torch.nn as nn
 import torch.nn.functional as F
 
-from core import *
 from sketched_model import SketchedModel
 from csvec import CSVec
 
 import os
 
-from worker import Worker
-from core import warmup_cudnn
+#from worker import Worker
+from core import Net
 
 
 class _RequiredParameter(object):

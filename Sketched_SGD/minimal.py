@@ -777,7 +777,7 @@ class Batches():
     def __iter__(self):
         if self.set_random_choices:
             self.dataset.set_random_choices()
-        return ({'input': x.to(device), 'target': y.to(device).long()}
+        return ({'input': x.cuda(), 'target': y.cuda().long()}
                 for (x,y) in self.dataloader)
 
     def __len__(self):
@@ -1389,14 +1389,6 @@ class Worker(object):
 
         for param_group in param_groups:
             self.add_param_group(param_group)
-        # SketchedSGD-specific
-        # set device
-        #self.device = model_config
-#         print(f"I am using backend of {self.device}")
-#         if self.param_groups[0]["params"][0].is_cuda:
-#             self.device = "cuda:0"
-#         else:
-#             self.device = "cpu"
         # set all the regular SGD params as instance vars
         self.momentum = momentum
         self.weight_decay = weight_decay
@@ -1418,35 +1410,16 @@ class Worker(object):
                         sketchMask.append(torch.zeros(size))
                     grad_size += size
         self.grad_size = grad_size
-        print(f"Total dimension is {self.grad_size}")
+        print(f"Total dimension is {self.grad_size} using k {self.k} and p2 {self.p2}")
         self.sketchMask = torch.cat(sketchMask).byte().to(self.device)
-        print(f"sketchMask.sum(): {self.sketchMask.sum()}")
+        #print(f"sketchMask.sum(): {self.sketchMask.sum()}")
 #         print(f"Make CSVec of dim{numRows}, {numCols}")
         self.sketch = CSVec(d=self.sketchMask.sum().item(), c=numCols, r=numRows, 
                             device=self.device, nChunks=1, numBlocks=numBlocks)
 
-    # below two functions are only used for debugging to confirm that this works when we send full grad
-    def step(self):
-        self.step_number += 1
-        self.param_groups[0].update(**self.param_values())
-        gradVec = self._getGradVec()
-        # weight decay
-        if self.weight_decay != 0:
-            gradVec.add_(self.weight_decay, self._getParamVec())
-        # TODO: Pretty sure this momentum/residual formula is wrong
-        self.u.mul_(self.momentum).add_(gradVec)
-        self.v.add_(self.momentum, self.u)
-        weightUpdate = self.v
-        return weightUpdate
-    def update(self, weightUpdate):
-        #import ipdb; ipdb.set_trace()
-        self._setGradVec(weightUpdate * self._getLRVec())
-        self._updateParamsWithGradVec()
-        self.v = torch.zeros_like(self.v, device=self.device)
-        return
-    
     def forward(self, inputs, targets, training=True):
         self.sketchedModel.train(training)
+        self.zero_grad()
         inputs = inputs.to(self.device)
         targets = targets.to(self.device)
         outputs = self.sketchedModel(inputs)
@@ -1496,7 +1469,7 @@ class Worker(object):
         self.v[~self.sketchMask] = 0
         self._setGradVec(weightUpdate * self._getLRVec())
         self._updateParamsWithGradVec()
-        self.sketchedModel.zero_grad()
+        #self.sketchedModel.zero_grad()
 
     """
     Helper functions below

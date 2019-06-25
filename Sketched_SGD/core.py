@@ -346,20 +346,6 @@ def _(*xs):
 def _(x):
     return x.detach().cpu().numpy()
 
-def warmup_cudnn(model, batch_size):
-    #run forward and backward pass of the model on a batch of random inputs
-    #to allow benchmarking of cudnn kernels
-    inp = torch.Tensor(np.random.rand(batch_size, 3, 32, 32)).cuda()
-    target = torch.LongTensor(np.random.randint(0, 10, batch_size)).cuda()
-#     batch = {'input': inp, 'target': target}
-#     model.train(True)
-    o = model(inp)
-    criterion = nn.CrossEntropyLoss(reduction='mean')
-    loss = criterion(o, target)
-    loss.backward()
-    model.zero_grad()
-    torch.cuda.synchronize()
-
 #####################
 ## dataset
 #####################
@@ -394,7 +380,7 @@ class Batches():
     def __iter__(self):
         if self.set_random_choices:
             self.dataset.set_random_choices()
-        return ({'input': x.to(device), 'target': y.to(device).long()}
+        return ({'input': x.cuda(), 'target': y.cuda().long()}
                 for (x,y) in self.dataloader)
 
     def __len__(self):
