@@ -1,3 +1,386 @@
+import torch
+import torch.nn as nn
+
+class SketchedModel:
+    # not inheriting from nn.Module to avoid the fact that implementing
+    # __getattr__ on a nn.Module is tricky, since self.model = model
+    # doesn't actually add "model" to self.__dict__ -- instead, nn.Module
+    # creates a key/value pair in some internal dictionary that keeps
+    # track of submodules
+    def __init__(self, model, sketchBiases=False, sketchParamsLargerThan=0):
+        self.model = model
+        # sketch everything larger than sketchParamsLargerThan
+        for p in model.parameters():
+            p.do_sketching = p.numel() >= sketchParamsLargerThan
+
+        # override bias terms with whatever sketchBiases is
+        for m in model.modules():
+            if isinstance(m, torch.nn.Linear):
+                if m.bias is not None:
+                    m.bias.do_sketching = sketchBiases
+
+    def __call__(self, *args, **kwargs):
+        return self.model(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self.model, name)
+
+    def __setattr__(self, name, value):
+        if name == "model":
+            self.__dict__[name] = value
+        else:
+            self.model.setattr(name, value)
+            
+def topk(vec, k):
+    """ Return the largest k elements (by magnitude) of vec"""
+    ret = torch.zeros_like(vec)
+
+    # on a gpu, sorting is faster than pytorch's topk method
+    topkIndices = torch.sort(vec**2)[1][-k:]
+    #_, topkIndices = torch.topk(vec**2, k)
+
+    ret[topkIndices] = vec[topkIndices]
+    return ret
+
+
+LARGEPRIME = 2**61-1
+
+cache = {}
+
+#import line_profiler
+#import atexit
+#profile = line_profiler.LineProfiler()
+#atexit.register(profile.print_stats)
+
+# import os
+# os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
+# os.environ["CUDA_VISIBLE_DEVICES"]="0,1,2,3,4,5,6,7"
+
+class CSVec(object):
+    """ Simple Count Sketched Vector """
+    def __init__(self, d, c, r, doInitialize=True, device=None,
+                 nChunks=1, numBlocks=1):
+        global cache
+
+        self.r = r # num of rows
+        self.c = c # num of columns
+        # need int() here b/c annoying np returning np.int64...
+        self.d = int(d) # vector dimensionality
+        # how much to chunk up (on the GPU) any computation
+        # that requires computing something along all tokens. Doing
+        # so saves GPU RAM at the cost of having to transfer the chunks
+        # of self.buckets and self.signs between host & device
+        self.nChunks = nChunks
+
+        # reduce memory consumption of signs & buckets by constraining
+        # them to be repetitions of a single block
+        self.numBlocks = numBlocks
+
+#         if device is None:
+#             device = 'cuda' if torch.cuda.is_available() else 'cpu'
+#         else:
+#         assert("cuda" in device or device == "cpu")
+        self.device = device
+#         print(f"CSVec is using backend {self.device}")
+
+        if not doInitialize:
+            return
+
+        # initialize the sketch
+        self.table = torch.zeros((self.r, self.c), device=self.device)
+#         print(f"Making table of dim{self.r,self.c} which is {self.table}")
+
+        # if we already have these, don't do the same computation
+        # again (wasting memory storing the same data several times)
+        if (d, c, r) in cache:
+            hashes = cache[(d, c, r)]["hashes"]
+            self.signs = cache[(d, c, r)]["signs"]
+            self.buckets = cache[(d, c, r)]["buckets"]
+            if self.numBlocks > 1:
+                self.blockSigns = cache[(d, c, r)]["blockSigns"]
+                self.blockOffsets = cache[(d, c, r)]["blockOffsets"]
+            return
+
+        # initialize hashing functions for each row:
+        # 2 random numbers for bucket hashes + 4 random numbers for
+        # sign hashes
+        # maintain existing random state so we don't mess with
+        # the main module trying to set the random seed but still
+        # get reproducible hashes for the same value of r
+
+        # do all these computations on the CPU, since pytorch
+        # is incapable of in-place mod, and without that, this
+        # computation uses up too much GPU RAM
+        rand_state = torch.random.get_rng_state()
+        torch.random.manual_seed(42)
+        hashes = torch.randint(0, LARGEPRIME, (r, 6),
+                                    dtype=torch.int64, device="cpu")
+
+        if self.numBlocks > 1:
+            nTokens = self.d // numBlocks
+            if self.d % numBlocks != 0:
+                # so that we only need numBlocks repetitions
+                nTokens += 1
+            self.blockSigns = torch.randint(0, 2, size=(self.numBlocks,),
+                                            device=self.device) * 2 - 1
+            self.blockOffsets = torch.randint(0, self.c,
+                                              size=(self.numBlocks,),
+                                              device=self.device)
+        else:
+            assert(numBlocks == 1)
+            nTokens = self.d
+
+        torch.random.set_rng_state(rand_state)
+
+        tokens = torch.arange(nTokens, dtype=torch.int64, device="cpu")
+        tokens = tokens.reshape((1, nTokens))
+
+        # computing sign hashes (4 wise independence)
+        h1 = hashes[:,2:3]
+        h2 = hashes[:,3:4]
+        h3 = hashes[:,4:5]
+        h4 = hashes[:,5:6]
+        self.signs = (((h1 * tokens + h2) * tokens + h3) * tokens + h4)
+        self.signs = ((self.signs % LARGEPRIME % 2) * 2 - 1).float()
+        if self.nChunks == 1:
+            # only move to device now, since this computation takes too
+            # much memory if done on the GPU, and it can't be done
+            # in-place because pytorch (1.0.1) has no in-place modulo
+            # function that works on large numbers
+            self.signs = self.signs.to(self.device)
+
+        # computing bucket hashes  (2-wise independence)
+        h1 = hashes[:,0:1]
+        h2 = hashes[:,1:2]
+        self.buckets = ((h1 * tokens) + h2) % LARGEPRIME % self.c
+        if self.nChunks == 1:
+            # only move to device now. See comment above.
+            # can't cast this to int, unfortunately, since we index with
+            # this below, and pytorch only lets us index with long
+            # tensors
+            self.buckets = self.buckets.to(self.device)
+
+        cache[(d, c, r)] = {"hashes": hashes,
+                            "signs": self.signs,
+                            "buckets": self.buckets}
+        if numBlocks > 1:
+            cache[(d, c, r)].update({"blockSigns": self.blockSigns,
+                                     "blockOffsets": self.blockOffsets})
+
+    def zero(self):
+        self.table.zero_()
+
+    def __deepcopy__(self, memodict={}):
+        # don't initialize new CSVec, since that will calculate bc,
+        # which is slow, even though we can just copy it over
+        # directly without recomputing it
+        newCSVec = CSVec(d=self.d, c=self.c, r=self.r,
+                         doInitialize=False, device=self.device,
+                         nChunks=self.nChunks, numBlocks=self.numBlocks)
+        newCSVec.table = copy.deepcopy(self.table)
+        global cache
+        cachedVals = cache[(self.d, self.c, self.r)]
+        newCSVec.hashes = cachedVals["hashes"]
+        newCSVec.signs = cachedVals["signs"]
+        newCSVec.buckets = cachedVals["buckets"]
+        if self.numBlocks > 1:
+            newCSVec.blockSigns = cachedVals["blockSigns"]
+            newCSVec.blockOffsets = cachedVals["blockOffsets"]
+        return newCSVec
+
+    def __add__(self, other):
+        # a bit roundabout in order to avoid initializing a new CSVec
+        returnCSVec = copy.deepcopy(self)
+        returnCSVec += other
+        return returnCSVec
+
+    def __iadd__(self, other):
+        if isinstance(other, CSVec):
+            self.accumulateCSVec(other)
+        elif isinstance(other, torch.Tensor):
+#             self.accumulateTable(other)
+            self.accumulateVec(other)
+        else:
+#             from IPython.core.debugger import set_trace; set_trace()
+            raise ValueError(f"Can't add this to a CSVec: {other} because it is not a {CSVec}")
+        return self
+
+    def accumulateVec(self, vec):
+        # updating the sketch
+        try:
+            assert(len(vec.size()) == 1 and vec.size()[0] == self.d), f"Len of {vec} was {len(vec.size())} instead of 1 or size was {vec.size()[0]} instead of {self.d}"
+        except AssertionError:
+            return self.accumulateTable(vec)
+#             vec = torch.squeeze(vec, 0)
+#             assert(len(vec.size()) == 1 and vec.size()[0] == self.d), f"After squeeze, Len was {len(vec.size())} instead of 1 or size was {vec.size()[0]} instead of {self.d}"
+        for r in range(self.r):
+            buckets = self.buckets[r,:].to(self.device)
+            signs = self.signs[r,:].to(self.device)
+            for blockId in range(self.numBlocks):
+                start = blockId * buckets.size()[0]
+                end = (blockId + 1) * buckets.size()[0]
+                end = min(end, self.d)
+                offsetBuckets = buckets[:end-start].clone()
+                offsetSigns = signs[:end-start].clone()
+                if self.numBlocks > 1:
+                    offsetBuckets += self.blockOffsets[blockId]
+                    offsetBuckets %= self.c
+                    offsetSigns *= self.blockSigns[blockId]
+                self.table[r,:] += torch.bincount(
+                                    input=offsetBuckets,
+                                    weights=offsetSigns * vec[start:end],
+                                    minlength=self.c
+                                   )
+                #self.table[r,:] += torch.ones(self.c).to(self.device)
+
+        """
+        for i in range(self.nChunks):
+            start = int(i / self.nChunks * self.d)
+            end = int((i + 1) / self.nChunks * self.d)
+            # this will be idempotent if nChunks == 1
+            buckets = self.buckets[:,start:end].to(self.device)
+            signs = self.signs[:,start:end].to(self.device)
+            for r in range(self.r):
+                self.table[r,:] += torch.bincount(
+                                    input=buckets[r,:],
+                                    weights=signs[r,:] * vec[start:end],
+                                    minlength=self.c
+                                   )
+                #self.table[r,:] += torch.ones(self.c)
+                #pass
+        """
+    def accumulateTable(self, table):
+        assert self.table.size() == table.size(), f"This CSVec is {self.table.size()} but the table is {table.size()}"
+        self.table += table
+    
+    def accumulateCSVec(self, csVec):
+        # merges csh sketch into self
+        assert(self.d == csVec.d)
+        assert(self.c == csVec.c)
+        assert(self.r == csVec.r)
+        self.table += csVec.table
+
+    #@profile
+    def _findHHK(self, k):
+        #return torch.arange(k).to(self.device), torch.arange(k).to(self.device).float()
+        assert(k is not None)
+        #tokens = torch.arange(self.d, device=self.device)
+        #vals = self._findValues(tokens)
+        vals = self._findAllValues()
+        #vals = torch.arange(self.d).to(self.device).float()
+        # sort is faster than torch.topk...
+        HHs = torch.sort(vals**2)[1][-k:]
+        #HHs = torch.topk(vals**2, k, sorted=False)[1]
+        return HHs, vals[HHs]
+
+    def _findHHThr(self, thr):
+        assert(thr is not None)
+        # to figure out which items are heavy hitters, check whether
+        # self.table exceeds thr (in magnitude) in at least r/2 of
+        # the rows. These elements are exactly those for which the median
+        # exceeds thr, but computing the median is expensive, so only
+        # calculate it after we identify which ones are heavy
+        tablefiltered = (  (self.table >  thr).float()
+                         - (self.table < -thr).float())
+        est = torch.zeros(self.d, device=self.device)
+        for r in range(self.r):
+            est += tablefiltered[r,self.buckets[r,:]] * self.signs[r,:]
+        est = (  (est >=  math.ceil(self.r/2.)).float()
+               - (est <= -math.ceil(self.r/2.)).float())
+
+        # HHs - heavy coordinates
+        HHs = torch.nonzero(est)
+        return HHs, self._findValues(HHs)
+
+    def _findValues(self, coords):
+        # estimating frequency of input coordinates
+        assert(self.numBlocks == 1)
+        chunks = []
+        d = coords.size()[0]
+        if self.nChunks == 1:
+            vals = torch.zeros(self.r, self.d, device=self.device)
+            for r in range(self.r):
+                vals[r] = (self.table[r, self.buckets[r, coords]]
+                           * self.signs[r, coords])
+            return vals.median(dim=0)[0]
+
+        # if we get here, nChunks > 1
+        for i in range(self.nChunks):
+            vals = torch.zeros(self.r, d // self.nChunks,
+                               device=self.device)
+            start = int(i / self.nChunks * d)
+            end = int((i + 1) / self.nChunks * d)
+            buckets = self.buckets[:,coords[start:end]].to(self.device)
+            signs = self.signs[:,coords[start:end]].to(self.device)
+            for r in range(self.r):
+                vals[r] = self.table[r, buckets[r, :]] * signs[r, :]
+            # take the median over rows in the sketch
+            chunks.append(vals.median(dim=0)[0])
+
+        vals = torch.cat(chunks, dim=0)
+        return vals
+
+    def _findAllValues(self):
+#         from IPython.core.debugger import set_trace; set_trace()
+        if self.nChunks == 1:
+            if self.numBlocks == 1:
+                vals = torch.zeros(self.r, self.d, device=self.device)
+                for r in range(self.r):
+                    vals[r] = (self.table[r, self.buckets[r,:]]
+                               * self.signs[r,:])
+#                 print(f"Table of size {self.r, self.d} is {self.table}")
+                return vals.median(dim=0)[0]
+            else:
+                medians = torch.zeros(self.d, device=self.device)
+                #ipdb.set_trace()
+                for blockId in range(self.numBlocks):
+                    start = blockId * self.buckets.size()[1]
+                    end = (blockId + 1) * self.buckets.size()[1]
+                    end = min(end, self.d)
+                    vals = torch.zeros(self.r, end-start, device=self.device)
+                    for r in range(self.r):
+                        buckets = self.buckets[r, :end-start]
+                        signs = self.signs[r, :end-start]
+                        offsetBuckets = buckets + self.blockOffsets[blockId]
+                        offsetBuckets %= self.c
+                        offsetSigns = signs * self.blockSigns[blockId]
+                        vals[r] = (self.table[r, offsetBuckets]
+                                    * offsetSigns)
+                    medians[start:end] = vals.median(dim=0)[0]
+                return medians
+
+    def findHHs(self, k=None, thr=None):
+        assert((k is None) != (thr is None))
+        if k is not None:
+            return self._findHHK(k)
+        else:
+            return self._findHHThr(thr)
+
+    def unSketch(self, k=None, epsilon=None):
+        # either epsilon or k might be specified
+        # (but not both). Act accordingly
+        if epsilon is None:
+            thr = None
+        else:
+            thr = epsilon * self.l2estimate()
+
+        hhs = self.findHHs(k=k, thr=thr)
+
+        if k is not None:
+            assert(len(hhs[1]) == k), f"Should have found {k} hhs but only found {len(hhs[1])}"
+        if epsilon is not None:
+            assert((hhs[1] < thr).sum() == 0)
+
+        # the unsketched vector is 0 everywhere except for HH
+        # coordinates, which are set to the HH values
+        unSketched = torch.zeros(self.d, device=self.device)
+        unSketched[hhs[0]] = hhs[1]
+        return unSketched
+
+    def l2estimate(self):
+        # l2 norm esimation from the sketch
+        return np.sqrt(torch.median(torch.sum(self.table**2,1)).item())
+
 from inspect import signature
 from collections import namedtuple
 import time
@@ -9,7 +392,7 @@ import torch
 import torch.nn as nn
 import track
 import torch.nn.functional as F
-from single_trainer import SGD_Sketched
+# from single_trainer import SGD_Sketched
 #####################
 # utils
 #####################
@@ -195,56 +578,56 @@ class StatsLogger():
     def mean(self, key):
         return np.mean(to_numpy(self.stats(key)), dtype=np.float)
 
-criterion = nn.CrossEntropyLoss(reduction='none')
-correctCriterion = Correct()
+# criterion = nn.CrossEntropyLoss(reduction='none')
+# correctCriterion = Correct()
 
-def run_batches(model, batches, training, optimizer):
-    stats = StatsLogger(('loss', 'correct'))
-    model.train(training)
-    for batchId, batch in enumerate(batches):
-        inputs = batch["input"]
-        targets = batch["target"]
-        optimizer.zero_grad()
-        outputs = model(inputs)
-        loss = criterion(outputs, targets)
-        nCorrect = correctCriterion(outputs, targets)
-        iterationStats = {"loss": loss, "correct": nCorrect}
-        if training:
-#             else:
-            loss.sum().backward()
-#                 optimizer.backward(loss)
-            optimizer.step()
-#             model.zero_grad()
-        stats.append(iterationStats)
-    return stats
+# def run_batches(model, batches, training, optimizer):
+#     stats = StatsLogger(('loss', 'correct'))
+#     model.train(training)
+#     for batchId, batch in enumerate(batches):
+#         inputs = batch["input"]
+#         targets = batch["target"]
+#         optimizer.zero_grad()
+#         outputs = model(inputs)
+#         loss = criterion(outputs, targets)
+#         nCorrect = correctCriterion(outputs, targets)
+#         iterationStats = {"loss": loss, "correct": nCorrect}
+#         if training:
+# #             else:
+#             loss.sum().backward()
+# #                 optimizer.backward(loss)
+#             optimizer.step()
+# #             model.zero_grad()
+#         stats.append(iterationStats)
+#     return stats
 
-def train_epoch(model, train_batches, test_batches, optimizer,
-                timer, test_time_in_total=True):
-    train_stats = run_batches(model, train_batches, True, optimizer)
-    train_time = timer()
-    test_stats = run_batches(model, test_batches, False, optimizer)
-    test_time = timer(test_time_in_total)
-    stats ={'train_time': train_time,
-            'train_loss': train_stats.mean('loss'),
-            'train_acc': train_stats.mean('correct'),
-            'test_time': test_time,
-            'test_loss': test_stats.mean('loss'),
-            'test_acc': test_stats.mean('correct'),
-            'total_time': timer.total_time}
-    return stats
+# def train_epoch(model, train_batches, test_batches, optimizer,
+#                 timer, test_time_in_total=True):
+#     train_stats = run_batches(model, train_batches, True, optimizer)
+#     train_time = timer()
+#     test_stats = run_batches(model, test_batches, False, optimizer)
+#     test_time = timer(test_time_in_total)
+#     stats ={'train_time': train_time,
+#             'train_loss': train_stats.mean('loss'),
+#             'train_acc': train_stats.mean('correct'),
+#             'test_time': test_time,
+#             'test_loss': test_stats.mean('loss'),
+#             'test_acc': test_stats.mean('correct'),
+#             'total_time': timer.total_time}
+#     return stats
 
-def train(model, optimizer, train_batches, test_batches, epochs,
-          loggers=(), test_time_in_total=True, timer=None):
-    timer = timer or Timer()
-    for epoch in range(epochs):
-        epoch_stats = train_epoch(model, train_batches, test_batches,
-                                  optimizer, timer,
-                                  test_time_in_total=test_time_in_total)
-        lr = optimizer.param_values()['lr'] * train_batches.batch_size
-        summary = union({'epoch': epoch+1, 'lr': lr}, epoch_stats)
-        track.metric(iteration=epoch, **summary)
-        for logger in loggers:
-            logger.append(summary)
+# def train(model, optimizer, train_batches, test_batches, epochs,
+#           loggers=(), test_time_in_total=True, timer=None):
+#     timer = timer or Timer()
+#     for epoch in range(epochs):
+#         epoch_stats = train_epoch(model, train_batches, test_batches,
+#                                   optimizer, timer,
+#                                   test_time_in_total=test_time_in_total)
+#         lr = optimizer.param_values()['lr'] * train_batches.batch_size
+#         summary = union({'epoch': epoch+1, 'lr': lr}, epoch_stats)
+#         track.metric(iteration=epoch, **summary)
+#         for logger in loggers:
+#             logger.append(summary)
     return summary
 
 #####################
@@ -462,43 +845,43 @@ class Network(nn.Module):
         return self
 """
 
-trainable_params = lambda model: filter(lambda p: p.requires_grad, model.parameters())
+# trainable_params = lambda model: filter(lambda p: p.requires_grad, model.parameters())
 
-class TorchOptimiser():
-    def __init__(self, weights, optimizer, sketched,
-                 k, p2, numCols, numRows, step_number=0, **opt_params):
-        self.weights = weights
-        self.step_number = step_number
-        self.opt_params = opt_params
-        self._opt = optimizer(weights, **self.param_values())
-        if sketched:
-            assert(optimizer == torch.optim.SGD)
-            assert(opt_params["dampening"] == 0)
-#             assert(opt_params["nesterov"] == False)
-            self._opt = SGD_Sketched(weights, k, p2, numCols, numRows, 
-                                     **self.param_values())
+# class TorchOptimiser():
+#     def __init__(self, weights, optimizer, sketched,
+#                  k, p2, numCols, numRows, step_number=0, **opt_params):
+#         self.weights = weights
+#         self.step_number = step_number
+#         self.opt_params = opt_params
+#         self._opt = optimizer(weights, **self.param_values())
+#         if sketched:
+#             assert(optimizer == torch.optim.SGD)
+#             assert(opt_params["dampening"] == 0)
+# #             assert(opt_params["nesterov"] == False)
+#             self._opt = SGD_Sketched(weights, k, p2, numCols, numRows, 
+#                                      **self.param_values())
 
-    def param_values(self):
-        return {k: v(self.step_number) if callable(v) else v
-                for k,v in self.opt_params.items()}
+#     def param_values(self):
+#         return {k: v(self.step_number) if callable(v) else v
+#                 for k,v in self.opt_params.items()}
 
-    def step(self, loss=None):
-        self.step_number += 1
-        self._opt.param_groups[0].update(**self.param_values())
-        self._opt.step(loss)
+#     def step(self, loss=None):
+#         self.step_number += 1
+#         self._opt.param_groups[0].update(**self.param_values())
+#         self._opt.step(loss)
 
-    def __repr__(self):
-        return repr(self._opt)
+#     def __repr__(self):
+#         return repr(self._opt)
     
-    def __getattr__(self, key):
-        return getattr(self._opt, key)
+#     def __getattr__(self, key):
+#         return getattr(self._opt, key)
 
-def SGD(weights, lr, momentum, weight_decay, nesterov, dampening,
-        sketched, k, p2, numCols, numRows, numBlocks):
-    return TorchOptimiser(weights, torch.optim.SGD, sketched=sketched, k=k, p2=p2, 
-                          numCols=numCols, numRows=numRows, lr=lr,
-                          momentum=momentum, weight_decay=weight_decay,
-                          dampening=dampening, nesterov=nesterov)
+# def SGD(weights, lr, momentum, weight_decay, nesterov, dampening,
+#         sketched, k, p2, numCols, numRows, numBlocks):
+#     return TorchOptimiser(weights, torch.optim.SGD, sketched=sketched, k=k, p2=p2, 
+#                           numCols=numCols, numRows=numRows, lr=lr,
+#                           momentum=momentum, weight_decay=weight_decay,
+#                           dampening=dampening, nesterov=nesterov)
 
 #Network definition
 class ConvBN(nn.Module):
@@ -598,14 +981,14 @@ from torch.autograd import Variable
 import torch.nn as nn
 import torch.nn.functional as F
 
-from core import *
-from sketched_model import SketchedModel
-from csvec import CSVec
+# from core import *
+# from sketched_model import SketchedModel
+# from csvec import CSVec
 
-import os
+# import os
 
-from worker import Worker
-from core import warmup_cudnn
+# from worker import Worker
+# from core import warmup_cudnn
 
 
 class _RequiredParameter(object):
@@ -922,15 +1305,15 @@ from torch.autograd import Variable
 import torch.nn as nn
 import torch.nn.functional as F
 
-from core import *
-from sketched_model import SketchedModel
-from csvec import CSVec
+# from core import *
+# from sketched_model import SketchedModel
+# from csvec import CSVec
 
 import os
 
 
 # from sketcher import Sketcher
-from core import warmup_cudnn
+# from core import warmup_cudnn
 
 
 class _RequiredParameter(object):
@@ -1302,10 +1685,6 @@ import torch
 import torch.nn as nn
 import math
 
-from core import *
-from parameter_server import ParameterServer
-from worker import Worker
-
 # ALL THE STUFF THAT BREAKS
 
 class PiecewiseLinear(namedtuple('PiecewiseLinear', ('knots', 'vals'))):
@@ -1399,91 +1778,91 @@ def train(ps, workers, train_batches, test_batches, epochs, minibatch_size,
             logger.append(summary)
     return summary
 
-import argparse
-parser = argparse.ArgumentParser()
-parser.add_argument("--sketched", action="store_true")
-parser.add_argument("--sketch_biases", action="store_true")
-parser.add_argument("--sketch_params_larger_than", action="store_true")
-parser.add_argument("-k", type=int, default=50000)
-parser.add_argument("--p2", type=int, default=1)
-parser.add_argument("--p1", type=int, default=0)
-parser.add_argument("--cols", type=int, default=500000)
-parser.add_argument("--rows", type=int, default=5)
-parser.add_argument("--num_workers", type=int, default=1)
-parser.add_argument("--num_blocks", type=int, default=2)
-parser.add_argument("--batch_size", type=int, default=512)
-parser.add_argument("--nesterov", type=bool, default=False)
-parser.add_argument("--epochs", type=int, default=24)
-parser.add_argument("--test", action="store_true")
-args = parser.parse_args()
-#args.batch_size = math.ceil(args.batch_size/args.num_workers) * args.num_workers
-if args.test:
-    args.k = 50
-    args.cols = 500
-    model_maker = lambda model_config: Net(
-    {'prep': 1, 'layer1': 2,
-                                 'layer2': 4, 'layer3': 8}
-    ).to(model_config["device"])
-else:
-    model_maker = lambda model_config: Net().to(model_config["device"])
-model_config = {
-#     "device": "cpu",
-    "device": torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
-}
+# import argparse
+# parser = argparse.ArgumentParser()
+# parser.add_argument("--sketched", action="store_true")
+# parser.add_argument("--sketch_biases", action="store_true")
+# parser.add_argument("--sketch_params_larger_than", action="store_true")
+# parser.add_argument("-k", type=int, default=50000)
+# parser.add_argument("--p2", type=int, default=1)
+# parser.add_argument("--p1", type=int, default=0)
+# parser.add_argument("--cols", type=int, default=500000)
+# parser.add_argument("--rows", type=int, default=5)
+# parser.add_argument("--num_workers", type=int, default=1)
+# parser.add_argument("--num_blocks", type=int, default=2)
+# parser.add_argument("--batch_size", type=int, default=512)
+# parser.add_argument("--nesterov", type=bool, default=False)
+# parser.add_argument("--epochs", type=int, default=24)
+# parser.add_argument("--test", action="store_true")
+# args = parser.parse_args()
+# #args.batch_size = math.ceil(args.batch_size/args.num_workers) * args.num_workers
+# if args.test:
+#     args.k = 50
+#     args.cols = 500
+#     model_maker = lambda model_config: Net(
+#     {'prep': 1, 'layer1': 2,
+#                                  'layer2': 4, 'layer3': 8}
+#     ).to(model_config["device"])
+# else:
+#     model_maker = lambda model_config: Net().to(model_config["device"])
+# model_config = {
+# #     "device": "cpu",
+#     "device": torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
+# }
 
-print('Downloading datasets')
-DATA_DIR = "sample_data"
-dataset = cifar10(DATA_DIR)
+# print('Downloading datasets')
+# DATA_DIR = "sample_data"
+# dataset = cifar10(DATA_DIR)
 
-lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
-train_transforms = [Crop(32, 32), FlipLR(), Cutout(8, 8)]
-lr = lambda step: lr_schedule(step/len(train_batches))/args.batch_size
-print('Starting timer')
-timer = Timer()
+# lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
+# train_transforms = [Crop(32, 32), FlipLR(), Cutout(8, 8)]
+# lr = lambda step: lr_schedule(step/len(train_batches))/args.batch_size
+# print('Starting timer')
+# timer = Timer()
 
-print('Preprocessing training data')
-train_set = list(zip(
-        transpose(normalise(pad(dataset['train']['data'], 4))),
-        dataset['train']['labels']))
-print('Finished in {:.2f} seconds'.format(timer()))
-print('Preprocessing test data')
-test_set = list(zip(transpose(normalise(dataset['test']['data'])),
-                    dataset['test']['labels']))
-print('Finished in {:.2f} seconds'.format(timer()))
+# print('Preprocessing training data')
+# train_set = list(zip(
+#         transpose(normalise(pad(dataset['train']['data'], 4))),
+#         dataset['train']['labels']))
+# print('Finished in {:.2f} seconds'.format(timer()))
+# print('Preprocessing test data')
+# test_set = list(zip(transpose(normalise(dataset['test']['data'])),
+#                     dataset['test']['labels']))
+# print('Finished in {:.2f} seconds'.format(timer()))
 
-TSV = TSVLogger()
+# TSV = TSVLogger()
 
-train_batches = Batches(Transform(train_set, train_transforms),
-                        args.batch_size, shuffle=True,
-                        set_random_choices=True, drop_last=True)
-test_batches = Batches(test_set, args.batch_size, shuffle=False,
-                       drop_last=False)
+# train_batches = Batches(Transform(train_set, train_transforms),
+#                         args.batch_size, shuffle=True,
+#                         set_random_choices=True, drop_last=True)
+# test_batches = Batches(test_set, args.batch_size, shuffle=False,
+#                        drop_last=False)
 
-optim_args = {
-    "k": args.k,
-    "p2": args.p2,
-    "p1": args.p1,
-    "numCols": args.cols,
-    "numRows": args.rows,
-    "numBlocks": args.num_blocks,
-    "lr": lr,
-    "momentum": 0.9,
-    "weight_decay": 5e-4*args.batch_size,
-    "nesterov": args.nesterov,
-    "dampening": 0,
-}
+# optim_args = {
+#     "k": args.k,
+#     "p2": args.p2,
+#     "p1": args.p1,
+#     "numCols": args.cols,
+#     "numRows": args.rows,
+#     "numBlocks": args.num_blocks,
+#     "lr": lr,
+#     "momentum": 0.9,
+#     "weight_decay": 5e-4*args.batch_size,
+#     "nesterov": args.nesterov,
+#     "dampening": 0,
+# }
 
-ray.init(num_gpus=8)
-num_workers = args.num_workers
-minibatch_size = args.batch_size/num_workers
-print(f"Passing in args {optim_args}")
-ps = ParameterServer.remote(optim_args)
-# Create workers.
-workers = [Worker.remote(num_workers, worker_index, optim_args) for worker_index in range(num_workers)]
+# ray.init(num_gpus=8)
+# num_workers = args.num_workers
+# minibatch_size = args.batch_size/num_workers
+# print(f"Passing in args {optim_args}")
+# ps = ParameterServer.remote(optim_args)
+# # Create workers.
+# workers = [Worker.remote(num_workers, worker_index, optim_args) for worker_index in range(num_workers)]
 
-# track_dir = "sample_data"
-# with track.trial(track_dir, None, param_map=vars(optim_args)):
+# # track_dir = "sample_data"
+# # with track.trial(track_dir, None, param_map=vars(optim_args)):
 
-train(ps, workers, train_batches, test_batches, args.epochs, minibatch_size,
-      loggers=(TableLogger(), TSV), timer=timer,
-      test_time_in_total=False)
+# train(ps, workers, train_batches, test_batches, args.epochs, minibatch_size,
+#       loggers=(TableLogger(), TSV), timer=timer,
+#       test_time_in_total=False)
