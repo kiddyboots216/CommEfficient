@@ -7,7 +7,7 @@ from sketcher import Sketcher
 from worker import Worker
 from core import warmup_cudnn
 @ray.remote(
-    num_gpus=0.5, 
+    num_gpus=2.0, 
     num_cpus=2.0
 )
 class ParameterServer(Sketcher):
@@ -30,15 +30,17 @@ class ParameterServer(Sketcher):
         
 #     @ray.remote
     def compute_hhcoords(self, sketches):
+        #import pdb; pdb.set_trace()
+        #assert torch.equal(sketches[0], sketches[1])
 #         from IPython.core.debugger import set_trace; set_trace()
-        sketches = [sketch.to(self.device) for sketch in sketches]
+    #    sketches = [sketch.to(self.device) for sketch in sketches]
         # THIS ON SERVER
 #         sketches.append(self.sketch)
 #         print(sketches)
 #         for sketch in sketches:
 #             self.sketch += sketch
         self.sketch.zero()
-        self.sketch += torch.sum(torch.stack(sketches, dim=0), dim=0)
+        self.sketch += torch.mean(torch.stack(sketches, dim=0), dim=0)
 #         for sketch in sketches:
 #             self.sketch += sketch
 #         candidateTopK = self.sketch.unSketch(k=self.p2*self.k)
@@ -46,13 +48,16 @@ class ParameterServer(Sketcher):
         self.candidateHHCoords = self.candidateTopK.nonzero()
         # don't need to stack or sum
         # COMMUNICATE
-        return self.candidateHHCoords.cpu()
+        return self.candidateHHCoords
+    #.cpu()
 #     @ray.remote
+    def average_grads(self, grads):
+        return torch.mean(torch.stack(grads), dim=0)
     def compute_update(self, sketchesAndUnsketched):
 #         from IPython.core.debugger import set_trace; set_trace()
         sketches, unsketched = sketchesAndUnsketched
-        sketches = [sketch.to(self.device) for sketch in sketches]
-        unsketched = [unsketch.to(self.device) for unsketch in unsketched]
+        #sketches = [sketch.to(self.device) for sketch in sketches]
+        #unsketched = [unsketch.to(self.device) for unsketch in unsketched]
         self.candidateTopK[self.candidateHHCoords] = torch.sum(
             torch.stack(sketches),dim=0)
 #         del vs
@@ -66,7 +71,8 @@ class ParameterServer(Sketcher):
         weightUpdate[self.sketchMask] = weights
         weightUpdate[~self.sketchMask] = torch.sum(torch.stack(unsketched), dim=0)
         # COMMUNICATE
-        return weightUpdate.cpu()
+        return weightUpdate
+    #.cpu()
     def topk(self, vec, k):
         """ Return the largest k elements (by magnitude) of vec"""
         ret = torch.zeros_like(vec)

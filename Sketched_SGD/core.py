@@ -195,7 +195,7 @@ class StatsLogger():
     def mean(self, key):
         return np.mean(to_numpy(self.stats(key)), dtype=np.float)
 
-criterion = nn.CrossEntropyLoss(reduce=False)
+criterion = nn.CrossEntropyLoss(reduction='none')
 correctCriterion = Correct()
 
 def run_batches(model, batches, training, optimizer):

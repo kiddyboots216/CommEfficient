@@ -96,13 +96,21 @@ class SGD_Sketched(Optimizer):
             gradVec.add_(self.weight_decay, self._getParamVec())
         # TODO: Pretty sure this momentum/residual formula is wrong
         if self.nesterov:
-            self.u.add_(gradVec).mul_(self.momentum)
-            self.v.add_(self.u).add_(gradVec)
+
+            self.u.mul_(self.momentum).add_(gradVec)
+            self.v.add_(self.momentum, self.u)
+            #self.u.add_(gradVec).mul_(self.momentum)
+            #self.v.add_(self.u).add_(gradVec)
 #             self.us[0].add_(gradVec).mul_(self.momentum)
 #             self.vs[0].add_(self.us[0]).add_(gradVec)
         else:
             self.u.mul_(self.momentum).add_(gradVec)
             self.v.add_(self.u)
+        weightUpdate = self.v
+        self.v = torch.zeros_like(self.v, device=self.device)
+        self._setGradVec(weightUpdate * self._getLRVec())
+        self._updateParamsWithGradVec()
+        return
 #             self.us[0].mul_(self.momentum).add_(gradVec)
 #             self.vs[0].add_(self.us[0])
         """

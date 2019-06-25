@@ -55,13 +55,33 @@ def run_batches(ps, workers, batches, minibatch_size, training):
             end = (i+1) * batch_size // num_workers
             input_minibatches.append(inputs[start:end])
             target_minibatches.append(targets[start:end])
+        #losses, accuracies= list(zip(*ray.get([worker.forward.remote(
+                #input_minibatches[worker_id],
+                #target_minibatches[worker_id],
+                #training) 
+                #for worker_id, worker in enumerate(workers)])))
+        """
         if training:
+            grads = ray.get([worker.step.remote() for worker in workers])
+            weightUpdate = ray.get(ps.average_grads.remote(grads))
+            ray.wait([worker.update.remote(weightUpdate) for worker in workers])
+        # workers apply weight update (can be merged with 1st line)
+            #ray.wait([worker.apply_grad.remote(weightUpdate) for worker in workers])
+        iterationStats = {"loss": np.mean((losses)), "correct": np.mean((accuracies))}
+#         if training:
+#             loss.sum().backward()
+#             optimizer.step()
+        stats.append(iterationStats)
+    return stats
+    """
+        #if training:
             # workers do backward passes and calculate sketches
-            losses, accuracies, sketches = list(zip(*ray.get([worker.forward.remote(
+        losses, accuracies, sketches = list(zip(*ray.get([worker.forward.remote(
                 input_minibatches[worker_id],
                 target_minibatches[worker_id],
                 training)
                 for worker_id, worker in enumerate(workers)])))
+        if training:
             #losses, accuracies, sketches = list(zip(*ray.get([worker.forward.remote(
              #                                   inputs[int(worker_id * minibatch_size) : int((worker_id + 1) * minibatch_size)], 
               #                                  targets[int(worker_id * minibatch_size) : int((worker_id + 1) * minibatch_size)],
@@ -75,13 +95,13 @@ def run_batches(ps, workers, batches, minibatch_size, training):
             weightUpdate = ray.get(ps.compute_update.remote(topkAndUnsketched))
             # workers apply weight update (can be merged with 1st line)
             ray.wait([worker.apply_update.remote(weightUpdate) for worker in workers])
-        else:
+        #else:
 #             pass
-            losses, accuracies= list(zip(*ray.get([worker.forward.remote(
-                input_minibatches[worker_id],
-                target_minibatches[worker_id],
-                training)
-                for worker_id, worker in enumerate(workers)])))
+        #    losses, accuracies= list(zip(*ray.get([worker.forward.remote(
+        #        input_minibatches[worker_id],
+         #       target_minibatches[worker_id],
+          #      training)
+           #     for worker_id, worker in enumerate(workers)])))
             #losses, accuracies = list(zip(*ray.get([worker.forward.remote(
              #                                   inputs[int(worker_id * minibatch_size) : int((worker_id + 1) * minibatch_size)], 
               #                                  targets[int(worker_id * minibatch_size) : int((worker_id + 1) * minibatch_size)],
@@ -95,7 +115,7 @@ def run_batches(ps, workers, batches, minibatch_size, training):
 #             optimizer.step()
         stats.append(iterationStats)
     return stats
-
+#"""
 def train_epoch(ps, workers, train_batches, test_batches, minibatch_size,
                 timer, test_time_in_total=True):
     train_stats = run_batches(ps, workers, train_batches, minibatch_size, True)
@@ -132,7 +152,7 @@ if __name__ == "__main__":
     parser.add_argument("--sketch_biases", action="store_true")
     parser.add_argument("--sketch_params_larger_than", action="store_true")
     parser.add_argument("-k", type=int, default=50000)
-    parser.add_argument("--p2", type=int, default=4)
+    parser.add_argument("--p2", type=int, default=1)
     parser.add_argument("--p1", type=int, default=0)
     parser.add_argument("--cols", type=int, default=500000)
     parser.add_argument("--rows", type=int, default=5)
@@ -143,8 +163,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
     #args.batch_size = math.ceil(args.batch_size/args.num_workers) * args.num_workers
     model_maker = lambda model_config: Net(
-         #{'prep': 1, 'layer1': 1,
-          #                           'layer2': 1, 'layer3': 1}
+         {'prep': 1, 'layer1': 1,
+                                     'layer2': 1, 'layer3': 1}
     ).to(model_config["device"])
     model_config = {
     #     "device": "cpu",
@@ -208,7 +228,7 @@ if __name__ == "__main__":
     ps = ParameterServer.remote(model_maker, model_config, optim_args)
     # ps = ParameterServer(model_maker, model_config, optim_args)
     # Create workers.
-    workers = [Worker.remote(worker_index, model_maker, model_config, optim_args) for worker_index in range(num_workers)]
+    workers = [Worker.remote(num_workers, worker_index, model_maker, model_config, optim_args) for worker_index in range(num_workers)]
     # workers = [Worker(worker_index, model_maker, model_config, optim_args) for worker_index in range(num_workers)]
 
     # track_dir = "sample_data"
