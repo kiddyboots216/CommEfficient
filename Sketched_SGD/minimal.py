@@ -1016,7 +1016,7 @@ class ParameterServer(object):
             except RuntimeError as e:
                 print(e)
         del self.sketchedModel
-        del self.param_groups
+#        del self.param_groups
     
     def sketcher_init(self, 
                  k=0, p2=0, numCols=0, numRows=0, p1=0, numBlocks=1, # sketched_params
@@ -1093,7 +1093,7 @@ class ParameterServer(object):
         self.sketch = CSVec(d=self.sketchMask.sum().item(), c=numCols, r=numRows, 
                             device=self.device, nChunks=1, numBlocks=numBlocks)
 
-    def compute_hhcoords(self, tables):
+    def compute_hhcoords(self, *tables):
         self.sketch.zero()
         self.sketch.table = torch.sum(torch.stack(tables), dim=0)
         self.candidateTopK = self.sketch.unSketch(k=self.p2*self.k)
@@ -1104,8 +1104,9 @@ class ParameterServer(object):
     def average_grads(self, grads):
         return torch.sum(torch.stack(grads), dim=0)
 
-    def compute_update(self, sketchesAndUnsketched):
-        hhs, unsketched = sketchesAndUnsketched
+    def compute_update(self, *sketchesAndUnsketched):
+        #import pdb; pdb.set_trace()
+        hhs, unsketched = list(zip(*ray.get(*sketchesAndUnsketched)))
         self.candidateTopK[self.candidateHHCoords] = torch.sum(
             torch.stack(hhs),dim=0)
         del self.candidateHHCoords
@@ -1598,14 +1599,14 @@ class Worker(object):
         self.sketch.zero()
         # weight decay
         if self.weight_decay != 0:
-            gradVec.add_(self.weight_decay, self._getParamVec())
+            gradVec.add_(self.weight_decay/self.num_workers, self._getParamVec())
         if self.nesterov:
             self.u.add_(gradVec).mul_(self.momentum)
             self.v.add_(self.u).add_(gradVec)
         else:
             self.u.mul_(self.momentum).add_(gradVec)
             self.v += (self.u)
-            self.v = gradVec
+            #self.v = gradVec
         # this is v
         self.candidateSketch = self.v[self.sketchMask]
         self.sketch += self.candidateSketch
@@ -1626,6 +1627,7 @@ class Worker(object):
         self.u[weightUpdate.nonzero()] = 0
         self.v[weightUpdate.nonzero()] = 0
         self.v[~self.sketchMask] = 0
+        #self.sync(weightUpdate * self._getLRVec())
         self._setGradVec(weightUpdate * self._getLRVec())
         self._updateParamsWithGradVec()
         #self.sketchedModel.zero_grad()
@@ -1780,6 +1782,19 @@ class Worker(object):
                 p.grad.data.zero_()
                 p.grad.data.add_(vec[startPos:startPos + size].reshape(shape))
                 startPos += size
+    def sync(self, vec):
+        """Set params"""
+        gradShapes, gradSizes = self._getGradShapes()
+        startPos = 0
+        i = 0
+        for group in self.param_groups:
+            for p in group["params"]:
+                shape = gradShapes[i]
+                size = gradSizes[i]
+                i += 1
+                assert(size == torch.numel(p))
+                p.data = vec[startPos:startPos + size].reshape(shape)
+                startPos += size
     def _updateParamsWithGradVec(self):
         """Update parameters with the gradient"""
         for group in self.param_groups:
@@ -1873,13 +1888,14 @@ def run_batches(ps, workers, batches, minibatch_size, training):
             """
             #"""
             # server initiates second round of communication
-            hhcoords = ps.compute_hhcoords.remote((sketches))
+            hhcoords = ps.compute_hhcoords.remote(*sketches)
             # workers answer, also giving the unsketched params
-            topkAndUnsketched = list(zip(
-                *ray.get(
-                    [worker.send_topkAndUnsketched.remote(hhcoords) for worker in workers]
-                    )
-                ))
+            topkAndUnsketched = [worker.send_topkAndUnsketched.remote(hhcoords) for worker in workers]
+            #list(zip(
+             #   *ray.get(
+              #      )
+               # ))
+
             # server compute weight update, put it into ray
             weightUpdate = ps.compute_update.remote(topkAndUnsketched)
             # workers apply weight update (can be merged with 1st line)
@@ -1908,6 +1924,7 @@ def train_epoch(ps, workers, train_batches, test_batches, minibatch_size,
 def train(ps, workers, train_batches, test_batches, epochs, minibatch_size,
           loggers=(), test_time_in_total=True, timer=None):
     timer = timer or Timer()
+    ray.wait([worker.sync.remote(ps._getParamVec.remote()) for worker in workers])
     for epoch in range(epochs):
         epoch_stats = train_epoch(ps, workers, train_batches, test_batches, minibatch_size,
                                   timer,
