@@ -1350,6 +1350,81 @@ class Worker(object):
         self.criterion = nn.CrossEntropyLoss(reduction='none').cuda()
         self.correctCriterion = Correct().cuda()
 
+    def centralized_step(self):
+        gradVec = self._getGradVec()
+        # weight decay
+        if self.weight_decay != 0:
+            gradVec.add_(self.weight_decay, self._getParamVec())
+        # TODO: Pretty sure this momentum/residual formula is wrong
+        if self.nesterov:
+
+            self.u.mul_(self.momentum).add_(gradVec)
+            self.v.add_(self.momentum, self.u)
+        else:
+            self.u.mul_(self.momentum).add_(gradVec)
+            self.v.add_(self.u)
+        weightUpdate = self.v
+        self.v = torch.zeros_like(self.v, device=self.device)
+        self._setGradVec(weightUpdate * self._getLRVec())
+        self._updateParamsWithGradVec()
+        # return
+        # candidateSketch = self.v[self.sketchMask]
+        # self.sketch.zero()
+        # self.sketch += candidateSketch
+        # COMMUNICATE
+#         for workerId, v in enumerate(vs):
+#         # zero last sketch
+#             self.sketches[workerId].zero()
+#             # update sketch without truncating, this calls CSVec.__iadd__
+#             self.sketches[workerId] += v
+        # 2nd round of communication
+        # don't need to sum
+        
+        # THIS ON SERVER
+        candidateTopK = self.sketch.unSketch(k=self.p2*self.k)
+#         candidateTopK = np.sum(self.sketches).unSketch(k=self.p2*self.k)
+        candidateHHCoords = candidateTopK.nonzero()
+        # don't need to stack or sum
+        # COMMUNICATE
+        candidateTopK[candidateHHCoords] = candidateSketch[candidateHHCoords]
+#         candidateTopK[candidateHHCoords] = torch.sum(torch.stack([v[candidateHHCoords]
+#                                                     for v in vs]),
+#                                                     dim=0)
+#         del vs
+        del candidateSketch
+        # this is w
+        weights = topk(candidateTopK, k=self.k)
+        del candidateTopK
+        weightUpdate = torch.zeros_like(self.v)
+#         weightUpdate = torch.zeros_like(self.vs[0])
+        weightUpdate[self.sketchMask] = weights
+        # zero out the coords that are getting communicated
+        self.u[weightUpdate.nonzero()] = 0
+        self.v[weightUpdate.nonzero()] = 0
+#         for u, v in zip(self.us, self.vs):
+#             u[weightUpdate.nonzero()] = 0
+#             v[weightUpdate.nonzero()] = 0
+        """
+        Return from _aggAndZeroSketched, finish _aggregateAndZeroUVs
+        """
+        # TODO: Bundle this efficiently
+        # directly send whatever wasn't sketched
+        unsketched = self.v[~self.sketchMask]
+#         vs = [v[~self.sketchMask] for v in self.vs]
+        # don't need to sum
+        
+        weightUpdate[~self.sketchMask] = unsketched
+#         weightUpdate[~self.sketchMask] = torch.sum(torch.stack(vs), dim=0)
+#         print(torch.sum(weightUpdate))
+        self.v[~self.sketchMask] = 0
+#         for v in self.vs:
+#             v[~self.sketchMask] = 0
+        """
+        Return from _aggregateAndZeroUVs, back in backward
+        """
+        self._setGradVec(weightUpdate * self._getLRVec())
+        self._updateParamsWithGradVec()
+
     def sketcher_init(self, 
                  k=0, p2=0, numCols=0, numRows=0, p1=0, numBlocks=1, # sketched_params
                  lr=0, momentum=0, dampening=0, weight_decay=0, nesterov=False): # opt_params
@@ -1732,10 +1807,12 @@ def run_batches(ps, workers, batches, minibatch_size, training):
                 )
             ))
         if training:
+            ray.wait([worker.centralized_step() for worker in workers])
             """
             weights = ray.get([worker.step.remote() for worker in workers])
             weightUpdate = ps.average_grads.remote(weights) 
             ray.wait([worker.update.remote(weightUpdate) for worker in workers])
+            """
             """
             # server initiates second round of communication
             hhcoords = ps.compute_hhcoords.remote((sketches))
@@ -1749,7 +1826,7 @@ def run_batches(ps, workers, batches, minibatch_size, training):
             weightUpdate = ps.compute_update.remote(topkAndUnsketched)
             # workers apply weight update (can be merged with 1st line)
             ray.wait([worker.apply_update.remote(weightUpdate) for worker in workers])
-            #"""
+            """
         iterationStats = {"loss": np.mean((losses)), "correct": np.mean((accuracies))}
         #print(iterationStats)
         stats.append(iterationStats)

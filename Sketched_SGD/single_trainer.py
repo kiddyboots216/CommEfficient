@@ -106,11 +106,11 @@ class SGD_Sketched(Optimizer):
         else:
             self.u.mul_(self.momentum).add_(gradVec)
             self.v.add_(self.u)
-        weightUpdate = self.v
-        self.v = torch.zeros_like(self.v, device=self.device)
-        self._setGradVec(weightUpdate * self._getLRVec())
-        self._updateParamsWithGradVec()
-        return
+        # weightUpdate = self.v
+        # self.v = torch.zeros_like(self.v, device=self.device)
+        # self._setGradVec(weightUpdate * self._getLRVec())
+        # self._updateParamsWithGradVec()
+        # return
 #             self.us[0].mul_(self.momentum).add_(gradVec)
 #             self.vs[0].add_(self.us[0])
         """
