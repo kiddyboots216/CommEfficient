@@ -1368,9 +1368,9 @@ class Worker(object):
         self._setGradVec(weightUpdate * self._getLRVec())
         self._updateParamsWithGradVec()
         # return
-        # candidateSketch = self.v[self.sketchMask]
-        # self.sketch.zero()
-        # self.sketch += candidateSketch
+        candidateSketch = self.v[self.sketchMask]
+        self.sketch.zero()
+        self.sketch += candidateSketch
         # COMMUNICATE
 #         for workerId, v in enumerate(vs):
 #         # zero last sketch
@@ -1552,7 +1552,7 @@ class Worker(object):
         self.candidateSketch = self.v[self.sketchMask]
         self.sketch += self.candidateSketch
         # COMMUNICATE ONLY THE TABLE
-        import pdb; pdb.set_trace()
+        #import pdb; pdb.set_trace()
         return self.sketch.table
 
     def send_topkAndUnsketched(self, hhcoords):
@@ -1807,7 +1807,7 @@ def run_batches(ps, workers, batches, minibatch_size, training):
                 )
             ))
         if training:
-            ray.wait([worker.centralized_step() for worker in workers])
+            ray.wait([worker.centralized_step.remote() for worker in workers])
             """
             weights = ray.get([worker.step.remote() for worker in workers])
             weightUpdate = ps.average_grads.remote(weights) 
@@ -1939,7 +1939,8 @@ ray.init(num_gpus=8)
 num_workers = args.num_workers
 minibatch_size = args.batch_size/num_workers
 print(f"Passing in args {optim_args}")
-ps = ParameterServer.remote(optim_args)
+#ps = ParameterServer.remote(optim_args)
+ps = "bleh"
 # Create workers.
 workers = [Worker.remote(num_workers, worker_index, optim_args) for worker_index in range(num_workers)]
 
