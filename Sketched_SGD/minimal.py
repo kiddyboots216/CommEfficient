@@ -1530,6 +1530,47 @@ class Worker(object):
             loss.sum().backward()
         return loss.detach().cpu().numpy(), accuracy.detach().cpu().numpy(), sketch
     
+    def closed_step(self):
+        # worker computes sketch
+        gradVec = self._getGradVec()
+        if self.weight_decay != 0:
+            gradVec.add_(self.weight_decay, self._getParamVec())
+        if self.nesterov:
+            self.u.mul_(self.momentum).add_(gradVec)
+            self.v.add_(self.momentum, self.u)
+        else:
+            self.u.mul_(self.momentum).add_(gradVec)
+            self.v.add_(self.u)
+        self.candidateSketch = self.v[self.sketchMask]
+        self.sketch.zero()
+        self.sketch += self.candidateSketch
+        tables = [self.sketch.table]
+        # 'parameter server' gets topk
+        self.sketch.zero()
+        self.sketch.table = torch.sum(torch.stack(tables, dim=0), dim=0)
+        self.candidateTopK = self.sketch.unSketch(k=self.p2*self.k)
+        self.candidateHHCoords = self.candidateTopK.nonzero()        
+        # worker responds
+        hhs = self.candidateSketch[self.candidateHHCoords]
+        unsketched = self.v[~self.sketchMask]
+        sketchesAndUnsketched = ([hhs], [unsketched])
+        # parameter server issues update
+        hhs, unsketched = sketchesAndUnsketched
+        self.candidateTopK[self.candidateHHCoords] = torch.sum(
+            torch.stack(hhs),dim=0)
+        del self.candidateHHCoords
+        weights = self.topk(self.candidateTopK, k=self.k)
+        del self.candidateTopK
+        weightUpdate = torch.zeros(self.grad_size, device=self.device)
+        weightUpdate[self.sketchMask] = weights
+        weightUpdate[~self.sketchMask] = torch.sum(torch.stack(unsketched), dim=0)
+        # worker does update
+        self.u[weightUpdate.nonzero()] = 0
+        self.v[weightUpdate.nonzero()] = 0
+        self.v[~self.sketchMask] = 0
+        self._setGradVec(weightUpdate * self._getLRVec())
+        self._updateParamsWithGradVec()
+
     def compute_sketch(self): 
         """
         Calls _backwardWorker inside backward
@@ -1807,7 +1848,7 @@ def run_batches(ps, workers, batches, minibatch_size, training):
                 )
             ))
         if training:
-            ray.wait([worker.centralized_step.remote() for worker in workers])
+            ray.wait([worker.closed_step.remote() for worker in workers])
             """
             weights = ray.get([worker.step.remote() for worker in workers])
             weightUpdate = ps.average_grads.remote(weights) 
