@@ -1095,7 +1095,7 @@ class ParameterServer(object):
 
     def compute_hhcoords(self, tables):
         self.sketch.zero()
-        self.sketch.table = torch.sum(torch.stack(tables, dim=0), dim=0)
+        self.sketch.table = torch.sum(torch.stack(tables), dim=0)
         self.candidateTopK = self.sketch.unSketch(k=self.p2*self.k)
         self.candidateHHCoords = self.candidateTopK.nonzero()
         # COMMUNICATE
@@ -1363,10 +1363,10 @@ class Worker(object):
         else:
             self.u.mul_(self.momentum).add_(gradVec)
             self.v.add_(self.u)
-        weightUpdate = self.v
-        self.v = torch.zeros_like(self.v, device=self.device)
-        self._setGradVec(weightUpdate * self._getLRVec())
-        self._updateParamsWithGradVec()
+    #    weightUpdate = self.v
+     #   self.v = torch.zeros_like(self.v, device=self.device)
+      #  self._setGradVec(weightUpdate * self._getLRVec())
+       # self._updateParamsWithGradVec()
         # return
         candidateSketch = self.v[self.sketchMask]
         self.sketch.zero()
@@ -1491,6 +1491,8 @@ class Worker(object):
 #         print(f"Make CSVec of dim{numRows}, {numCols}")
         self.sketch = CSVec(d=self.sketchMask.sum().item(), c=numCols, r=numRows, 
                             device=self.device, nChunks=1, numBlocks=numBlocks)
+        self.param_sketch = CSVec(d=self.sketchMask.sum().item(), c=numCols, r=numRows,
+                device=self.device, nChunks=1, numBlocks=numBlocks)
 
 
     # below two functions are only used for debugging to confirm that this works when we send full grad
@@ -1526,12 +1528,25 @@ class Worker(object):
         accuracy = self.correctCriterion(outputs, targets)
         sketch = "bleh"
         if training:
-            sketch = self.compute_sketch()
             loss.sum().backward()
+            sketch = self.compute_sketch()
         return loss.detach().cpu().numpy(), accuracy.detach().cpu().numpy(), sketch
     
+    def topk(self, vec, k):
+        """ Return the largest k elements (by magnitude) of vec"""
+        ret = torch.zeros_like(vec)
+
+        # on a gpu, sorting is faster than pytorch's topk method
+        topkIndices = torch.sort(vec**2)[1][-k:]
+        #_, topkIndices = torch.topk(vec**2, k)
+
+        ret[topkIndices] = vec[topkIndices]
+        return ret
     def closed_step(self):
         # worker computes sketch
+        self.step_number += 1
+        self.param_groups[0].update(**self.param_values())
+        assert self._getLRVec() != 0.0, "invalid lr"
         gradVec = self._getGradVec()
         if self.weight_decay != 0:
             gradVec.add_(self.weight_decay, self._getParamVec())
@@ -1546,9 +1561,9 @@ class Worker(object):
         self.sketch += self.candidateSketch
         tables = [self.sketch.table]
         # 'parameter server' gets topk
-        self.sketch.zero()
-        self.sketch.table = torch.sum(torch.stack(tables, dim=0), dim=0)
-        self.candidateTopK = self.sketch.unSketch(k=self.p2*self.k)
+        self.param_sketch.zero()
+        self.param_sketch.table = torch.sum(torch.stack(tables), dim=0)
+        self.candidateTopK = self.param_sketch.unSketch(k=self.p2*self.k)
         self.candidateHHCoords = self.candidateTopK.nonzero()        
         # worker responds
         hhs = self.candidateSketch[self.candidateHHCoords]
@@ -1568,6 +1583,7 @@ class Worker(object):
         self.u[weightUpdate.nonzero()] = 0
         self.v[weightUpdate.nonzero()] = 0
         self.v[~self.sketchMask] = 0
+        #import pdb; pdb.set_trace()
         self._setGradVec(weightUpdate * self._getLRVec())
         self._updateParamsWithGradVec()
 
@@ -1577,6 +1593,7 @@ class Worker(object):
         """
         self.step_number += 1
         self.param_groups[0].update(**self.param_values())
+        assert self._getLRVec() != 0.0, "invalid lr"
         gradVec = self._getGradVec()
         self.sketch.zero()
         # weight decay
@@ -1848,13 +1865,13 @@ def run_batches(ps, workers, batches, minibatch_size, training):
                 )
             ))
         if training:
-            ray.wait([worker.closed_step.remote() for worker in workers])
+            #ray.wait([worker.closed_step.remote() for worker in workers])
             """
             weights = ray.get([worker.step.remote() for worker in workers])
             weightUpdate = ps.average_grads.remote(weights) 
             ray.wait([worker.update.remote(weightUpdate) for worker in workers])
             """
-            """
+            #"""
             # server initiates second round of communication
             hhcoords = ps.compute_hhcoords.remote((sketches))
             # workers answer, also giving the unsketched params
@@ -1867,7 +1884,7 @@ def run_batches(ps, workers, batches, minibatch_size, training):
             weightUpdate = ps.compute_update.remote(topkAndUnsketched)
             # workers apply weight update (can be merged with 1st line)
             ray.wait([worker.apply_update.remote(weightUpdate) for worker in workers])
-            """
+            #"""
         iterationStats = {"loss": np.mean((losses)), "correct": np.mean((accuracies))}
         #print(iterationStats)
         stats.append(iterationStats)
@@ -1980,8 +1997,8 @@ ray.init(num_gpus=8)
 num_workers = args.num_workers
 minibatch_size = args.batch_size/num_workers
 print(f"Passing in args {optim_args}")
-#ps = ParameterServer.remote(optim_args)
-ps = "bleh"
+ps = ParameterServer.remote(optim_args)
+#ps = "bleh"
 # Create workers.
 workers = [Worker.remote(num_workers, worker_index, optim_args) for worker_index in range(num_workers)]
 
