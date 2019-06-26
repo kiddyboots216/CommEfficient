@@ -1547,7 +1547,7 @@ class Worker(object):
         # worker computes sketch
         self.step_number += 1
         self.param_groups[0].update(**self.param_values())
-        assert self._getLRVec() != 0.0, "invalid lr"
+        #assert self._getLRVec() != 0.0, "invalid lr"
         gradVec = self._getGradVec()
         if self.weight_decay != 0:
             gradVec.add_(self.weight_decay, self._getParamVec())
