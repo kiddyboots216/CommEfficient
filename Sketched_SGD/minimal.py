@@ -546,202 +546,10 @@ def build_graph(net):
             ])
     return r
 
-
-#####################
-## training utils
-#####################
-
-@singledispatch
-def cat(*xs):
-    raise NotImplementedError
-
-@singledispatch
-def to_numpy(x):
-    raise NotImplementedError
-
-
-class PiecewiseLinear(namedtuple('PiecewiseLinear', ('knots', 'vals'))):
-    def __call__(self, t):
-        return np.interp([t], self.knots, self.vals)[0]
-
-class StatsLogger():
-    def __init__(self, keys):
-        self._stats = {k:[] for k in keys}
-
-    def append(self, output):
-        for k,v in self._stats.items():
-            v.append(output[k].detach())
-
-    def stats(self, key):
-        return cat(*self._stats[key])
-
-    def mean(self, key):
-        return np.mean(to_numpy(self.stats(key)), dtype=np.float)
-
-# criterion = nn.CrossEntropyLoss(reduction='none')
-# correctCriterion = Correct()
-
-# def run_batches(model, batches, training, optimizer):
-#     stats = StatsLogger(('loss', 'correct'))
-#     model.train(training)
-#     for batchId, batch in enumerate(batches):
-#         inputs = batch["input"]
-#         targets = batch["target"]
-#         optimizer.zero_grad()
-#         outputs = model(inputs)
-#         loss = criterion(outputs, targets)
-#         nCorrect = correctCriterion(outputs, targets)
-#         iterationStats = {"loss": loss, "correct": nCorrect}
-#         if training:
-# #             else:
-#             loss.sum().backward()
-# #                 optimizer.backward(loss)
-#             optimizer.step()
-# #             model.zero_grad()
-#         stats.append(iterationStats)
-#     return stats
-
-# def train_epoch(model, train_batches, test_batches, optimizer,
-#                 timer, test_time_in_total=True):
-#     train_stats = run_batches(model, train_batches, True, optimizer)
-#     train_time = timer()
-#     test_stats = run_batches(model, test_batches, False, optimizer)
-#     test_time = timer(test_time_in_total)
-#     stats ={'train_time': train_time,
-#             'train_loss': train_stats.mean('loss'),
-#             'train_acc': train_stats.mean('correct'),
-#             'test_time': test_time,
-#             'test_loss': test_stats.mean('loss'),
-#             'test_acc': test_stats.mean('correct'),
-#             'total_time': timer.total_time}
-#     return stats
-
-# def train(model, optimizer, train_batches, test_batches, epochs,
-#           loggers=(), test_time_in_total=True, timer=None):
-#     timer = timer or Timer()
-#     for epoch in range(epochs):
-#         epoch_stats = train_epoch(model, train_batches, test_batches,
-#                                   optimizer, timer,
-#                                   test_time_in_total=test_time_in_total)
-#         lr = optimizer.param_values()['lr'] * train_batches.batch_size
-#         summary = union({'epoch': epoch+1, 'lr': lr}, epoch_stats)
-#         track.metric(iteration=epoch, **summary)
-#         for logger in loggers:
-#             logger.append(summary)
-    # return summary
-
-#####################
-## network visualisation (requires pydot)
-#####################
-class ColorMap(dict):
-    palette = (
-        'bebada,ffffb3,fb8072,8dd3c7,80b1d3,fdb462,b3de69,fccde5,bc80bd,ccebc5,ffed6f,1f78b4,33a02c,e31a1c,ff7f00,'
-        '4dddf8,e66493,b07b87,4e90e3,dea05e,d0c281,f0e189,e9e8b1,e0eb71,bbd2a4,6ed641,57eb9c,3ca4d4,92d5e7,b15928'
-    ).split(',')
-    def __missing__(self, key):
-        self[key] = self.palette[len(self) % len(self.palette)]
-        return self[key]
-
-def make_pydot(nodes, edges, direction='LR', sep=sep, **kwargs):
-    import pydot
-    parent = lambda path: path[:-1]
-    stub = lambda path: path[-1]
-    class Subgraphs(dict):
-        def __missing__(self, path):
-            subgraph = pydot.Cluster(sep.join(path), label=stub(path),
-                                     style='rounded, filled',
-                                     fillcolor='#77777744')
-            self[parent(path)].add_subgraph(subgraph)
-            return subgraph
-    subgraphs = Subgraphs()
-    subgraphs[()] = g = pydot.Dot(rankdir=direction, directed=True,
-                                  **kwargs)
-    g.set_node_defaults(
-        shape='box', style='rounded, filled', fillcolor='#ffffff')
-    for node, attr in nodes:
-        path = tuple(node.split(sep))
-        subgraphs[parent(path)].add_node(
-            pydot.Node(name=node, label=stub(path), **attr))
-    for src, dst, attr in edges:
-        g.add_edge(pydot.Edge(src, dst, **attr))
-    return g
-
-get_params = lambda mod: {p.name: getattr(mod, p.name, '?')
-                          for p in signature(type(mod)).parameters.values()
-                         }
-
-
-class DotGraph():
-    colors = ColorMap()
-    def __init__(self, net, size=15, direction='LR'):
-        graph = build_graph(net)
-        self.nodes = [(k, {
-            'tooltip': '%s %.1000r' % (type(n).__name__, get_params(n)),
-            'fillcolor': '#'+self.colors[type(n)],
-        }) for k, (n, i) in graph.items()]
-        self.edges = [(src, k, {})
-                      for (k, (n, i)) in graph.items()
-                      for src in i]
-        self.size, self.direction = size, direction
-
-    def dot_graph(self, **kwargs):
-        return make_pydot(self.nodes, self.edges, size=self.size,
-                            direction=self.direction, **kwargs)
-
-    def svg(self, **kwargs):
-        return self.dot_graph(**kwargs).create(format='svg').decode('utf-8')
-
-    try:
-        import pydot
-        def _repr_svg_(self):
-            return self.svg()
-    except ImportError:
-        def __repr__(self):
-            return 'pydot is needed for network visualisation'
-
-walk = lambda dict_, key: walk(dict_, dict_[key]) if key in dict_ else key
-
-def remove_by_type(net, node_type):
-    #remove identity nodes for more compact visualisations
-    graph = build_graph(net)
-    remap = {k: i[0]
-             for k,(v,i) in graph.items()
-             if isinstance(v, node_type)}
-    return {k: (v, [walk(remap, x) for x in i])
-            for k, (v,i) in graph.items()
-            if not isinstance(v, node_type)}
-
 import numpy as np
 import torch
 from torch import nn
 import torchvision
-# from core import cat, to_numpy
-#from core import build_graph
-
-# torch.backends.cudnn.benchmark = True
-# device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-# device = "cpu"
-@cat.register(torch.Tensor)
-def _(*xs):
-    return torch.cat(xs)
-
-@to_numpy.register(torch.Tensor)
-def _(x):
-    return x.detach().cpu().numpy()
-
-def warmup_cudnn(model, batch_size):
-    #run forward and backward pass of the model on a batch of random inputs
-    #to allow benchmarking of cudnn kernels
-    inp = torch.Tensor(np.random.rand(batch_size, 3, 32, 32)).cuda()
-    target = torch.LongTensor(np.random.randint(0, 10, batch_size)).cuda()
-#     batch = {'input': inp, 'target': target}
-#     model.train(True)
-    o = model(inp)
-    criterion = nn.CrossEntropyLoss(reduction='mean')
-    loss = criterion(o, target)
-    loss.backward()
-    model.zero_grad()
-    torch.cuda.synchronize()
 
 #####################
 ## dataset
@@ -820,68 +628,6 @@ def batch_norm(num_channels, bn_bias_init=None, bn_bias_freeze=False,
         m.weight.requires_grad = False
 
     return m
-
-
-
-"""
-class Network(nn.Module):
-    def __init__(self, net):
-        self.graph = build_graph(net)
-        super().__init__()
-        for n, (v, _) in self.graph.items():
-            setattr(self, n, v)
-    def forward(self, inputs):
-        self.cache = dict(inputs)
-        for n, (_, i) in self.graph.items():
-            #import ipdb
-            #ipdb.set_trace()
-            print(n)
-            self.cache[n] = getattr(self, n)(*[self.cache[x] for x in i])
-        return self.cache
-    def half(self):
-        for module in self.children():
-            if not isinstance(module, nn.BatchNorm2d):
-                module.half()
-        return self
-"""
-
-# trainable_params = lambda model: filter(lambda p: p.requires_grad, model.parameters())
-
-# class TorchOptimiser():
-#     def __init__(self, weights, optimizer, sketched,
-#                  k, p2, numCols, numRows, step_number=0, **opt_params):
-#         self.weights = weights
-#         self.step_number = step_number
-#         self.opt_params = opt_params
-#         self._opt = optimizer(weights, **self.param_values())
-#         if sketched:
-#             assert(optimizer == torch.optim.SGD)
-#             assert(opt_params["dampening"] == 0)
-# #             assert(opt_params["nesterov"] == False)
-#             self._opt = SGD_Sketched(weights, k, p2, numCols, numRows, 
-#                                      **self.param_values())
-
-#     def param_values(self):
-#         return {k: v(self.step_number) if callable(v) else v
-#                 for k,v in self.opt_params.items()}
-
-#     def step(self, loss=None):
-#         self.step_number += 1
-#         self._opt.param_groups[0].update(**self.param_values())
-#         self._opt.step(loss)
-
-#     def __repr__(self):
-#         return repr(self._opt)
-    
-#     def __getattr__(self, key):
-#         return getattr(self._opt, key)
-
-# def SGD(weights, lr, momentum, weight_decay, nesterov, dampening,
-#         sketched, k, p2, numCols, numRows, numBlocks):
-#     return TorchOptimiser(weights, torch.optim.SGD, sketched=sketched, k=k, p2=p2, 
-#                           numCols=numCols, numRows=numRows, lr=lr,
-#                           momentum=momentum, weight_decay=weight_decay,
-#                           dampening=dampening, nesterov=nesterov)
 
 #Network definition
 class ConvBN(nn.Module):
@@ -1093,7 +839,8 @@ class ParameterServer(object):
         self.sketch = CSVec(d=self.sketchMask.sum().item(), c=numCols, r=numRows, 
                             device=self.device, nChunks=1, numBlocks=numBlocks)
 
-    def compute_hhcoords(self, *tables):
+    def compute_hhcoords(self, *lossAccTables):
+        _, _, tables = list(zip(*lossAccTables))
         self.sketch.zero()
         self.sketch.table = torch.sum(torch.stack(tables), dim=0)
         self.candidateTopK = self.sketch.unSketch(k=self.p2*self.k)
@@ -1105,8 +852,7 @@ class ParameterServer(object):
         return torch.sum(torch.stack(grads), dim=0)
 
     def compute_update(self, *sketchesAndUnsketched):
-        #import pdb; pdb.set_trace()
-        hhs, unsketched = list(zip(*ray.get(*sketchesAndUnsketched)))
+        hhs, unsketched = list(zip(*sketchesAndUnsketched))
         self.candidateTopK[self.candidateHHCoords] = torch.sum(
             torch.stack(hhs),dim=0)
         del self.candidateHHCoords
@@ -1351,81 +1097,6 @@ class Worker(object):
         self.criterion = nn.CrossEntropyLoss(reduction='none').cuda()
         self.correctCriterion = Correct().cuda()
 
-    def centralized_step(self):
-        gradVec = self._getGradVec()
-        # weight decay
-        if self.weight_decay != 0:
-            gradVec.add_(self.weight_decay, self._getParamVec())
-        # TODO: Pretty sure this momentum/residual formula is wrong
-        if self.nesterov:
-
-            self.u.mul_(self.momentum).add_(gradVec)
-            self.v.add_(self.momentum, self.u)
-        else:
-            self.u.mul_(self.momentum).add_(gradVec)
-            self.v.add_(self.u)
-    #    weightUpdate = self.v
-     #   self.v = torch.zeros_like(self.v, device=self.device)
-      #  self._setGradVec(weightUpdate * self._getLRVec())
-       # self._updateParamsWithGradVec()
-        # return
-        candidateSketch = self.v[self.sketchMask]
-        self.sketch.zero()
-        self.sketch += candidateSketch
-        # COMMUNICATE
-#         for workerId, v in enumerate(vs):
-#         # zero last sketch
-#             self.sketches[workerId].zero()
-#             # update sketch without truncating, this calls CSVec.__iadd__
-#             self.sketches[workerId] += v
-        # 2nd round of communication
-        # don't need to sum
-        
-        # THIS ON SERVER
-        candidateTopK = self.sketch.unSketch(k=self.p2*self.k)
-#         candidateTopK = np.sum(self.sketches).unSketch(k=self.p2*self.k)
-        candidateHHCoords = candidateTopK.nonzero()
-        # don't need to stack or sum
-        # COMMUNICATE
-        candidateTopK[candidateHHCoords] = candidateSketch[candidateHHCoords]
-#         candidateTopK[candidateHHCoords] = torch.sum(torch.stack([v[candidateHHCoords]
-#                                                     for v in vs]),
-#                                                     dim=0)
-#         del vs
-        del candidateSketch
-        # this is w
-        weights = topk(candidateTopK, k=self.k)
-        del candidateTopK
-        weightUpdate = torch.zeros_like(self.v)
-#         weightUpdate = torch.zeros_like(self.vs[0])
-        weightUpdate[self.sketchMask] = weights
-        # zero out the coords that are getting communicated
-        self.u[weightUpdate.nonzero()] = 0
-        self.v[weightUpdate.nonzero()] = 0
-#         for u, v in zip(self.us, self.vs):
-#             u[weightUpdate.nonzero()] = 0
-#             v[weightUpdate.nonzero()] = 0
-        """
-        Return from _aggAndZeroSketched, finish _aggregateAndZeroUVs
-        """
-        # TODO: Bundle this efficiently
-        # directly send whatever wasn't sketched
-        unsketched = self.v[~self.sketchMask]
-#         vs = [v[~self.sketchMask] for v in self.vs]
-        # don't need to sum
-        
-        weightUpdate[~self.sketchMask] = unsketched
-#         weightUpdate[~self.sketchMask] = torch.sum(torch.stack(vs), dim=0)
-#         print(torch.sum(weightUpdate))
-        self.v[~self.sketchMask] = 0
-#         for v in self.vs:
-#             v[~self.sketchMask] = 0
-        """
-        Return from _aggregateAndZeroUVs, back in backward
-        """
-        self._setGradVec(weightUpdate * self._getLRVec())
-        self._updateParamsWithGradVec()
-
     def sketcher_init(self, 
                  k=0, p2=0, numCols=0, numRows=0, p1=0, numBlocks=1, # sketched_params
                  lr=0, momentum=0, dampening=0, weight_decay=0, nesterov=False): # opt_params
@@ -1495,30 +1166,6 @@ class Worker(object):
         self.param_sketch = CSVec(d=self.sketchMask.sum().item(), c=numCols, r=numRows,
                 device=self.device, nChunks=1, numBlocks=numBlocks)
 
-
-    # below two functions are only used for debugging to confirm that this works when we send full grad
-    def step(self):
-        self.step_number += 1
-        self.param_groups[0].update(**self.param_values())
-        gradVec = self._getGradVec()
-        
-        #return gradVec
-        # weight decay
-        if self.weight_decay != 0:
-            gradVec.add_(self.weight_decay, self._getParamVec())
-        # TODO: Pretty sure this momentum/residual formula is wrong
-        self.u.mul_(self.momentum).add_(1, gradVec)
-        gradVec = gradVec.add_(self.momentum, self.u)
-        return gradVec
-        weightUpdate = self.v
-        return weightUpdate
-    def update(self, weightUpdate):
-        #import ipdb; ipdb.set_trace()
-        self._setGradVec(weightUpdate * self._getLRVec())
-        self._updateParamsWithGradVec()
-        #self.v = torch.zeros_like(self.v, device=self.device)
-        return
-
     def forward(self, inputs, targets, training=True):
         #self.sketchedModel.train(training)
         self.zero_grad()
@@ -1532,61 +1179,6 @@ class Worker(object):
             loss.sum().backward()
             sketch = self.compute_sketch()
         return loss.detach().cpu().numpy(), accuracy.detach().cpu().numpy(), sketch
-    
-    def topk(self, vec, k):
-        """ Return the largest k elements (by magnitude) of vec"""
-        ret = torch.zeros_like(vec)
-
-        # on a gpu, sorting is faster than pytorch's topk method
-        topkIndices = torch.sort(vec**2)[1][-k:]
-        #_, topkIndices = torch.topk(vec**2, k)
-
-        ret[topkIndices] = vec[topkIndices]
-        return ret
-    def closed_step(self):
-        # worker computes sketch
-        self.step_number += 1
-        self.param_groups[0].update(**self.param_values())
-        #assert self._getLRVec() != 0.0, "invalid lr"
-        gradVec = self._getGradVec()
-        if self.weight_decay != 0:
-            gradVec.add_(self.weight_decay, self._getParamVec())
-        if self.nesterov:
-            self.u.mul_(self.momentum).add_(gradVec)
-            self.v.add_(self.momentum, self.u)
-        else:
-            self.u.mul_(self.momentum).add_(gradVec)
-            self.v.add_(self.u)
-        self.candidateSketch = self.v[self.sketchMask]
-        self.sketch.zero()
-        self.sketch += self.candidateSketch
-        tables = [self.sketch.table]
-        # 'parameter server' gets topk
-        self.param_sketch.zero()
-        self.param_sketch.table = torch.sum(torch.stack(tables), dim=0)
-        self.candidateTopK = self.param_sketch.unSketch(k=self.p2*self.k)
-        self.candidateHHCoords = self.candidateTopK.nonzero()        
-        # worker responds
-        hhs = self.candidateSketch[self.candidateHHCoords]
-        unsketched = self.v[~self.sketchMask]
-        sketchesAndUnsketched = ([hhs], [unsketched])
-        # parameter server issues update
-        hhs, unsketched = sketchesAndUnsketched
-        self.candidateTopK[self.candidateHHCoords] = torch.sum(
-            torch.stack(hhs),dim=0)
-        del self.candidateHHCoords
-        weights = self.topk(self.candidateTopK, k=self.k)
-        del self.candidateTopK
-        weightUpdate = torch.zeros(self.grad_size, device=self.device)
-        weightUpdate[self.sketchMask] = weights
-        weightUpdate[~self.sketchMask] = torch.sum(torch.stack(unsketched), dim=0)
-        # worker does update
-        self.u[weightUpdate.nonzero()] = 0
-        self.v[weightUpdate.nonzero()] = 0
-        self.v[~self.sketchMask] = 0
-        #import pdb; pdb.set_trace()
-        self._setGradVec(weightUpdate * self._getLRVec())
-        self._updateParamsWithGradVec()
 
     def compute_sketch(self): 
         """
@@ -1596,7 +1188,6 @@ class Worker(object):
         self.param_groups[0].update(**self.param_values())
         assert self._getLRVec() != 0.0, "invalid lr"
         gradVec = self._getGradVec()
-        self.sketch.zero()
         # weight decay
         if self.weight_decay != 0:
             gradVec.add_(self.weight_decay/self.num_workers, self._getParamVec())
@@ -1609,19 +1200,17 @@ class Worker(object):
             #self.v = gradVec
         # this is v
         self.candidateSketch = self.v[self.sketchMask]
+        self.sketch.zero()
         self.sketch += self.candidateSketch
         # COMMUNICATE ONLY THE TABLE
-        #import pdb; pdb.set_trace()
         return self.sketch.table
 
     def send_topkAndUnsketched(self, hhcoords):
-    #    hhcoords = hhcoords.to(self.device)
         # directly send whatever wasn't sketched
         unsketched = self.v[~self.sketchMask]
         # COMMUNICATE
         return self.v[hhcoords], unsketched
-    #.cpu()
-#     @ray.remote
+
     def apply_update(self, weightUpdate):
         # zero out the coords that are getting communicated
         self.u[weightUpdate.nonzero()] = 0
@@ -1630,7 +1219,6 @@ class Worker(object):
         #self.sync(weightUpdate * self._getLRVec())
         self._setGradVec(weightUpdate * self._getLRVec())
         self._updateParamsWithGradVec()
-        #self.sketchedModel.zero_grad()
 
     """
     Helper functions below
@@ -1838,25 +1426,22 @@ class PiecewiseLinear(namedtuple('PiecewiseLinear', ('knots', 'vals'))):
     def __call__(self, t):
         return np.interp([t], self.knots, self.vals)[0]
 
+@ray.remote
 class StatsLogger():
     def __init__(self, keys):
         self.stats = {k:[] for k in keys}
 
-    def append(self, output):
+    def append(self, lossAccTables):
+        losses, accuracies, _ = list(zip(*lossAccTables))
+        output = {'loss': np.mean(losses), 'correct': np.mean(accuracies)}
         for k,v in self.stats.items():
             v.append(output[k])
-#             v.append(output[k].detach())
-
-#     def stats(self, key):
-#         return cat(*self._stats[key])
 
     def mean(self, key):
         return np.mean(self.stats[key], dtype=np.float)
-#         return np.mean(to_numpy(self.stats(key)), dtype=np.float)
 
 def run_batches(ps, workers, batches, minibatch_size, training):
     stats = StatsLogger(('loss', 'correct'))
-#     model.train(training)
     for batchId, batch in enumerate(batches):
         inputs = batch["input"]
         targets = batch["target"]    
@@ -1870,40 +1455,23 @@ def run_batches(ps, workers, batches, minibatch_size, training):
             input_minibatches.append(inputs[start:end])
             target_minibatches.append(targets[start:end])
         # workers do backward passes and calculate sketches
-        losses, accuracies, sketches = list(zip(
-            *ray.get(
-                [worker.forward.remote(
+        lossAccTables = [worker.forward.remote(
                 input_minibatches[worker_id],
                 target_minibatches[worker_id],
                 training)
                 for worker_id, worker in enumerate(workers)]
-                )
-            ))
         if training:
-            #ray.wait([worker.closed_step.remote() for worker in workers])
-            """
-            weights = ray.get([worker.step.remote() for worker in workers])
-            weightUpdate = ps.average_grads.remote(weights) 
-            ray.wait([worker.update.remote(weightUpdate) for worker in workers])
-            """
-            #"""
             # server initiates second round of communication
-            hhcoords = ps.compute_hhcoords.remote(*sketches)
+            hhcoords = ps.compute_hhcoords.remote(*lossAccTables)
             # workers answer, also giving the unsketched params
             topkAndUnsketched = [worker.send_topkAndUnsketched.remote(hhcoords) for worker in workers]
-            #list(zip(
-             #   *ray.get(
-              #      )
-               # ))
-
             # server compute weight update, put it into ray
             weightUpdate = ps.compute_update.remote(topkAndUnsketched)
             # workers apply weight update (can be merged with 1st line)
             ray.wait([worker.apply_update.remote(weightUpdate) for worker in workers])
-            #"""
-        iterationStats = {"loss": np.mean((losses)), "correct": np.mean((accuracies))}
+        # iterationStats = {"loss": np.mean((losses)), "correct": np.mean((accuracies))}
         #print(iterationStats)
-        stats.append(iterationStats)
+        stats.append(*lossAccTables)
     return stats
 #"""
 def train_epoch(ps, workers, train_batches, test_batches, minibatch_size,
@@ -1913,11 +1481,11 @@ def train_epoch(ps, workers, train_batches, test_batches, minibatch_size,
     test_stats = run_batches(ps, workers, test_batches, minibatch_size, False)
     test_time = timer(test_time_in_total)
     stats ={'train_time': train_time,
-            'train_loss': train_stats.mean('loss'),
-            'train_acc': train_stats.mean('correct'),
+            'train_loss': train_stats.mean.remote('loss'),
+            'train_acc': train_stats.mean.remote('correct'),
             'test_time': test_time,
-            'test_loss': test_stats.mean('loss'),
-            'test_acc': test_stats.mean('correct'),
+            'test_loss': test_stats.mean.remote('loss'),
+            'test_acc': test_stats.mean.remote('correct'),
             'total_time': timer.total_time}
     return stats
 
