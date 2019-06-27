@@ -743,7 +743,7 @@ class _RequiredParameter(object):
         return "<required parameter>"
 
 required = _RequiredParameter()
-@ray.remote(num_gpus=2.0)
+@ray.remote(num_gpus=0.5, num_cpus=2.0)
 class ParameterServer(object):
     def __init__(self, kwargs):
         print(f"Received args {kwargs}")
@@ -841,8 +841,8 @@ class ParameterServer(object):
         self.sketch = CSVec(d=self.sketchMask.sum().item(), c=numCols, r=numRows, 
                             device=self.device, nChunks=1, numBlocks=numBlocks)
 
-    def compute_hhcoords(self, *lossAccTables):
-        _, _, tables = list(zip(*lossAccTables))
+    def compute_hhcoords(self, *tables):
+        #_, _, tables = list(zip(*lossAcc))
         self.sketch.zero()
         self.sketch.table = torch.sum(torch.stack(tables), dim=0)
         self.candidateTopK = self.sketch.unSketch(k=self.p2*self.k)
@@ -1075,7 +1075,7 @@ class Correct(nn.Module):
     def forward(self, classifier, target):
         return classifier.max(dim = 1)[1] == target
 
-@ray.remote(num_gpus=1.0)
+@ray.remote(num_gpus=0.8, num_cpus=2.0)
 class Worker(object):
     def __init__(self, num_workers, worker_index, kwargs):
         #os.environ["CUDA_VISIBLE_DEVICES"] = ",".join([str(i) for i in ray.get_gpu_ids()])
@@ -1181,10 +1181,10 @@ class Worker(object):
         sketch = "bleh"
         if training:
             loss.sum().backward()
-            sketch = self.compute_sketch()
-        return loss.detach().cpu().numpy(), accuracy.detach().cpu().numpy(), sketch
+            #sketch = self.compute_sketch()
+        return loss.detach().cpu().numpy(), accuracy.detach().cpu().numpy()#, sketch
 
-    def compute_sketch(self): 
+    def compute_sketch(self, lossAcc): 
         """
         Calls _backwardWorker inside backward
         """
@@ -1435,8 +1435,8 @@ class StatsLogger():
     def __init__(self, keys):
         self.stats = {k:[] for k in keys}
 
-    def append(self, lossAccTables):
-        losses, accuracies, _ = list(zip(*lossAccTables))
+    def append(self, *lossAcc):
+        losses, accuracies = list(zip(*lossAcc))
         output = {'loss': np.mean(losses), 'correct': np.mean(accuracies)}
         for k,v in self.stats.items():
             v.append(output[k])
@@ -1459,14 +1459,15 @@ def run_batches(ps, workers, batches, minibatch_size, training):
             input_minibatches.append(inputs[start:end])
             target_minibatches.append(targets[start:end])
         # workers do backward passes and calculate sketches
-        lossAccTables = [worker.forward.remote(
+        lossAcc= [worker.forward.remote(
                 input_minibatches[worker_id],
                 target_minibatches[worker_id],
                 training)
                 for worker_id, worker in enumerate(workers)]
         if training:
+            tables = [worker.compute_sketch.remote(lossAcc) for worker in workers]
             # server initiates second round of communication
-            hhcoords = ps.compute_hhcoords.remote(*lossAccTables)
+            hhcoords = ps.compute_hhcoords.remote(*tables)
             # workers answer, also giving the unsketched params
             topkAndUnsketched = [worker.send_topkAndUnsketched.remote(hhcoords) for worker in workers]
             # server compute weight update, put it into ray
@@ -1475,7 +1476,7 @@ def run_batches(ps, workers, batches, minibatch_size, training):
             ray.wait([worker.apply_update.remote(weightUpdate) for worker in workers])
         # iterationStats = {"loss": np.mean((losses)), "correct": np.mean((accuracies))}
         #print(iterationStats)
-        stats.append.remote(*lossAccTables)
+        stats.append.remote(*lossAcc)
     return stats
 #"""
 def train_epoch(ps, workers, train_batches, test_batches, minibatch_size,
@@ -1485,11 +1486,11 @@ def train_epoch(ps, workers, train_batches, test_batches, minibatch_size,
     test_stats = run_batches(ps, workers, test_batches, minibatch_size, False)
     test_time = timer(test_time_in_total)
     stats ={'train_time': train_time,
-            'train_loss': train_stats.mean.remote('loss'),
-            'train_acc': train_stats.mean.remote('correct'),
+            'train_loss': ray.get(train_stats.mean.remote('loss')),
+            'train_acc': ray.get(train_stats.mean.remote('correct')),
             'test_time': test_time,
-            'test_loss': test_stats.mean.remote('loss'),
-            'test_acc': test_stats.mean.remote('correct'),
+            'test_loss': ray.get(test_stats.mean.remote('loss')),
+            'test_acc': ray.get(test_stats.mean.remote('correct')),
             'total_time': timer.total_time}
     return stats
 
