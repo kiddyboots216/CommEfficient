@@ -753,6 +753,7 @@ class ParameterServer(object):
         self.params = kwargs
         self.sketcher_init(**self.param_values())
         # super().__init__(**self.param_values())
+        """
         warmed_up = False
         while not warmed_up:
             try:
@@ -761,6 +762,7 @@ class ParameterServer(object):
                 warmed_up = True
             except RuntimeError as e:
                 print(e)
+        """
         del self.sketchedModel
 #        del self.param_groups
     
@@ -1084,6 +1086,7 @@ class Worker(object):
         self.params = kwargs
         print(f"Initializing worker {self.worker_index}")
         self.sketcher_init(**self.param_values())
+        """
         warmed_up = False
         while not warmed_up:
             try:
@@ -1092,6 +1095,7 @@ class Worker(object):
                 warmed_up = True
             except RuntimeError as e:
                 print(e)
+        """
         self.u = torch.zeros(self.grad_size, device=self.device)
         self.v = torch.zeros(self.grad_size, device=self.device)
         self.criterion = nn.CrossEntropyLoss(reduction='none').cuda()
@@ -1441,7 +1445,7 @@ class StatsLogger():
         return np.mean(self.stats[key], dtype=np.float)
 
 def run_batches(ps, workers, batches, minibatch_size, training):
-    stats = StatsLogger(('loss', 'correct'))
+    stats = StatsLogger.remote(('loss', 'correct'))
     for batchId, batch in enumerate(batches):
         inputs = batch["input"]
         targets = batch["target"]    
@@ -1466,12 +1470,12 @@ def run_batches(ps, workers, batches, minibatch_size, training):
             # workers answer, also giving the unsketched params
             topkAndUnsketched = [worker.send_topkAndUnsketched.remote(hhcoords) for worker in workers]
             # server compute weight update, put it into ray
-            weightUpdate = ps.compute_update.remote(topkAndUnsketched)
+            weightUpdate = ps.compute_update.remote(*topkAndUnsketched)
             # workers apply weight update (can be merged with 1st line)
             ray.wait([worker.apply_update.remote(weightUpdate) for worker in workers])
         # iterationStats = {"loss": np.mean((losses)), "correct": np.mean((accuracies))}
         #print(iterationStats)
-        stats.append(*lossAccTables)
+        stats.append.remote(*lossAccTables)
     return stats
 #"""
 def train_epoch(ps, workers, train_batches, test_batches, minibatch_size,
