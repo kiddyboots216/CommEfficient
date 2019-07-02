@@ -743,7 +743,7 @@ class _RequiredParameter(object):
         return "<required parameter>"
 
 required = _RequiredParameter()
-@ray.remote(num_gpus=0.5, num_cpus=2.0)
+@ray.remote(num_gpus=0.5)
 class ParameterServer(object):
     def __init__(self, kwargs):
         print(f"Received args {kwargs}")
@@ -1075,7 +1075,7 @@ class Correct(nn.Module):
     def forward(self, classifier, target):
         return classifier.max(dim = 1)[1] == target
 
-@ray.remote(num_gpus=0.8, num_cpus=2.0)
+@ray.remote(num_gpus=0.75)
 class Worker(object):
     def __init__(self, num_workers, worker_index, kwargs):
         #os.environ["CUDA_VISIBLE_DEVICES"] = ",".join([str(i) for i in ray.get_gpu_ids()])
