@@ -490,6 +490,7 @@ class Transform():
         return len(self.dataset)
 
     def __getitem__(self, index):
+        assert self.choices is not None
         data, labels = self.dataset[index]
         for choices, f in zip(self.choices, self.transforms):
             args = {k: v[index] for (k,v) in choices.items()}
@@ -844,7 +845,7 @@ class ParameterServer(object):
     def compute_hhcoords(self, *tables):
         #_, _, tables = list(zip(*lossAcc))
         self.sketch.zero()
-        self.sketch.table = torch.sum(torch.stack(tables), dim=0)
+        self.sketch.table = torch.sum(torch.stack(tables), dim=0).to(self.device)
         self.candidateTopK = self.sketch.unSketch(k=self.p2*self.k)
         self.candidateHHCoords = self.candidateTopK.nonzero()
         # COMMUNICATE

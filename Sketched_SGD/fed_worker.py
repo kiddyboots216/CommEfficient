@@ -79,19 +79,23 @@ class FedWorker(object):
 
     def forward(self, test_batches):
         running_metrics = {metric: 0.0 for metric in self.metrics}
+        num_processed = 0
         for idx, batch in enumerate(test_batches):
             loss, acc = self._forward_batch(batch)
-            running_metrics['loss'] += loss
-            running_metrics['acc'] += acc
-        running_metrics = {k: v/len(test_batches) for k,v in running_metrics.items()}
+            running_metrics['loss'] = (running_metrics['loss'] * num_processed + loss.mean() * len(batch))/(num_processed + len(batch))
+            running_metrics['acc'] = (running_metrics['acc'] * num_processed + acc.mean() * len(batch))/(num_processed + len(batch))
+            num_processed += len(batch)
+        #running_metrics = {k: v.detach().cpu().numpy() for k,v in running_metrics.items()}
         return running_metrics
 
     def _forward_batch(self, test_batch):
+        x = test_batch["input"]
+        y = test_batch["target"]
         out = self.model(x)
         # calculate losses
-        loss = self.criterion(out, y)
+        loss = self.criterion(out, y).float()
         # calculate metric
-        acc = self.accuracy(out, y)
+        acc = self.accuracy(out, y).float()
         return loss, acc
 
     def train(self, iterations=1):
@@ -103,32 +107,33 @@ class FedWorker(object):
             for k, v in metrics.items():
                 running_metrics[k] += v
         # scale metrics appropriately
-        running_metrics = {k: v/iterations for k,v in running_metrics.items()}
-        return running_metrics, self.model_diff(opt_copy)
+        running_metrics = {k: v.detach().cpu()/iterations for k,v in running_metrics.items()}
+        #import pdb; pdb.set_trace()
+        return running_metrics, self.model_diff(opt_copy).cpu()
 
     def train_epoch(self):
         running_metrics = {metric: 0.0 for metric in self.metrics}
-        for step, batch in enumerate(self.dataloader):
-            loss, acc = self.train_batch(step, batch) 
-            running_metrics['loss'] += loss
-            running_metrics['acc'] += acc
+        num_processed = 0
+        for idx, batch in enumerate(self.dataloader):
+            loss, acc = self.train_batch(batch)
+            running_metrics['loss'] = (running_metrics['loss'] * num_processed + loss.mean() * len(batch))/(num_processed + len(batch))
+            running_metrics['acc'] = (running_metrics['acc'] * num_processed + acc.mean() * len(batch))/(num_processed + len(batch))
+            num_processed += len(batch)
+        #running_metrics = {k: v.detach().cpu().numpy() for k,v in running_metrics.items()}
             # for k, v in metrics.items():
             #   running_metrics[k] += v
         # scale metrics appropriately
-        running_metrics = {k: v/len(self.dataloader) for k,v in running_metrics.items()}
         return running_metrics
 
     def train_batch(self, batch):
-        x = batch["input"]
-        y = batch["target"]
         self.step_number += 1
         self.opt.param_groups[0].update(**self.param_values())
         # zero the optimizer
         self.opt.zero_grad()
         # forward pass
-        loss, acc = self._forward_batch(x)
+        loss, acc = self._forward_batch(batch)
         # backwards pass of loss
-        loss.backwards()
+        loss.backward()
         # step the optimizer
         self.opt.step()
         return loss, acc

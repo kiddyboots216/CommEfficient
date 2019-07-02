@@ -17,14 +17,15 @@ def train_epoch(ps, workers, test_batches, epochs_per_iter, timer):
     # workers apply weight update (can be merged with 1st line)
     ray.wait([worker.apply_update.remote(weightUpdate) for worker in workers])
     train_time = timer()
-    test_stats = ray.get([worker.forward.remote(test_batches)])
+    test_stats = ray.get([worker.forward.remote(test_batches) for worker in workers])
     test_time = timer()
+    #import pdb; pdb.set_trace()
     stats ={'train_time': train_time,
-            'train_loss': train_stats['loss'],
-            'train_acc': train_stats['correct'],
+            'train_loss': torch.mean(torch.stack([stat['loss'] for stat in train_stats])),
+            'train_acc': torch.mean(torch.stack([stat['acc'] for stat in train_stats])),
             'test_time': test_time,
-            'test_loss': test_stats['loss'],
-            'test_acc': test_stats['correct'],
+            'test_loss': torch.mean(torch.stack([stat['loss'] for stat in test_stats])),
+            'test_acc': torch.mean(torch.stack([stat['acc'] for stat in test_stats])),
             'total_time': timer.total_time}
     return stats
 
@@ -37,7 +38,7 @@ def train(ps, workers, test_batches, epochs, epochs_per_iter,
         iter_stats = train_epoch(ps, workers, test_batches, epochs_per_iter, timer)
         num_epoch += epochs_per_iter
         lr = ray.get(workers[0].param_values.remote())['lr'] * test_batches.batch_size
-        summary = union({'epoch': epoch+iter_stats, 'lr': lr}, iter_stats)
+        summary = union({'epoch': num_epoch+epochs_per_iter, 'lr': lr}, iter_stats)
 #         track.metric(iteration=epoch, **summary)
         for logger in loggers:
             logger.append(summary)
@@ -89,6 +90,9 @@ if __name__ == "__main__":
     client_train_batches = [Batches(Transform(client_train_set, train_transforms),
                             args.batch_size, shuffle=True,
                             set_random_choices=True, drop_last=True) for client_train_set in client_train_sets]
+    for chosen_client in client_train_batches:
+        for batch_id, batch in enumerate(chosen_client):
+            i = 0
     test_batches = Batches(test_set, args.batch_size, shuffle=False,
                            drop_last=False)
 
@@ -105,7 +109,7 @@ if __name__ == "__main__":
         "weight_decay": 5e-4*args.batch_size,
         "nesterov": args.nesterov,
         "dampening": 0,
-        "metrics": ['loss', 'correct'],
+        "metrics": ['loss', 'acc'],
     }
 
     ray.init(num_gpus=8)
