@@ -5,7 +5,7 @@ def train_epoch(ps, workers, test_batches, epochs_per_iter, timer):
     train_stats, tables = list(
         zip(
             *ray.get(
-                [worker.train.remote(epochs_per_iter)]
+                [worker.train.remote(epochs_per_iter) for worker in workers]
                 )
             )
         )
@@ -69,7 +69,7 @@ if __name__ == "__main__":
 
     lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
     train_transforms = [Crop(32, 32), FlipLR(), Cutout(8, 8)]
-    lr = lambda step: lr_schedule(step/len(train_batches))/args.batch_size
+    lr = lambda step: lr_schedule(step/sum([len(train_batch) for train_batch in client_train_batches]))/args.batch_size
     print('Starting timer')
     timer = Timer()
 
@@ -93,13 +93,11 @@ if __name__ == "__main__":
                            drop_last=False)
 
     kwargs = {
-        "sketched": {
-            "k": args.k,
-            "p2": args.p2,
-            "numCols": args.cols,
-            "numRows": args.rows,
-            "numBlocks": args.num_blocks,
-        }
+        "k": args.k,
+        "p2": args.p2,
+        "numCols": args.cols,
+        "numRows": args.rows,
+        "numBlocks": args.num_blocks,
         "lr": lr,
         "momentum": 0.0,
         "optimizer" : args.optimizer,
@@ -113,15 +111,18 @@ if __name__ == "__main__":
     ray.init(num_gpus=8)
     num_workers = args.num_workers
     minibatch_size = args.batch_size/num_workers
-    print(f"Passing in args {optim_args}")
-    ps = ParameterServer.remote(kwargs)
+    print(f"Passing in args {kwargs}")
     workers = [FedWorker.remote(batch, worker_index, kwargs) for worker_index, batch 
                 in enumerate(client_train_batches)]
     #ps = "bleh"
+    del kwargs['optimizer']
+    del kwargs['criterion']
+    del kwargs['metrics']
+    ps = ParameterServer.remote(kwargs)
     # Create workers.
 
     # track_dir = "sample_data"
     # with track.trial(track_dir, None, param_map=vars(optim_args)):
 
-    train(ps, workers, test_batches, args.epochs,
+    train(ps, workers, test_batches, args.epochs, 1,
           loggers=(TableLogger(), TSV), timer=timer)

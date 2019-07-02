@@ -11,6 +11,8 @@ from minimal import Correct, CSVec, SketchedModel, Net
 class FedWorker(object):
     def __init__(self, dataloader, worker_index, kwargs):
         self.hp = kwargs
+        self.worker_index = worker_index
+        self.step_number = 0
         print(f"Initializing worker {self.worker_index}")
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # we need to load the data in
@@ -27,8 +29,9 @@ class FedWorker(object):
         self.model = SketchedModel(self.model)
         # we want an optimizer, it'll just be faster
         optimizer_object = getattr(optim, self.hp['optimizer'])
-        optimizer_parameters = {k : v for k, v in self.hp.items() if k in optimizer_object.__init__.__code__.co_varnames}
-        self.opt = optimizer_object(self.model.parameters(), **optimizer_parameters)
+        self.optimizer_parameters = {k : v for k, v in self.hp.items() if k in optimizer_object.__init__.__code__.co_varnames}
+        self.optimizer_parameters = self.param_values()
+        self.opt = optimizer_object(self.model.parameters(), **self.optimizer_parameters)
         # we need to make our own criterion, this can be cool in future
         criterion_object = getattr(nn, self.hp['criterion'])
         criterion_parameters = {k : v for k, v in self.hp.items() if k in criterion_object.__init__.__code__.co_varnames}
@@ -38,16 +41,18 @@ class FedWorker(object):
         # set up the metrics
         self.metrics = self.hp['metrics']
         # make a CSVec and set self.sketched_model
-        self._sketcher_init(self.hp['sketched'])
+        self._sketcher_init(**{'k': self.hp['k'], 'p2': self.hp['p2'], 'numCols': self.hp['numCols'], 'numRows': self.hp['numRows'], 'numBlocks': self.hp['numBlocks']})
 
+    def param_values(self):
+        return {k: v(self.step_number) if callable(v) else v for k,v in self.optimizer_parameters.items()}
     def model_diff(self, opt_copy):
         diff_vec = []
         for group_id, param_group in enumerate(self.opt.param_groups):
             for idx, p in enumerate(param_group['params']):
                 # calculate the difference between the current model and the stored model
-                diff_vec.append(p.data.view(-1).float() - opt_copy.param_groups[group_id]['params'][idx].data.view(-1).float())
+                diff_vec.append(p.data.view(-1).float() - opt_copy[group_id]['params'][idx].data.view(-1).float())
                 # reset the current model to the stored model for later
-                p.data = opt_copy.param_groups[group_id]['params'][idx].data
+                p.data = opt_copy[group_id]['params'][idx].data
         self.diff_vec = torch.cat(diff_vec).to(self.device)
         # print(diff_vec)
         masked_diff = self.diff_vec[self.sketch_mask]
@@ -91,7 +96,7 @@ class FedWorker(object):
 
     def train(self, iterations=1):
         # we need to store a copy of the parameters
-        opt_copy = copy.deepcopy(optim)
+        opt_copy = copy.deepcopy(self.opt.param_groups)
         running_metrics = {metric: 0.0 for metric in self.metrics}
         for _ in range(iterations):
             metrics = self.train_epoch()
@@ -103,8 +108,8 @@ class FedWorker(object):
 
     def train_epoch(self):
         running_metrics = {metric: 0.0 for metric in self.metrics}
-        for step, (x, y) in enumerate(self.dataloader):
-            loss, acc = self.train_batch(step, x.cuda(), y.cuda())
+        for step, batch in enumerate(self.dataloader):
+            loss, acc = self.train_batch(step, batch) 
             running_metrics['loss'] += loss
             running_metrics['acc'] += acc
             # for k, v in metrics.items():
@@ -113,9 +118,11 @@ class FedWorker(object):
         running_metrics = {k: v/len(self.dataloader) for k,v in running_metrics.items()}
         return running_metrics
 
-    def train_batch(self, x, y):
+    def train_batch(self, batch):
+        x = batch["input"]
+        y = batch["target"]
         self.step_number += 1
-        self.param_groups[0].update(**self.param_values())
+        self.opt.param_groups[0].update(**self.param_values())
         # zero the optimizer
         self.opt.zero_grad()
         # forward pass
@@ -152,5 +159,5 @@ class FedWorker(object):
         self.sketch_mask = torch.cat(sketchMask).byte().to(self.device)
         #print(f"sketchMask.sum(): {self.sketchMask.sum()}")
 #         print(f"Make CSVec of dim{numRows}, {numCols}")
-        self.sketch = CSVec(d=self.sketchMask.sum().item(), c=numCols, r=numRows, 
+        self.sketch = CSVec(d=self.sketch_mask.sum().item(), c=numCols, r=numRows, 
                             device=self.device, nChunks=1, numBlocks=numBlocks)
