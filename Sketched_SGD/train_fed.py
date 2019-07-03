@@ -1,7 +1,7 @@
-from fed_worker import FedWorker
 from minimal import *
+from fed_worker import FedWorker
 
-def train_epoch(ps, workers, test_batches, epochs_per_iter, timer):
+def train_epoch(ps, workers, epochs_per_iter, timer):
     train_stats, tables = list(
         zip(
             *ray.get(
@@ -17,28 +17,29 @@ def train_epoch(ps, workers, test_batches, epochs_per_iter, timer):
     # workers apply weight update (can be merged with 1st line)
     ray.wait([worker.apply_update.remote(weightUpdate) for worker in workers])
     train_time = timer()
-    test_stats = ray.get([worker.forward.remote(test_batches) for worker in workers])
+    #import pdb; pdb.set_trace()
+    test_stats = ray.get([worker.forward.remote() for worker_id, worker in enumerate(workers)])
     test_time = timer()
     #import pdb; pdb.set_trace()
     stats ={'train_time': train_time,
-            'train_loss': torch.mean(torch.stack([stat['loss'] for stat in train_stats])),
-            'train_acc': torch.mean(torch.stack([stat['acc'] for stat in train_stats])),
+            'train_loss': torch.mean(torch.stack([stat['loss'] for stat in train_stats])).numpy()[()],
+            'train_acc': torch.mean(torch.stack([stat['acc'] for stat in train_stats])).numpy()[()],
             'test_time': test_time,
-            'test_loss': torch.mean(torch.stack([stat['loss'] for stat in test_stats])),
-            'test_acc': torch.mean(torch.stack([stat['acc'] for stat in test_stats])),
+            'test_loss': torch.mean(torch.stack([stat['loss'] for stat in test_stats])).numpy()[()],
+            'test_acc': torch.mean(torch.stack([stat['acc'] for stat in test_stats])).numpy()[()],
             'total_time': timer.total_time}
     return stats
 
-def train(ps, workers, test_batches, epochs, epochs_per_iter,
+def train(ps, workers, epochs, epochs_per_iter, batch_size,
           loggers=(), test_time_in_total=True, timer=None):
     timer = timer or Timer()
     # ray.wait([worker.sync.remote(ps._getParamVec.remote()) for worker in workers])
     num_epoch = 0
     while num_epoch < epochs:
-        iter_stats = train_epoch(ps, workers, test_batches, epochs_per_iter, timer)
-        num_epoch += epochs_per_iter
-        lr = ray.get(workers[0].param_values.remote())['lr'] * test_batches.batch_size
+        iter_stats = train_epoch(ps, workers, epochs_per_iter, timer)
+        lr = ray.get(workers[0].param_values.remote())['lr'] * batch_size
         summary = union({'epoch': num_epoch+epochs_per_iter, 'lr': lr}, iter_stats)
+        num_epoch += epochs_per_iter
 #         track.metric(iteration=epoch, **summary)
         for logger in loggers:
             logger.append(summary)
@@ -59,6 +60,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--nesterov", type=bool, default=False)
     parser.add_argument("--epochs", type=int, default=24)
+    parser.add_argument("--epochs_per_iter", type=int, default=1)
     parser.add_argument("--optimizer", type=str, default="SGD")
     parser.add_argument("--criterion", type=str, default="CrossEntropyLoss")
     args = parser.parse_args()
@@ -70,21 +72,24 @@ if __name__ == "__main__":
 
     lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
     train_transforms = [Crop(32, 32), FlipLR(), Cutout(8, 8)]
-    lr = lambda step: lr_schedule(step/sum([len(train_batch) for train_batch in client_train_batches]))/args.batch_size
-    print('Starting timer')
+    lr = lambda step: lr_schedule(step/len(client_train_batches[0]))/args.batch_size
+    #print('Starting timer')
     timer = Timer()
 
-    print('Preprocessing training data')
+    #print('Preprocessing training data')
     train_set = list(zip(
             transpose(normalise(pad(dataset['train']['data'], 4))),
             dataset['train']['labels']))
     client_train_sets = np.array_split(train_set, args.num_workers)
-    print('Finished in {:.2f} seconds'.format(timer()))
-    print('Preprocessing test data')
+    print(f'Finished making {len(train_set)} to {[len(set) for set in client_train_sets]} in {timer():.2f} seconds')
+    #print('Finished in {:.2f} seconds'.format(timer()))
+    #print('Preprocessing test data')
     test_set = list(zip(transpose(normalise(dataset['test']['data'])),
                         dataset['test']['labels']))
-    print('Finished in {:.2f} seconds'.format(timer()))
-
+    def chunker_list(seq, size):
+        return (seq[i::size] for i in range(size))
+    client_test_sets = list(chunker_list(test_set, args.num_workers))
+    print(f'Finished making {len(test_set)} to {[len(set) for set in client_test_sets]} in {timer():.2f} seconds')
     TSV = TSVLogger()
 
     client_train_batches = [Batches(Transform(client_train_set, train_transforms),
@@ -93,8 +98,12 @@ if __name__ == "__main__":
     for chosen_client in client_train_batches:
         for batch_id, batch in enumerate(chosen_client):
             i = 0
-    test_batches = Batches(test_set, args.batch_size, shuffle=False,
-                           drop_last=False)
+    client_test_batches = [Batches(client_test_set, args.batch_size, shuffle=False,
+                           drop_last=False) for client_test_set in client_test_sets]
+    #import pdb; pdb.set_trace()
+    for test_client in client_test_batches:
+        for batch_id, batch in enumerate(test_client):
+            i = 0
 
     kwargs = {
         "k": args.k,
@@ -116,7 +125,7 @@ if __name__ == "__main__":
     num_workers = args.num_workers
     minibatch_size = args.batch_size/num_workers
     print(f"Passing in args {kwargs}")
-    workers = [FedWorker.remote(batch, worker_index, kwargs) for worker_index, batch 
+    workers = [FedWorker.remote(train_batch, client_test_batches[worker_index], worker_index, kwargs) for worker_index, train_batch 
                 in enumerate(client_train_batches)]
     #ps = "bleh"
     del kwargs['optimizer']
@@ -128,5 +137,5 @@ if __name__ == "__main__":
     # track_dir = "sample_data"
     # with track.trial(track_dir, None, param_map=vars(optim_args)):
 
-    train(ps, workers, test_batches, args.epochs, 1,
+    train(ps, workers, args.epochs, args.epochs_per_iter, args.batch_size,
           loggers=(TableLogger(), TSV), timer=timer)
