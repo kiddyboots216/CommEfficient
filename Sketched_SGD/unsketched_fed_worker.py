@@ -8,7 +8,7 @@ import ray
 from minimal import Correct, Net
 
 @ray.remote(num_gpus=1.0)
-class FedWorker(object):
+class UnsketchedFedWorker(object):
     def __init__(self, train_dataloader, test_dataloader, worker_index, kwargs):
         self.hp = kwargs
         self.worker_index = worker_index
@@ -126,7 +126,7 @@ class FedWorker(object):
         # scale metrics appropriately
         running_metrics = {k: v/iterations for k,v in running_metrics.items()}
         #import pdb; pdb.set_trace()
-        return running_metrics, self.model_diff(opt_copy).cpu()
+        return running_metrics
 
     def train_epoch(self):
         running_metrics = {metric: 0.0 for metric in self.metrics}
