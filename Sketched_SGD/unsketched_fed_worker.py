@@ -36,15 +36,16 @@ class UnsketchedFedWorker(object):
         # sketch the model
         #self.model = SketchedModel(self.model)
         # we want an optimizer, it'll just be faster
-        # optimizer_object = getattr(optim, self.hp['optimizer'])
-        # self.optimizer_parameters = {k : v for k, v in self.hp.items() if k in optimizer_object.__init__.__code__.co_varnames}
+        optimizer_object = getattr(optim, self.hp['optimizer'])
+        self.optimizer_parameters = {k : v for k, v in self.hp.items() if k in optimizer_object.__init__.__code__.co_varnames}
+        #import pdb; pdb.set_trace()
         #self.optimizer_parameters = self.param_values()
-        # self.opt = optimizer_object(self.model.parameters(), **self.param_values())
+        self.opt = optimizer_object(self.model.parameters(), **self.param_values())
         # we need to make our own criterion, this can be cool in future
         # criterion_object = getattr(nn, self.hp['criterion'])
         # criterion_parameters = {k : v for k, v in self.hp.items() if k in criterion_object.__init__.__code__.co_varnames}
         #self.criterion = criterion_object(**criterion_parameters).to(self.device)
-        self.opt = optim.SGD(lr=self.hp['lr'](self.step_number))
+        #self.opt = optim.SGD(self.model.parameters(), lr=self.hp['lr'](self.step_number), momentum=0.9, nesterov=True, weight_decay=self.hp['weight_decay'])
         self.criterion = nn.CrossEntropyLoss(reduction='none').to(self.device)
         # make the accuracy
         self.accuracy = Correct().to(self.device)
@@ -55,7 +56,7 @@ class UnsketchedFedWorker(object):
 
     def param_values(self):
         #import pdb; pdb.set_trace()
-        return {k: v(self.step_number) if callable(v) else v for k,v in self.hp.items()}
+        return {k: v(self.step_number) if callable(v) else v for k,v in self.optimizer_parameters.items()}
     # def model_diff(self, opt_copy):
     #     diff_vec = []
     #     for group_id, param_group in enumerate(self.opt.param_groups):
@@ -96,20 +97,25 @@ class UnsketchedFedWorker(object):
         num_processed = 0
         #import pdb; pdb.set_trace()
         for idx, batch in enumerate(self.val_loader):
-            loss, acc = self._forward_batch(batch)
-            running_metrics['loss'] = (running_metrics['loss'] * num_processed + loss.detach().cpu().mean() * len(batch))/(num_processed + len(batch))
-            running_metrics['acc'] = (running_metrics['acc'] * num_processed + acc.detach().cpu().mean() * len(batch))/(num_processed + len(batch))
+            loss, acc = self._forward_batch(batch, False)
+            #import pdb; pdb.set_trace()
+            running_metrics['loss'] += loss.mean().detach().cpu()
+            running_metrics['acc'] += acc.mean().detach().cpu()
+            #running_metrics['loss'] = (running_metrics['loss'] * num_processed + loss.detach().cpu().mean() * len(batch))/(num_processed + len(batch))
+            #running_metrics['acc'] = (running_metrics['acc'] * num_processed + acc.detach().cpu().mean() * len(batch))/(num_processed + len(batch))
             num_processed += len(batch)
             #import pdb; pdb.set_trace()
         #running_metrics = {k: v.detach().cpu().numpy() for k,v in running_metrics.items()}
+        running_metrics = {k: v/len(self.val_loader) for k,v in running_metrics.items()}
         return running_metrics
 
-    def _forward_batch(self, test_batch):
+    def _forward_batch(self, test_batch, training):
+        self.model.train(training)
         x = test_batch["input"]
         y = test_batch["target"]
         out = self.model(x)
         # calculate losses
-        loss = self.criterion(out, y).float()
+        loss = self.criterion(out, y)
         # calculate metric
         acc = self.accuracy(out, y).float()
         return loss, acc
@@ -134,10 +140,13 @@ class UnsketchedFedWorker(object):
         for idx, batch in enumerate(self.dataloader):
             #print(idx)
             loss, acc = self.train_batch(batch)
-            running_metrics['loss'] = (running_metrics['loss'] * num_processed + loss.detach().cpu().mean() * len(batch))/(num_processed + len(batch))
-            running_metrics['acc'] = (running_metrics['acc'] * num_processed + acc.detach().cpu().mean() * len(batch))/(num_processed + len(batch))
+            #import pdb; pdb.set_trace()
+            #running_metrics['loss'] = (running_metrics['loss'] * num_processed + loss.detach().cpu().mean() * len(batch))/(num_processed + len(batch))
+            #running_metrics['acc'] = (running_metrics['acc'] * num_processed + acc.detach().cpu().mean() * len(batch))/(num_processed + len(batch))
+            running_metrics['loss'] += loss.mean().detach().cpu()
+            running_metrics['acc'] += acc.mean().detach().cpu()
             num_processed += len(batch)
-        #running_metrics = {k: v.detach().cpu().numpy() for k,v in running_metrics.items()}
+        running_metrics = {k: v/len(self.dataloader) for k,v in running_metrics.items()}
             # for k, v in metrics.items():
             #   running_metrics[k] += v
         # scale metrics appropriately
@@ -145,18 +154,18 @@ class UnsketchedFedWorker(object):
 
     def train_batch(self, batch):
         self.opt.zero_grad()
-        self.step_number += 1
-        self.opt.param_groups[0].update(**self.param_values())
         # zero the optimizer
         # forward pass
-        loss, acc = self._forward_batch(batch)
+        loss, acc = self._forward_batch(batch, True)
         # backwards pass of loss
         loss.sum().backward()
         # step the optimizer
         #import pdb; pdb.set_trace()
         #print(f'Updating with lr: {self.opt.param_groups[0]["lr"]}')
+        self.step_number += 1
+        self.opt.param_groups[0].update(**self.param_values())
         self.opt.step()
-        return loss, acc
+        return loss.float(), acc
         # return {'loss': loss.sum(), 'acc': acc} 
 
 #     def _sketcher_init(self, 

@@ -3,7 +3,7 @@ from fed_worker import FedWorker
 from unsketched_fed_worker import UnsketchedFedWorker
 
 def train_epoch(ps, workers, epochs_per_iter, timer):
-    train_stats = ray.get([worker.train.remote(epochs_per_iter) for worker in workers])
+    train_stats = ray.get([worker.train_epoch.remote() for worker in workers])
     # train_stats, tables = list(
     #     zip(
     #         *ray.get(
@@ -22,6 +22,7 @@ def train_epoch(ps, workers, epochs_per_iter, timer):
     #import pdb; pdb.set_trace()
     test_stats = ray.get([worker.forward.remote() for worker_id, worker in enumerate(workers)])
     test_time = timer()
+    #import pdb; pdb.set_trace()
     #import pdb; pdb.set_trace()
     stats ={'train_time': train_time,
             'train_loss': torch.mean(torch.stack([stat['loss'] for stat in train_stats])).numpy()[()],
@@ -61,6 +62,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_blocks", type=int, default=2)
     parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--nesterov", type=bool, default=False)
+    parser.add_argument("--momentum", type=float, default=0.0)
     parser.add_argument("--epochs", type=int, default=24)
     parser.add_argument("--epochs_per_iter", type=int, default=1)
     parser.add_argument("--optimizer", type=str, default="SGD")
@@ -114,7 +116,7 @@ if __name__ == "__main__":
         "numRows": args.rows,
         "numBlocks": args.num_blocks,
         "lr": lr,
-        "momentum": 0.0,
+        "momentum": args.momentum,
         "optimizer" : args.optimizer,
         "criterion": args.criterion,
         "weight_decay": 5e-4*args.batch_size,
@@ -127,7 +129,7 @@ if __name__ == "__main__":
     num_workers = args.num_workers
     minibatch_size = args.batch_size/num_workers
     print(f"Passing in args {kwargs}")
-    workers = [FedWorker.remote(train_batch, client_test_batches[worker_index], worker_index, kwargs) for worker_index, train_batch 
+    workers = [UnsketchedFedWorker.remote(train_batch, client_test_batches[worker_index], worker_index, kwargs) for worker_index, train_batch 
                 in enumerate(client_train_batches)]
     #ps = "bleh"
     del kwargs['optimizer']
