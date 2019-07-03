@@ -68,7 +68,7 @@ kwargs = {
     "dampening": 0,
     "metrics": ['loss', 'acc'],
 }
-param_values = {
+opt_params = {
     "lr": lr,
     "momentum": args.momentum,
     "weight_decay": 5e-4*args.batch_size,
@@ -80,46 +80,44 @@ criterion = nn.CrossEntropyLoss(reduction='none').cuda()
 accuracy = Correct().cuda()
 step_number = 0
 
-def param_values():
+def param_values(step_number):
     #import pdb; pdb.set_trace()
-    return {k: v(step_number) if callable(v) else v for k,v in param_values.items()}
+    return {k: v(step_number) if callable(v) else v for k,v in opt_params.items()}
 
-optimizer = optim.SGD(model.parameters(), **param_values())
+optimizer = optim.SGD(model.parameters(), **param_values(step_number))
 
 # Create workers.
 
 # track_dir = "sample_data"
 # with track.trial(track_dir, None, param_map=vars(optim_args)):
 
-train(model, optimizer, train_batches, test_batches, args.epochs,
-      loggers=(TableLogger(), TSV), timer=timer)
-
-def train_epoch(model, optimizer, dataloader, training):
+def train_epoch(model, optimizer, dataloader, step_number, training):
     running_loss = 0.0
     running_acc = 0.0
     for idx, batch in enumerate(dataloader):
+        optimizer.zero_grad()
         inputs = batch["input"]
         targets = batch["target"]
         outputs = model(inputs)
         loss = criterion(outputs, targets)
         acc = accuracy(outputs, targets)
         if training:
-                        step_number += 1
-                        optimizer.param_groups[0].update(**param_values())
-            optimizer.zero_grad()
+            step_number += 1
+            optimizer.param_groups[0].update(**param_values(step_number))
             loss.sum().backward()
             optimizer.step()
-        running_loss += loss.mean()
-        running_acc += acc.mean()
-    return (running_loss/len(dataloader)).detach().cpu().numpy(), (running_acc/len(dataloader)).detach().cpu().numpy()
+        running_loss += loss.float().mean().detach().cpu().numpy()
+        running_acc += acc.float().mean().detach().cpu().numpy()
+    return (running_loss/len(dataloader)), (running_acc/len(dataloader)), step_number
 
 def train(model, optimizer, train_loader, val_loader, 
             epochs=24, loggers=(), timer=None):
     timer = timer or Timer()
+    step_number = 0
     for epoch in range(epochs):
-        train_loss, train_acc = train_epoch(model, optimizer, train_loader, True)
+        train_loss, train_acc, step_number = train_epoch(model, optimizer, train_loader, step_number, True)
         train_time = timer()
-        test_loss, test_acc = train_epoch(model, optimizer, val_loader, False)
+        test_loss, test_acc, _ = train_epoch(model, optimizer, val_loader, step_number, False)
         test_time = timer()
         stats = {
             'train_time': train_time,
@@ -130,9 +128,12 @@ def train(model, optimizer, train_loader, val_loader,
             'test_acc': test_acc,
             'total_time': timer.total_time
         }
-        lr = param_values['lr'] * batch_size
+        lr = param_values(step_number)['lr'] * args.batch_size
         summary = union({'epoch': epoch+1, 'lr': lr}, stats)
         for logger in loggers:
             logger.append(summary)
     return summary
+
+train(model, optimizer, train_batches, test_batches, args.epochs,
+      loggers=(TableLogger(), TSV), timer=timer)
 
