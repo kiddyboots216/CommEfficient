@@ -80,7 +80,7 @@ criterion = nn.CrossEntropyLoss(reduction='none').cuda()
 accuracy = Correct().cuda()
 step_number = 0
 
-def param_values(self):
+def param_values():
     #import pdb; pdb.set_trace()
     return {k: v(step_number) if callable(v) else v for k,v in param_values.items()}
 
@@ -104,6 +104,8 @@ def train_epoch(model, optimizer, dataloader, training):
 		loss = criterion(outputs, targets)
 		acc = accuracy(outputs, targets)
 		if training:
+                        step_number += 1
+                        optimizer.param_groups[0].update(**param_values())
 			optimizer.zero_grad()
 			loss.sum().backward()
 			optimizer.step()
