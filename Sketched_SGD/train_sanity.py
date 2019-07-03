@@ -69,7 +69,7 @@ kwargs = {
     "metrics": ['loss', 'acc'],
 }
 param_values = {
-	"lr": lr,
+    "lr": lr,
     "momentum": args.momentum,
     "weight_decay": 5e-4*args.batch_size,
     "nesterov": args.nesterov,
@@ -95,44 +95,44 @@ train(model, optimizer, train_batches, test_batches, args.epochs,
       loggers=(TableLogger(), TSV), timer=timer)
 
 def train_epoch(model, optimizer, dataloader, training):
-	running_loss = 0.0
-	running_acc = 0.0
-	for idx, batch in enumerate(dataloader):
-		inputs = batch["input"]
-		targets = batch["target"]
-		outputs = model(inputs)
-		loss = criterion(outputs, targets)
-		acc = accuracy(outputs, targets)
-		if training:
+    running_loss = 0.0
+    running_acc = 0.0
+    for idx, batch in enumerate(dataloader):
+        inputs = batch["input"]
+        targets = batch["target"]
+        outputs = model(inputs)
+        loss = criterion(outputs, targets)
+        acc = accuracy(outputs, targets)
+        if training:
                         step_number += 1
                         optimizer.param_groups[0].update(**param_values())
-			optimizer.zero_grad()
-			loss.sum().backward()
-			optimizer.step()
-		running_loss += loss.mean()
-		running_acc += acc.mean()
-	return (running_loss/len(dataloader)).detach().cpu().numpy(), (running_acc/len(dataloader)).detach().cpu().numpy()
+            optimizer.zero_grad()
+            loss.sum().backward()
+            optimizer.step()
+        running_loss += loss.mean()
+        running_acc += acc.mean()
+    return (running_loss/len(dataloader)).detach().cpu().numpy(), (running_acc/len(dataloader)).detach().cpu().numpy()
 
 def train(model, optimizer, train_loader, val_loader, 
-			epochs=24, loggers=(), timer=None):
-	timer = timer or Timer()
-	for epoch in range(epochs):
-		train_loss, train_acc = train_epoch(model, optimizer, train_loader, True)
-		train_time = timer()
-		test_loss, test_acc = train_epoch(model, optimizer, val_loader, False)
-		test_time = timer()
-		stats = {
-			'train_time': train_time,
-			'train_loss': train_loss,
-			'train_acc': train_acc,
-			'test_time': test_time,
-			'test_loss': test_loss,
-			'test_acc': test_acc,
-			'total_time': timer.total_time
-		}
-		lr = param_values['lr'] * batch_size
-		summary = union({'epoch': epoch+1, 'lr': lr}, stats)
-		for logger in loggers:
-			logger.append(summary)
-	return summary
+            epochs=24, loggers=(), timer=None):
+    timer = timer or Timer()
+    for epoch in range(epochs):
+        train_loss, train_acc = train_epoch(model, optimizer, train_loader, True)
+        train_time = timer()
+        test_loss, test_acc = train_epoch(model, optimizer, val_loader, False)
+        test_time = timer()
+        stats = {
+            'train_time': train_time,
+            'train_loss': train_loss,
+            'train_acc': train_acc,
+            'test_time': test_time,
+            'test_loss': test_loss,
+            'test_acc': test_acc,
+            'total_time': timer.total_time
+        }
+        lr = param_values['lr'] * batch_size
+        summary = union({'epoch': epoch+1, 'lr': lr}, stats)
+        for logger in loggers:
+            logger.append(summary)
+    return summary
 
