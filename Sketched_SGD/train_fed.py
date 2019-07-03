@@ -1,21 +1,23 @@
 from minimal import *
 from fed_worker import FedWorker
+from unsketched_fed_worker import UnsketchedFedWorker
 
 def train_epoch(ps, workers, epochs_per_iter, timer):
-    train_stats, tables = list(
-        zip(
-            *ray.get(
-                [worker.train.remote(epochs_per_iter) for worker in workers]
-                )
-            )
-        )
-    hhcoords = ps.compute_hhcoords.remote(*tables)
-    # workers answer, also giving the unsketched params
-    topkAndUnsketched = [worker.send_topkAndUnsketched.remote(hhcoords) for worker in workers]
-    # server compute weight update, put it into ray
-    weightUpdate = ps.compute_update.remote(*topkAndUnsketched)
-    # workers apply weight update (can be merged with 1st line)
-    ray.wait([worker.apply_update.remote(weightUpdate) for worker in workers])
+    train_stats = ray.get([worker.train.remote(epochs_per_iter) for worker in workers])
+    # train_stats, tables = list(
+    #     zip(
+    #         *ray.get(
+    #             [worker.train.remote(epochs_per_iter) for worker in workers]
+    #             )
+    #         )
+    #     )
+    # hhcoords = ps.compute_hhcoords.remote(*tables)
+    # # workers answer, also giving the unsketched params
+    # topkAndUnsketched = [worker.send_topkAndUnsketched.remote(hhcoords) for worker in workers]
+    # # server compute weight update, put it into ray
+    # weightUpdate = ps.compute_update.remote(*topkAndUnsketched)
+    # # workers apply weight update (can be merged with 1st line)
+    # ray.wait([worker.apply_update.remote(weightUpdate) for worker in workers])
     train_time = timer()
     #import pdb; pdb.set_trace()
     test_stats = ray.get([worker.forward.remote() for worker_id, worker in enumerate(workers)])
