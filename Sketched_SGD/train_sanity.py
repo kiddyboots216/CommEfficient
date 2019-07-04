@@ -1,12 +1,14 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import copy
 
 from minimal import *
 
 @ray.remote(num_gpus=1.0)
 class SanityWorker(object):
     def __init__(self, train_set, test_set, train_transforms, worker_index, kwargs):
+        self.device = torch.device("cuda")
         self.train_loader = Batches(Transform(train_set, train_transforms),
                         kwargs['batch_size'], shuffle=True,
                         set_random_choices=True, drop_last=True)
@@ -26,11 +28,11 @@ class SanityWorker(object):
         torch.random.manual_seed(42)
         self.model = Net().cuda()
         torch.random.set_rng_state(rand_state)
-        self.crit = nn.CrossEntropyLoss(reduction='none').cuda()
-        self.acc = Correct().cuda()
+        self.crit = nn.CrossEntropyLoss(reduction='none').to(self.device)
+        self.acc = Correct().to(self.device)
         step_number = 0
         self.opt = optim.SGD(self.model.parameters(), **self.param_values(step_number))
-        self._sketcher_init(**{'k': self.hp['k'], 'p2': self.hp['p2'], 'numCols': self.hp['numCols'], 'numRows': self.hp['numRows'], 'numBlocks': self.hp['numBlocks']})
+        #self._sketcher_init(**{'k': self.hp['k'], 'p2': self.hp['p2'], 'numCols': self.hp['numCols'], 'numRows': self.hp['numRows'], 'numBlocks': self.hp['numBlocks']})
 
     def param_values(self, step_number):
         #import pdb; pdb.set_trace()
@@ -76,12 +78,12 @@ class SanityWorker(object):
         for group_id, param_group in enumerate(self.opt.param_groups):
             for idx, p in enumerate(param_group['params']):
                 # calculate the difference between the current model and the stored model
-                diff_vec.append(p.data.view(-1).float() - opt_copy[group_id]['params'][idx].data.view(-1).float())
+                diff_vec.append(opt_copy[group_id]['params'][idx].data.view(-1).float() - p.data.view(-1).float())
                 # reset the current model to the stored model for later
                 p.data = opt_copy[group_id]['params'][idx].data
         self.diff_vec = torch.cat(diff_vec).to(self.device)
         #import pdb; pdb.set_trace()
-        print(f"Found a difference of {torch.sum(self.diff_vec)}")
+        #print(f"Found a difference of {torch.sum(self.diff_vec)}")
         return self.diff_vec
         # print(diff_vec)
         masked_diff = self.diff_vec[self.sketch_mask]
@@ -98,12 +100,14 @@ class SanityWorker(object):
         # COMMUNICATE
         return self.diff_vec[hhcoords], unsketched
 
-    def apply_update(self, weightUpdate):
+    def apply_update(self, weight_update):
+        weight_update = weight_update.to(self.device)
         start = 0
         for param_group in self.opt.param_groups:
             for p in param_group['params']:
                 end = start + torch.numel(p)
-                p.data = weightUpdate[start:end].reshape(p.data.shape)
+                # we previously had diff_vec = copy - (copy - grad) = grad, so subtract here 
+                p.data -= weight_update[start:end].reshape(p.data.shape)
                 start = end
 
     def _sketcher_init(self, 
@@ -162,7 +166,7 @@ dataset = cifar10(DATA_DIR)
 
 lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
 train_transforms = [Crop(32, 32), FlipLR(), Cutout(8, 8)]
-lr = lambda step: lr_schedule(step/97)/args.batch_size
+lr = lambda step: lr_schedule(step/len(test_train_batch))/args.batch_size
 print('Starting timer')
 timer = Timer()
 
@@ -170,10 +174,17 @@ print('Preprocessing training data')
 train_set = list(zip(
         transpose(normalise(pad(dataset['train']['data'], 4))),
         dataset['train']['labels']))
+train_sets = np.array_split(train_set, args.num_workers)
+test_train_batch = Batches(Transform(train_sets[0], train_transforms),
+                            args.batch_size, shuffle=True,
+                                                set_random_choices=True, drop_last=True)
 print('Finished in {:.2f} seconds'.format(timer()))
 print('Preprocessing test data')
 test_set = list(zip(transpose(normalise(dataset['test']['data'])),
                     dataset['test']['labels']))
+def chunker_list(seq, size):
+    return (seq[i::size] for i in range(size))
+test_sets = list(chunker_list(test_set, args.num_workers))
 print('Finished in {:.2f} seconds'.format(timer()))
 
 TSV = TSVLogger()
@@ -194,41 +205,43 @@ kwargs = {
     "metrics": ['loss', 'acc'],
     "batch_size": args.batch_size,
 }
-ray.init(num_gpus=1)
-worker = SanityWorker.remote(train_set, test_set, train_transforms, 0, kwargs)
+ray.init(num_gpus=8)
+workers = [SanityWorker.remote(train_sets[worker_index], test_sets[worker_index], train_transforms, worker_index, kwargs) for worker_index in range(args.num_workers)]
 
-def train_worker(worker, epochs=24, loggers=(), timer=None):
+def train_worker(workers, epochs=24, loggers=(), timer=None):
     timer = timer or Timer()
     step_number = 0
     for epoch in range(epochs):
-        train_loss, train_acc, step_number, diff_vec = ray.get(worker.train_epoch.remote(step_number, True))
-        ray.wait(worker.apply_update.remote(diff_vec))
+        train_loss, train_acc, step_number, diff_vec = list(zip(*ray.get([worker.train_epoch.remote(step_number, True) for worker in workers])))
+        step_number = step_number[0]
+        diff_vec = torch.mean(torch.stack(diff_vec), dim=0)
+        ray.wait([worker.apply_update.remote(diff_vec) for i,worker in enumerate(workers)])
         train_time = timer()
-        test_loss, test_acc = ray.get(worker.train_epoch.remote(step_number, False))
+        test_loss, test_acc = list(zip(*ray.get([worker.train_epoch.remote(step_number, False) for worker in workers])))
         test_time = timer()
         stats = {
             'train_time': train_time,
-            'train_loss': train_loss,
-            'train_acc': train_acc,
+            'train_loss': np.mean(np.stack([i for i in train_loss])),
+            'train_acc': np.mean(np.stack([i for i in train_acc])),
             'test_time': test_time,
-            'test_loss': test_loss,
-            'test_acc': test_acc,
+            'test_loss': np.mean(np.stack([i for i in test_loss])),
+            'test_acc': np.mean(np.stack([i for i in test_acc])),
             'total_time': timer.total_time
         }
-        param_values = ray.get(worker.fetch_opt_params.remote())
+        param_values = ray.get(workers[0].fetch_opt_params.remote())
         lr = param_values['lr'] * args.batch_size
         momentum = param_values['momentum']
         weight_decay = param_values['weight_decay']
         nesterov = param_values['nesterov']
         dampening = param_values['dampening']
-        summary = union({'epoch': epoch+1, 'lr': lr, 'momentum': momentum, 'weight_decay': weight_decay, 'nesterov': nesterov, 'dampening': dampening}, stats)
+        #summary = union({'epoch': epoch+1, 'lr': lr, 'momentum': momentum, 'weight_decay': weight_decay, 'nesterov': nesterov, 'dampening': dampening}, stats)
         #lr = param_values(step_number)['lr'] * args.batch_size
-        #summary = union({'epoch': epoch+1, 'lr': lr}, stats)
+        summary = union({'epoch': epoch+1, 'lr': lr}, stats)
         for logger in loggers:
             logger.append(summary)
     return summary
 
-train_worker(worker, args.epochs,
+train_worker(workers, args.epochs,
       loggers=(TableLogger(), TSV), timer=timer)
 
 # opt_params = {
