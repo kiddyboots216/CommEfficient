@@ -48,7 +48,7 @@ from unsketched_fed_worker import UnsketchedFedWorker
 #             logger.append(summary)
 #     return summary
 
-def train(worker, epochs=24, batch_size, loggers=(), timer=None):
+def train(worker, epochs, batch_size, loggers=(), timer=None):
     timer = timer or Timer()
     # step_number = 0
     for epoch in range(epochs):
@@ -65,8 +65,14 @@ def train(worker, epochs=24, batch_size, loggers=(), timer=None):
             'test_acc': test_acc,
             'total_time': timer.total_time
         }
-        lr = ray.get(worker.param_values.remote())['lr'] * batch_size
-        summary = union({'epoch': epoch+1, 'lr': lr}, stats)
+        #param_values = ray.get(worker.param_values.remote())
+        param_values = ray.get(worker.fetch_opt_params.remote())
+        lr = param_values['lr'] * batch_size
+        momentum = param_values['momentum']
+        weight_decay = param_values['weight_decay']
+        nesterov = param_values['nesterov']
+        dampening = param_values['dampening']
+        summary = union({'epoch': epoch+1, 'lr': lr, 'momentum': momentum, 'weight_decay': weight_decay, 'nesterov': nesterov, 'dampening': dampening}, stats)
         for logger in loggers:
             logger.append(summary)
     return summary
@@ -119,8 +125,12 @@ if __name__ == "__main__":
     train_batches = Batches(Transform(train_set, train_transforms),
                     args.batch_size, shuffle=True,
                     set_random_choices=True, drop_last=True)
+    for _, _ in enumerate(train_batches):
+        i = 0
     test_batches = Batches(test_set, args.batch_size, shuffle=False,
                            drop_last=False)
+    for _, _ in enumerate(test_batches):
+        i = 0
     # def chunker_list(seq, size):
     #     return (seq[i::size] for i in range(size))
     # client_test_sets = list(chunker_list(test_set, args.num_workers))
@@ -159,7 +169,7 @@ if __name__ == "__main__":
     ray.init(num_gpus=8)
     # num_workers = args.num_workers
     print(f"Passing in args {kwargs}")
-    worker = UnsketchedFedWorker.remote(train_batches, test_batches, worker_index, kwargs)
+    worker = UnsketchedFedWorker.remote(train_batches, test_batches, 0, kwargs)
     train(worker, args.epochs, args.batch_size, loggers=(TableLogger(), TSV), timer=timer)
     # workers = [UnsketchedFedWorker.remote(train_batch, client_test_batches[worker_index], worker_index, kwargs) for worker_index, train_batch 
     #             in enumerate(client_train_batches)]

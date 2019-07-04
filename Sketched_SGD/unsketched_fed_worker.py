@@ -26,13 +26,13 @@ class UnsketchedFedWorker(object):
         # make the model with config (hardcoded for now)
         # self.model = model_maker(model_config)
         # uniform initialization?
-        rand_state = torch.random.get_rng_state()
-        torch.random.manual_seed(42)
-        self.model = Net(
+        #rand_state = torch.random.get_rng_state()
+        #torch.random.manual_seed(42)
+        self.model = Net().cuda()
                 #{'prep': 1, 'layer1': 1,
                  #                'layer2': 1, 'layer3': 1}
-                ).to(self.device)
-        torch.random.set_rng_state(rand_state)
+        #        ).to(self.device)
+        #torch.random.set_rng_state(rand_state)
         # sketch the model
         #self.model = SketchedModel(self.model)
         # we want an optimizer, it'll just be faster
@@ -46,9 +46,9 @@ class UnsketchedFedWorker(object):
         # criterion_parameters = {k : v for k, v in self.hp.items() if k in criterion_object.__init__.__code__.co_varnames}
         #self.criterion = criterion_object(**criterion_parameters).to(self.device)
         #self.opt = optim.SGD(self.model.parameters(), lr=self.hp['lr'](self.step_number), momentum=0.9, nesterov=True, weight_decay=self.hp['weight_decay'])
-        self.criterion = nn.CrossEntropyLoss(reduction='none').to(self.device)
+        self.criterion = nn.CrossEntropyLoss(reduction='none').cuda()
         # make the accuracy
-        self.accuracy = Correct().to(self.device)
+        self.accuracy = Correct().cuda()
         # set up the metrics
         self.metrics = self.hp['metrics']
         # make a CSVec and set self.sketched_model
@@ -133,6 +133,9 @@ class UnsketchedFedWorker(object):
     #     running_metrics = {k: v/iterations for k,v in running_metrics.items()}
     #     #import pdb; pdb.set_trace()
     #     return running_metrics
+    def fetch_opt_params(self):
+        assert len(self.opt.param_groups) == 1
+        return {'lr': self.opt.param_groups[0]['lr'], 'momentum': self.opt.param_groups[0]['momentum'], 'weight_decay': self.opt.param_groups[0]['weight_decay'], 'nesterov': self.opt.param_groups[0]['nesterov'], 'dampening': self.opt.param_groups[0]['dampening']}
 
     def train_epoch(self, training):
         running_loss = 0.0

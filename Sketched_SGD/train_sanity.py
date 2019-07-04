@@ -128,8 +128,15 @@ def train(model, optimizer, train_loader, val_loader,
             'test_acc': test_acc,
             'total_time': timer.total_time
         }
-        lr = param_values(step_number)['lr'] * args.batch_size
-        summary = union({'epoch': epoch+1, 'lr': lr}, stats)
+        param_values = optimizer.param_groups[0] 
+        lr = param_values['lr'] * args.batch_size
+        momentum = param_values['momentum']
+        weight_decay = param_values['weight_decay']
+        nesterov = param_values['nesterov']
+        dampening = param_values['dampening']
+        summary = union({'epoch': epoch+1, 'lr': lr, 'momentum': momentum, 'weight_decay': weight_decay, 'nesterov': nesterov, 'dampening': dampening}, stats)
+        #lr = param_values(step_number)['lr'] * args.batch_size
+        #summary = union({'epoch': epoch+1, 'lr': lr}, stats)
         for logger in loggers:
             logger.append(summary)
     return summary
