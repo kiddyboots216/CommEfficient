@@ -4,18 +4,24 @@ import torch.optim as optim
 
 from minimal import *
 
+@ray.remote(num_gpus=1.0)
 class SanityWorker(object):
-    def __init__(self, train_loader, test_loader, worker_index, kwargs):
+    def __init__(self, train_set, test_set, train_transforms, worker_index, kwargs):
+        train_loader = Batches(Transform(train_set, train_transforms),
+                        kwargs['batch_size'], shuffle=True,
+                        set_random_choices=True, drop_last=True)
+        test_loader = Batches(test_set, kwargs['batch_size'], shuffle=False,
+                       drop_last=False)
         self.hp = kwargs
         self.worker_index = worker_index
         print(f"Initializing worker {self.worker_index}")
         self.train_loader = train_loader
         self.test_loader = test_loader
         self.opt_params = {
-            "lr": lr,
-            "momentum": kwargs.momentum,
-            "weight_decay": 5e-4*args.batch_size,
-            "nesterov": kwargs.nesterov,
+            "lr": kwargs['lr'],
+            "momentum": kwargs['momentum'],
+            "weight_decay": 5e-4*kwargs['batch_size'],
+            "nesterov": kwargs['nesterov'],
             "dampening": 0,
         }
         self.model = Net().cuda()
@@ -25,13 +31,18 @@ class SanityWorker(object):
         self.optimizer = optim.SGD(self.model.parameters(), **self.param_values(step_number))
 
     def param_values(self, step_number):
-            #import pdb; pdb.set_trace()
-            return {k: v(step_number) if callable(v) else v for k,v in opt_params.items()}
+        #import pdb; pdb.set_trace()
+        return {k: v(step_number) if callable(v) else v for k,v in self.opt_params.items()}
+    def fetch_opt_params(self):
+        assert len(self.optimizer.param_groups) == 1
+        return {'lr': self.optimizer.param_groups[0]['lr'], 'momentum': self.optimizer.param_groups[0]['momentum'], 'weight_decay': self.optimizer.param_groups[0]['weight_decay'], 'nesterov': self.optimizer.param_groups[0]['nesterov'], 'dampening': self.optimizer.param_groups[0]['dampening']}
 
     def train_epoch(self, step_number, training):
         model = self.model
         optimizer = self.optimizer
         dataloader = self.train_loader if training else self.test_loader
+        criterion = self.criterion
+        accuracy = self.accuracy
         running_loss = 0.0
         running_acc = 0.0
         for idx, batch in enumerate(dataloader):
@@ -79,7 +90,7 @@ dataset = cifar10(DATA_DIR)
 
 lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
 train_transforms = [Crop(32, 32), FlipLR(), Cutout(8, 8)]
-lr = lambda step: lr_schedule(step/len(train_batches))/args.batch_size
+lr = lambda step: lr_schedule(step/97)/args.batch_size
 print('Starting timer')
 timer = Timer()
 
@@ -95,12 +106,6 @@ print('Finished in {:.2f} seconds'.format(timer()))
 
 TSV = TSVLogger()
 
-train_batches = Batches(Transform(train_set, train_transforms),
-                        args.batch_size, shuffle=True,
-                        set_random_choices=True, drop_last=True)
-test_batches = Batches(test_set, args.batch_size, shuffle=False,
-                       drop_last=False)
-
 kwargs = {
     "k": args.k,
     "p2": args.p2,
@@ -115,17 +120,18 @@ kwargs = {
     "nesterov": args.nesterov,
     "dampening": 0,
     "metrics": ['loss', 'acc'],
+    "batch_size": args.batch_size,
 }
-
-worker = SanityWorker(train_batches, test_batches, 0, kwargs)
+ray.init(num_gpus=1)
+worker = SanityWorker.remote(train_set, test_set, train_transforms, 0, kwargs)
 
 def train_worker(worker, epochs=24, loggers=(), timer=None):
     timer = timer or Timer()
     step_number = 0
     for epoch in range(epochs):
-        train_loss, train_acc, step_number = worker.train_epoch(step_number, True)
+        train_loss, train_acc, step_number = ray.get(worker.train_epoch.remote(step_number, True))
         train_time = timer()
-        test_loss, test_acc, _ = worker.train_epoch(step_number, False)
+        test_loss, test_acc, _ = ray.get(worker.train_epoch.remote(step_number, False))
         test_time = timer()
         stats = {
             'train_time': train_time,
@@ -136,7 +142,7 @@ def train_worker(worker, epochs=24, loggers=(), timer=None):
             'test_acc': test_acc,
             'total_time': timer.total_time
         }
-        param_values = optimizer.param_groups[0] 
+        param_values = ray.get(worker.fetch_opt_params.remote())
         lr = param_values['lr'] * args.batch_size
         momentum = param_values['momentum']
         weight_decay = param_values['weight_decay']
