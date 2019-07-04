@@ -5,8 +5,8 @@ import copy
 
 from minimal import *
 
-@ray.remote(num_gpus=0.5)
-class ParameterServer(object):
+@ray.remote(num_gpus=1.0, num_cpus=2.0)
+class SketchFedServer(object):
     def __init__(self, kwargs):
         self.device = torch.device("cuda")
         self.hp = kwargs
@@ -22,7 +22,7 @@ class ParameterServer(object):
         model = Net().to(self.device)
         model = SketchedModel(model)
         torch.random.set_rng_state(rand_state)
-        opt = optim.SGD(self.model.parameters(), **opt_params)
+        opt = optim.SGD(model.parameters(), **opt_params)
         self._sketcher_init(**{
             'opt': opt,
             'k': self.hp['k'], 
@@ -42,7 +42,7 @@ class ParameterServer(object):
         # this is D
         grad_size = 0
         sketch_mask = []
-        for group in self.opt.param_groups:
+        for group in opt.param_groups:
             for p in group["params"]:
                 if p.requires_grad:
                     size = torch.numel(p)
@@ -62,9 +62,11 @@ class ParameterServer(object):
 
 
     def sim_update(self, *diff_vecs):
+        diff_vecs = [diff_vec.to(self.device) for diff_vec in diff_vecs]
         self.sketch.zero()
         for diff_vec in diff_vecs:
             self.sketch += diff_vec[self.sketch_mask]
+            #/len(diff_vecs)
         candidate_top_k = self.sketch.unSketch(k=self.p2*self.k)
         candidate_hh_coords = candidate_top_k.nonzero()
         hhs = [diff_vec[candidate_hh_coords] for diff_vec in diff_vecs]
@@ -77,7 +79,7 @@ class ParameterServer(object):
             torch.stack(
                 [diff_vec[~self.sketch_mask] for diff_vec in diff_vecs]), dim=0)
         # COMMUNICATE
-        return weightUpdate
+        return weight_update
 
     def compute_hhcoords(self, *tables):
         #_, _, tables = list(zip(*lossAcc))
@@ -88,8 +90,8 @@ class ParameterServer(object):
         # COMMUNICATE
         return self.candidateHHCoords
 
-    def average_grads(self, grads):
-        return torch.sum(torch.stack(grads), dim=0)
+    def average_grads(self, *grads):
+        return torch.mean(torch.stack(grads), dim=0)
 
     def compute_update(self, *sketchesAndUnsketched):
         hhs, unsketched = list(zip(*sketchesAndUnsketched))
@@ -115,7 +117,7 @@ class ParameterServer(object):
         ret[topkIndices] = vec[topkIndices]
         return ret
 
-@ray.remote(num_gpus=1.0)
+@ray.remote(num_gpus=1.0, num_cpus=2.0)
 class FedSketchWorker(object):
     def __init__(self, train_set, test_set, train_transforms, worker_index, kwargs):
         self.device = torch.device("cuda")
@@ -313,10 +315,11 @@ kwargs = {
     "numRows": args.rows,
     "numBlocks": args.num_blocks,
     "lr": lr,
+    "num_workers": args.num_workers,
     "momentum": args.momentum,
     "optimizer" : args.optimizer,
     "criterion": args.criterion,
-    "weight_decay": 5e-4*args.batch_size,
+    "weight_decay": 5e-4*args.batch_size/args.num_workers,
     "nesterov": args.nesterov,
     "dampening": 0,
     "metrics": ['loss', 'acc'],
@@ -324,14 +327,19 @@ kwargs = {
 }
 ray.init(num_gpus=8)
 workers = [FedSketchWorker.remote(train_sets[worker_index], test_sets[worker_index], train_transforms, worker_index, kwargs) for worker_index in range(args.num_workers)]
-
+ps = SketchFedServer.remote(kwargs)
 def train_worker(ps, workers, epochs=24, loggers=(), timer=None):
     timer = timer or Timer()
     step_number = 0
     for epoch in range(epochs):
         train_loss, train_acc, step_number, diff_vecs = list(zip(*ray.get([worker.train_epoch.remote(step_number, True) for worker in workers])))
         step_number = step_number[0]
-        update_vec = ps.remote.sim_update(*diff_vecs)
+        if epoch < 3:
+            update_vec = ps.sim_update.remote(*diff_vecs)
+            #update_vec = ps.average_grads.remote(*diff_vecs)
+        else:
+            update_vec = ps.sim_update.remote(*diff_vecs)
+            #update_vec = ps.average_grads.remote(*diff_vecs)
         ray.wait([worker.apply_update.remote(update_vec) for i,worker in enumerate(workers)])
         train_time = timer()
         test_loss, test_acc = list(zip(*ray.get([worker.train_epoch.remote(step_number, False) for worker in workers])))
@@ -358,5 +366,5 @@ def train_worker(ps, workers, epochs=24, loggers=(), timer=None):
             logger.append(summary)
     return summary
 
-train_worker(workers, args.epochs,
+train_worker(ps, workers, args.epochs,
       loggers=(TableLogger(), TSV), timer=timer)
