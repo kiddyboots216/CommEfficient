@@ -92,80 +92,99 @@ class UnsketchedFedWorker(object):
     #             p.data = weightUpdate[start:end].reshape(p.data.shape)
     #             start = end
 
-    def forward(self):
-        running_metrics = {metric: 0.0 for metric in self.metrics}
-        num_processed = 0
-        #import pdb; pdb.set_trace()
-        for idx, batch in enumerate(self.val_loader):
-            loss, acc = self._forward_batch(batch, False)
-            #import pdb; pdb.set_trace()
-            running_metrics['loss'] += loss.mean().detach().cpu()
-            running_metrics['acc'] += acc.mean().detach().cpu()
-            #running_metrics['loss'] = (running_metrics['loss'] * num_processed + loss.detach().cpu().mean() * len(batch))/(num_processed + len(batch))
-            #running_metrics['acc'] = (running_metrics['acc'] * num_processed + acc.detach().cpu().mean() * len(batch))/(num_processed + len(batch))
-            num_processed += len(batch)
-            #import pdb; pdb.set_trace()
-        #running_metrics = {k: v.detach().cpu().numpy() for k,v in running_metrics.items()}
-        running_metrics = {k: v/len(self.val_loader) for k,v in running_metrics.items()}
-        return running_metrics
+    # def forward(self):
+    #     running_metrics = {metric: 0.0 for metric in self.metrics}
+    #     num_processed = 0
+    #     #import pdb; pdb.set_trace()
+    #     for idx, batch in enumerate(self.val_loader):
+    #         loss, acc = self._forward_batch(batch, False)
+    #         #import pdb; pdb.set_trace()
+    #         running_metrics['loss'] += loss.mean().detach().cpu()
+    #         running_metrics['acc'] += acc.mean().detach().cpu()
+    #         #running_metrics['loss'] = (running_metrics['loss'] * num_processed + loss.detach().cpu().mean() * len(batch))/(num_processed + len(batch))
+    #         #running_metrics['acc'] = (running_metrics['acc'] * num_processed + acc.detach().cpu().mean() * len(batch))/(num_processed + len(batch))
+    #         num_processed += len(batch)
+    #         #import pdb; pdb.set_trace()
+    #     #running_metrics = {k: v.detach().cpu().numpy() for k,v in running_metrics.items()}
+    #     running_metrics = {k: v/len(self.val_loader) for k,v in running_metrics.items()}
+    #     return running_metrics
 
-    def _forward_batch(self, test_batch, training):
-        self.model.train(training)
-        x = test_batch["input"]
-        y = test_batch["target"]
-        out = self.model(x)
-        # calculate losses
-        loss = self.criterion(out, y)
-        # calculate metric
-        acc = self.accuracy(out, y).float()
-        return loss, acc
+    # def _forward_batch(self, test_batch, training):
+    #     self.model.train(training)
+    #     x = test_batch["input"]
+    #     y = test_batch["target"]
+    #     out = self.model(x)
+    #     # calculate losses
+    #     loss = self.criterion(out, y)
+    #     # calculate metric
+    #     acc = self.accuracy(out, y).float()
+    #     return loss, acc
 
-    def train(self, iterations=1):
-        # we need to store a copy of the parameters
-        opt_copy = copy.deepcopy(self.opt.param_groups)
-        running_metrics = {metric: 0.0 for metric in self.metrics}
-        for _ in range(iterations):
-            #import pdb; pdb.set_trace()
-            metrics = self.train_epoch()
-            for k, v in metrics.items():
-                running_metrics[k] += v
-        # scale metrics appropriately
-        running_metrics = {k: v/iterations for k,v in running_metrics.items()}
-        #import pdb; pdb.set_trace()
-        return running_metrics
+    # def train(self, iterations=1):
+    #     # we need to store a copy of the parameters
+    #     opt_copy = copy.deepcopy(self.opt.param_groups)
+    #     running_metrics = {metric: 0.0 for metric in self.metrics}
+    #     for _ in range(iterations):
+    #         #import pdb; pdb.set_trace()
+    #         metrics = self.train_epoch()
+    #         for k, v in metrics.items():
+    #             running_metrics[k] += v
+    #     # scale metrics appropriately
+    #     running_metrics = {k: v/iterations for k,v in running_metrics.items()}
+    #     #import pdb; pdb.set_trace()
+    #     return running_metrics
 
-    def train_epoch(self):
-        running_metrics = {metric: 0.0 for metric in self.metrics}
-        num_processed = 0
-        for idx, batch in enumerate(self.dataloader):
-            #print(idx)
-            loss, acc = self.train_batch(batch)
-            #import pdb; pdb.set_trace()
-            #running_metrics['loss'] = (running_metrics['loss'] * num_processed + loss.detach().cpu().mean() * len(batch))/(num_processed + len(batch))
-            #running_metrics['acc'] = (running_metrics['acc'] * num_processed + acc.detach().cpu().mean() * len(batch))/(num_processed + len(batch))
-            running_metrics['loss'] += loss.mean().detach().cpu()
-            running_metrics['acc'] += acc.mean().detach().cpu()
-            num_processed += len(batch)
-        running_metrics = {k: v/len(self.dataloader) for k,v in running_metrics.items()}
-            # for k, v in metrics.items():
-            #   running_metrics[k] += v
-        # scale metrics appropriately
-        return running_metrics
+    def train_epoch(self, training):
+        running_loss = 0.0
+        running_acc = 0.0
+        dataloader = self.dataloader if training else self.val_loader
+        for idx, batch in enumerate(dataloader):
+            self.opt.zero_grad()
+            inputs = batch["input"]
+            targets = batch["target"]
+            outputs = self.model(inputs)
+            loss = self.criterion(outputs, targets)
+            acc = self.accuracy(outputs, targets)
+            if training:
+                self.step_number += 1
+                self.opt.param_groups[0].update(**self.param_values())
+                loss.sum().backward()
+                self.opt.step()
+            running_loss += loss.float().mean().detach().cpu().numpy()
+            running_acc += acc.float().mean().detach().cpu().numpy()
+        return (running_loss/len(dataloader)), (running_acc/len(dataloader))
+    # def train_epoch(self):
+    #     running_metrics = {metric: 0.0 for metric in self.metrics}
+    #     num_processed = 0
+    #     for idx, batch in enumerate(self.dataloader):
+    #         #print(idx)
+    #         loss, acc = self.train_batch(batch)
+    #         #import pdb; pdb.set_trace()
+    #         #running_metrics['loss'] = (running_metrics['loss'] * num_processed + loss.detach().cpu().mean() * len(batch))/(num_processed + len(batch))
+    #         #running_metrics['acc'] = (running_metrics['acc'] * num_processed + acc.detach().cpu().mean() * len(batch))/(num_processed + len(batch))
+    #         running_metrics['loss'] += loss.mean().detach().cpu()
+    #         running_metrics['acc'] += acc.mean().detach().cpu()
+    #         num_processed += len(batch)
+    #     running_metrics = {k: v/len(self.dataloader) for k,v in running_metrics.items()}
+    #         # for k, v in metrics.items():
+    #         #   running_metrics[k] += v
+    #     # scale metrics appropriately
+    #     return running_metrics
 
-    def train_batch(self, batch):
-        self.opt.zero_grad()
-        # zero the optimizer
-        # forward pass
-        loss, acc = self._forward_batch(batch, True)
-        # backwards pass of loss
-        loss.sum().backward()
-        # step the optimizer
-        #import pdb; pdb.set_trace()
-        #print(f'Updating with lr: {self.opt.param_groups[0]["lr"]}')
-        self.step_number += 1
-        self.opt.param_groups[0].update(**self.param_values())
-        self.opt.step()
-        return loss.float(), acc
+    # def train_batch(self, batch):
+    #     self.opt.zero_grad()
+    #     # zero the optimizer
+    #     # forward pass
+    #     loss, acc = self._forward_batch(batch, True)
+    #     # backwards pass of loss
+    #     loss.sum().backward()
+    #     # step the optimizer
+    #     #import pdb; pdb.set_trace()
+    #     #print(f'Updating with lr: {self.opt.param_groups[0]["lr"]}')
+    #     self.step_number += 1
+    #     self.opt.param_groups[0].update(**self.param_values())
+    #     self.opt.step()
+    #     return loss.float(), acc
         # return {'loss': loss.sum(), 'acc': acc} 
 
 #     def _sketcher_init(self, 
