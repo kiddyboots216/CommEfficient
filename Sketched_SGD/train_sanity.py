@@ -7,16 +7,14 @@ from minimal import *
 @ray.remote(num_gpus=1.0)
 class SanityWorker(object):
     def __init__(self, train_set, test_set, train_transforms, worker_index, kwargs):
-        train_loader = Batches(Transform(train_set, train_transforms),
+        self.train_loader = Batches(Transform(train_set, train_transforms),
                         kwargs['batch_size'], shuffle=True,
                         set_random_choices=True, drop_last=True)
-        test_loader = Batches(test_set, kwargs['batch_size'], shuffle=False,
+        self.test_loader = Batches(test_set, kwargs['batch_size'], shuffle=False,
                        drop_last=False)
         self.hp = kwargs
         self.worker_index = worker_index
         print(f"Initializing worker {self.worker_index}")
-        self.train_loader = train_loader
-        self.test_loader = test_loader
         self.opt_params = {
             "lr": kwargs['lr'],
             "momentum": kwargs['momentum'],
@@ -24,25 +22,34 @@ class SanityWorker(object):
             "nesterov": kwargs['nesterov'],
             "dampening": 0,
         }
+        rand_state = torch.random.get_rng_state()
+        torch.random.manual_seed(42)
         self.model = Net().cuda()
-        self.criterion = nn.CrossEntropyLoss(reduction='none').cuda()
-        self.accuracy = Correct().cuda()
+        torch.random.set_rng_state(rand_state)
+        self.crit = nn.CrossEntropyLoss(reduction='none').cuda()
+        self.acc = Correct().cuda()
         step_number = 0
-        self.optimizer = optim.SGD(self.model.parameters(), **self.param_values(step_number))
+        self.opt = optim.SGD(self.model.parameters(), **self.param_values(step_number))
+        self._sketcher_init(**{'k': self.hp['k'], 'p2': self.hp['p2'], 'numCols': self.hp['numCols'], 'numRows': self.hp['numRows'], 'numBlocks': self.hp['numBlocks']})
 
     def param_values(self, step_number):
         #import pdb; pdb.set_trace()
         return {k: v(step_number) if callable(v) else v for k,v in self.opt_params.items()}
+    
     def fetch_opt_params(self):
-        assert len(self.optimizer.param_groups) == 1
-        return {'lr': self.optimizer.param_groups[0]['lr'], 'momentum': self.optimizer.param_groups[0]['momentum'], 'weight_decay': self.optimizer.param_groups[0]['weight_decay'], 'nesterov': self.optimizer.param_groups[0]['nesterov'], 'dampening': self.optimizer.param_groups[0]['dampening']}
+        assert len(self.opt.param_groups) == 1
+        return {'lr': self.opt.param_groups[0]['lr'], 'momentum': self.opt.param_groups[0]['momentum'], 'weight_decay': self.opt.param_groups[0]['weight_decay'], 'nesterov': self.opt.param_groups[0]['nesterov'], 'dampening': self.opt.param_groups[0]['dampening']}
 
     def train_epoch(self, step_number, training):
         model = self.model
-        optimizer = self.optimizer
-        dataloader = self.train_loader if training else self.test_loader
-        criterion = self.criterion
-        accuracy = self.accuracy
+        optimizer = self.opt
+        if training:
+            dataloader = self.train_loader
+            opt_copy = copy.deepcopy(self.opt.param_groups)
+        else:
+            dataloader = self.test_loader
+        criterion = self.crit
+        accuracy = self.acc
         running_loss = 0.0
         running_acc = 0.0
         for idx, batch in enumerate(dataloader):
@@ -59,8 +66,73 @@ class SanityWorker(object):
                 optimizer.step()
             running_loss += loss.float().mean().detach().cpu().numpy()
             running_acc += acc.float().mean().detach().cpu().numpy()
-        return (running_loss/len(dataloader)), (running_acc/len(dataloader)), step_number
+        if training:
+            return (running_loss/len(dataloader)), (running_acc/len(dataloader)), step_number, self.model_diff(opt_copy).cpu()
+        else:
+            return (running_loss/len(dataloader)), (running_acc/len(dataloader))
 
+    def model_diff(self, opt_copy):
+        diff_vec = []
+        for group_id, param_group in enumerate(self.opt.param_groups):
+            for idx, p in enumerate(param_group['params']):
+                # calculate the difference between the current model and the stored model
+                diff_vec.append(p.data.view(-1).float() - opt_copy[group_id]['params'][idx].data.view(-1).float())
+                # reset the current model to the stored model for later
+                p.data = opt_copy[group_id]['params'][idx].data
+        self.diff_vec = torch.cat(diff_vec).to(self.device)
+        #import pdb; pdb.set_trace()
+        print(f"Found a difference of {torch.sum(self.diff_vec)}")
+        return self.diff_vec
+        # print(diff_vec)
+        masked_diff = self.diff_vec[self.sketch_mask]
+        # sketch the gradient
+        self.sketch.zero()
+        self.sketch += masked_diff
+        del masked_diff
+        # communicate only the table
+        return self.sketch.table
+
+    def send_topkAndUnsketched(self, hhcoords):
+        # directly send whatever wasn't sketched
+        unsketched = self.diff_vec[~self.sketch_mask]
+        # COMMUNICATE
+        return self.diff_vec[hhcoords], unsketched
+
+    def apply_update(self, weightUpdate):
+        start = 0
+        for param_group in self.opt.param_groups:
+            for p in param_group['params']:
+                end = start + torch.numel(p)
+                p.data = weightUpdate[start:end].reshape(p.data.shape)
+                start = end
+
+    def _sketcher_init(self, 
+                 k=0, p2=0, numCols=0, numRows=0, numBlocks=1):
+        #os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, ray.get_gpu_ids())) 
+        #print(ray.get_gpu_ids())
+        # set the sketched params as instance vars
+        self.p2 = p2
+        self.k = k
+        # initialize sketchMask, sketch, momentum buffer and accumulated grads
+        # this is D
+        grad_size = 0
+        sketchMask = []
+        for group in self.opt.param_groups:
+            for p in group["params"]:
+                if p.requires_grad:
+                    size = torch.numel(p)
+                    if p.do_sketching:
+                        sketchMask.append(torch.ones(size))
+                    else:
+                        sketchMask.append(torch.zeros(size))
+                    grad_size += size
+        self.grad_size = grad_size
+        print(f"Total dimension is {self.grad_size} using k {self.k} and p2 {self.p2}")
+        self.sketch_mask = torch.cat(sketchMask).byte().to(self.device)
+        #print(f"sketchMask.sum(): {self.sketchMask.sum()}")
+#         print(f"Make CSVec of dim{numRows}, {numCols}")
+        self.sketch = CSVec(d=self.sketch_mask.sum().item(), c=numCols, r=numRows, 
+                            device=self.device, nChunks=1, numBlocks=numBlocks)
 
 
 import argparse
@@ -129,9 +201,10 @@ def train_worker(worker, epochs=24, loggers=(), timer=None):
     timer = timer or Timer()
     step_number = 0
     for epoch in range(epochs):
-        train_loss, train_acc, step_number = ray.get(worker.train_epoch.remote(step_number, True))
+        train_loss, train_acc, step_number, diff_vec = ray.get(worker.train_epoch.remote(step_number, True))
+        ray.wait(worker.apply_update.remote(diff_vec))
         train_time = timer()
-        test_loss, test_acc, _ = ray.get(worker.train_epoch.remote(step_number, False))
+        test_loss, test_acc = ray.get(worker.train_epoch.remote(step_number, False))
         test_time = timer()
         stats = {
             'train_time': train_time,
