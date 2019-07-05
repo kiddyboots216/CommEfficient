@@ -160,6 +160,46 @@ class FedSketchWorker(object):
         assert len(self.opt.param_groups) == 1
         return {'lr': self.opt.param_groups[0]['lr'], 'momentum': self.opt.param_groups[0]['momentum'], 'weight_decay': self.opt.param_groups[0]['weight_decay'], 'nesterov': self.opt.param_groups[0]['nesterov'], 'dampening': self.opt.param_groups[0]['dampening']}
 
+    def all_reduce(self, diff_vecs):
+        self.apply_update(torch.mean(torch.stack(grads), dim=0))
+
+    def train_iters(self, step_number, training, iterations):
+        model = self.model
+        optimizer = self.opt
+        if training:
+            dataloader = self.train_loader
+            opt_copy = copy.deepcopy(self.opt.param_groups)
+        else:
+            dataloader = self.test_loader
+        criterion = self.crit
+        accuracy = self.acc
+        running_loss = 0.0
+        running_acc = 0.0
+        dataloader_iterator = iter(dataloader)
+        for i in range(iterations):
+            try:
+                batch = next(dataloader_iterator)
+            except StopIteration:
+                dataloader_iterator = iter(dataloader)
+                batch = next(dataloader_iterator)
+            optimizer.zero_grad()
+            inputs = batch["input"]
+            targets = batch["target"]
+            outputs = model(inputs)
+            loss = criterion(outputs, targets)
+            acc = accuracy(outputs, targets)
+            if training:
+                step_number += 1
+                optimizer.param_groups[0].update(**self.param_values(step_number))
+                loss.sum().backward()
+                optimizer.step()
+            running_loss += loss.float().mean().detach().cpu().numpy()
+            running_acc += acc.float().mean().detach().cpu().numpy()
+        if training:
+            return (running_loss/len(dataloader)), (running_acc/len(dataloader)), step_number, self.model_diff(opt_copy).cpu()
+        else:
+            return (running_loss/len(dataloader)), (running_acc/len(dataloader))
+
     def train_epoch(self, step_number, training):
         model = self.model
         optimizer = self.opt
@@ -276,6 +316,7 @@ parser.add_argument("--epochs", type=int, default=24)
 parser.add_argument("--epochs_per_iter", type=int, default=1)
 parser.add_argument("--optimizer", type=str, default="SGD")
 parser.add_argument("--criterion", type=str, default="CrossEntropyLoss")
+parser.add_argument("--iterations", type=int, default=1)
 args = parser.parse_args()
 #args.batch_size = math.ceil(args.batch_size/args.num_workers) * args.num_workers
 
@@ -328,19 +369,23 @@ kwargs = {
 ray.init(num_gpus=8)
 workers = [FedSketchWorker.remote(train_sets[worker_index], test_sets[worker_index], train_transforms, worker_index, kwargs) for worker_index in range(args.num_workers)]
 ps = SketchFedServer.remote(kwargs)
-def train_worker(ps, workers, epochs=24, loggers=(), timer=None):
+def train_worker(ps, workers, epochs=24, loggers=(), iterations=1, timer=None):
     timer = timer or Timer()
     step_number = 0
-    for epoch in range(epochs):
-        train_loss, train_acc, step_number, diff_vecs = list(zip(*ray.get([worker.train_epoch.remote(step_number, True) for worker in workers])))
+    while True:
+    # for epoch in range(epochs):
+        train_loss, train_acc, step_number, diff_vecs = list(zip(*ray.get([worker.train_iters.remote(step_number, True, iterations) for worker in workers])))
+        # train_loss, train_acc, step_number, diff_vecs = list(zip(*ray.get([worker.train_epoch.remote(step_number, True) for worker in workers])))
         step_number = step_number[0]
-        if epoch < 3:
-            update_vec = ps.sim_update.remote(*diff_vecs)
+        # if epoch < 3:
+            # update_vec = ps.sim_update.remote(*diff_vecs)
             #update_vec = ps.average_grads.remote(*diff_vecs)
-        else:
-            update_vec = ps.sim_update.remote(*diff_vecs)
-            #update_vec = ps.average_grads.remote(*diff_vecs)
-        ray.wait([worker.apply_update.remote(update_vec) for i,worker in enumerate(workers)])
+        # else:
+        # update_vec = ps.sim_update.remote(*diff_vecs)
+        ray.wait([worker.all_reduce.remote(diff_vecs) for worker in workers])
+        # update_vec = torch.mean(torch.stack(diff_vecs), dim=0)
+        # update_vec = ps.average_grads.remote(*diff_vecs)
+        # ray.wait([worker.apply_update.remote(update_vec) for i,worker in enumerate(workers)])
         train_time = timer()
         test_loss, test_acc = list(zip(*ray.get([worker.train_epoch.remote(step_number, False) for worker in workers])))
         test_time = timer()
@@ -367,4 +412,4 @@ def train_worker(ps, workers, epochs=24, loggers=(), timer=None):
     return summary
 
 train_worker(ps, workers, args.epochs,
-      loggers=(TableLogger(), TSV), timer=timer)
+      loggers=(TableLogger(), TSV), args.iterations, timer=timer)
