@@ -156,12 +156,42 @@ class FedSketchWorker(object):
         #import pdb; pdb.set_trace()
         return {k: v(step_number) if callable(v) else v for k,v in self.opt_params.items()}
     
+    def topk(self, vec, k):
+        """ Return the largest k elements (by magnitude) of vec"""
+        ret = torch.zeros_like(vec)
+
+        # on a gpu, sorting is faster than pytorch's topk method
+        topkIndices = torch.sort(vec**2)[1][-k:]
+        #_, topkIndices = torch.topk(vec**2, k)
+
+        ret[topkIndices] = vec[topkIndices]
+        return ret
+
     def fetch_opt_params(self):
         assert len(self.opt.param_groups) == 1
         return {'lr': self.opt.param_groups[0]['lr'], 'momentum': self.opt.param_groups[0]['momentum'], 'weight_decay': self.opt.param_groups[0]['weight_decay'], 'nesterov': self.opt.param_groups[0]['nesterov'], 'dampening': self.opt.param_groups[0]['dampening']}
 
     def all_reduce(self, diff_vecs):
         self.apply_update(torch.mean(torch.stack(diff_vecs), dim=0))
+
+    def all_reduce_sketched(self, *diff_vecs):
+        diff_vecs = [diff_vec.to(self.device) for diff_vec in diff_vecs]
+        self.sketch.zero()
+        for diff_vec in diff_vecs:
+            self.sketch += diff_vec[self.sketch_mask]
+            #/len(diff_vecs)
+        candidate_top_k = self.sketch.unSketch(k=self.p2*self.k)
+        candidate_hh_coords = candidate_top_k.nonzero()
+        hhs = [diff_vec[candidate_hh_coords] for diff_vec in diff_vecs]
+        candidate_top_k[candidate_hh_coords] = torch.sum(
+            torch.stack(hhs),dim=0)
+        weights = self.topk(candidate_top_k, k=self.k)
+        weight_update = torch.zeros(self.grad_size, device=self.device)
+        weight_update[self.sketch_mask] = weights
+        weight_update[~self.sketch_mask] = torch.sum(
+            torch.stack(
+                [diff_vec[~self.sketch_mask] for diff_vec in diff_vecs]), dim=0)
+        self.apply_update(weight_update)
 
     def train_iters(self, step_number, training, iterations):
         model = self.model
@@ -326,7 +356,7 @@ dataset = cifar10(DATA_DIR)
 
 lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
 train_transforms = [Crop(32, 32), FlipLR(), Cutout(8, 8)]
-lr = lambda step: lr_schedule(step/num_batches)/args.batch_size
+lr = lambda step: lr_schedule(step * args.num_workers/num_batches)/args.batch_size
 print('Starting timer')
 timer = Timer()
 
@@ -335,7 +365,7 @@ train_set = list(zip(
         transpose(normalise(pad(dataset['train']['data'], 4))),
         dataset['train']['labels']))
 train_sets = np.array_split(train_set, args.num_workers)
-test_train_batch = Batches(Transform(train_sets[0], train_transforms),
+test_train_batch = Batches(Transform(train_set, train_transforms),
                             args.batch_size, shuffle=True,
                                                 set_random_choices=True, drop_last=True)
 num_batches = len(test_train_batch)
@@ -369,12 +399,14 @@ kwargs = {
 }
 ray.init(num_gpus=8)
 workers = [FedSketchWorker.remote(train_sets[worker_index], test_sets[worker_index], train_transforms, worker_index, kwargs) for worker_index in range(args.num_workers)]
-ps = SketchFedServer.remote(kwargs)
+#ps = SketchFedServer.remote(kwargs)
+ps = "bleh"
 def train_worker(ps, workers, iters_per_epoch, epochs, iterations, loggers=(), timer=None):
     timer = timer or Timer()
     step_number = 0
     for epoch in range(epochs):
-        for _ in iters_per_epoch:
+        train_losses, train_accs, train_time = 0.0, 0.0, 0.0
+        for _ in range(iters_per_epoch):
             train_loss, train_acc, step_number, diff_vecs = list(zip(*ray.get([worker.train_iters.remote(step_number, True, iterations) for worker in workers])))
         # train_loss, train_acc, step_number, diff_vecs = list(zip(*ray.get([worker.train_epoch.remote(step_number, True) for worker in workers])))
             step_number = step_number[0]
@@ -383,17 +415,20 @@ def train_worker(ps, workers, iters_per_epoch, epochs, iterations, loggers=(), t
             #update_vec = ps.average_grads.remote(*diff_vecs)
         # else:
         # update_vec = ps.sim_update.remote(*diff_vecs)
-            ray.wait([worker.all_reduce.remote(diff_vecs) for worker in workers])
+            ray.wait([worker.all_reduce_sketched.remote(*diff_vecs) for worker in workers])
         # update_vec = torch.mean(torch.stack(diff_vecs), dim=0)
         # update_vec = ps.average_grads.remote(*diff_vecs)
         # ray.wait([worker.apply_update.remote(update_vec) for i,worker in enumerate(workers)])
-            train_time = timer()
+            train_time += timer()
+            train_losses += np.mean(np.stack([i for i in train_loss]))
+            train_accs += np.mean(np.stack([i for i in train_acc]))
         test_loss, test_acc = list(zip(*ray.get([worker.train_epoch.remote(step_number, False) for worker in workers])))
         test_time = timer()
+        #import pdb; pdb.set_trace()
         stats = {
             'train_time': train_time,
-            'train_loss': np.mean(np.stack([i for i in train_loss])),
-            'train_acc': np.mean(np.stack([i for i in train_acc])),
+            'train_loss': train_losses,
+            'train_acc': train_accs, 
             'test_time': test_time,
             'test_loss': np.mean(np.stack([i for i in test_loss])),
             'test_acc': np.mean(np.stack([i for i in test_acc])),
@@ -411,6 +446,9 @@ def train_worker(ps, workers, iters_per_epoch, epochs, iterations, loggers=(), t
         for logger in loggers:
             logger.append(summary)
     return summary
-
-train_worker(ps, workers, num_batches/args.num_workers, args.epochs, args.iterations,
+import math
+#updates_per_epoch = math.ceil(num_batches/(args.num_workers * args.iterations))
+updates_per_epoch = int(num_batches/(args.num_workers * args.iterations))
+print(f"Running {updates_per_epoch} updates for {args.iterations} iterations for {args.epochs} epochs over {num_batches} batches with {args.num_workers}")
+train_worker(ps, workers, updates_per_epoch, args.epochs, args.iterations,
       loggers=(TableLogger(), TSV), timer=timer)
