@@ -161,7 +161,7 @@ class FedSketchWorker(object):
         return {'lr': self.opt.param_groups[0]['lr'], 'momentum': self.opt.param_groups[0]['momentum'], 'weight_decay': self.opt.param_groups[0]['weight_decay'], 'nesterov': self.opt.param_groups[0]['nesterov'], 'dampening': self.opt.param_groups[0]['dampening']}
 
     def all_reduce(self, diff_vecs):
-        self.apply_update(torch.mean(torch.stack(grads), dim=0))
+        self.apply_update(torch.mean(torch.stack(diff_vecs), dim=0))
 
     def train_iters(self, step_number, training, iterations):
         model = self.model
@@ -326,7 +326,7 @@ dataset = cifar10(DATA_DIR)
 
 lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
 train_transforms = [Crop(32, 32), FlipLR(), Cutout(8, 8)]
-lr = lambda step: lr_schedule(step/len(test_train_batch))/args.batch_size
+lr = lambda step: lr_schedule(step/num_batches)/args.batch_size
 print('Starting timer')
 timer = Timer()
 
@@ -338,6 +338,7 @@ train_sets = np.array_split(train_set, args.num_workers)
 test_train_batch = Batches(Transform(train_sets[0], train_transforms),
                             args.batch_size, shuffle=True,
                                                 set_random_choices=True, drop_last=True)
+num_batches = len(test_train_batch)
 print('Finished in {:.2f} seconds'.format(timer()))
 print('Preprocessing test data')
 test_set = list(zip(transpose(normalise(dataset['test']['data'])),
@@ -369,24 +370,24 @@ kwargs = {
 ray.init(num_gpus=8)
 workers = [FedSketchWorker.remote(train_sets[worker_index], test_sets[worker_index], train_transforms, worker_index, kwargs) for worker_index in range(args.num_workers)]
 ps = SketchFedServer.remote(kwargs)
-def train_worker(ps, workers, epochs=24, loggers=(), iterations=1, timer=None):
+def train_worker(ps, workers, iters_per_epoch, epochs, iterations, loggers=(), timer=None):
     timer = timer or Timer()
     step_number = 0
-    while True:
-    # for epoch in range(epochs):
-        train_loss, train_acc, step_number, diff_vecs = list(zip(*ray.get([worker.train_iters.remote(step_number, True, iterations) for worker in workers])))
+    for epoch in range(epochs):
+        for _ in iters_per_epoch:
+            train_loss, train_acc, step_number, diff_vecs = list(zip(*ray.get([worker.train_iters.remote(step_number, True, iterations) for worker in workers])))
         # train_loss, train_acc, step_number, diff_vecs = list(zip(*ray.get([worker.train_epoch.remote(step_number, True) for worker in workers])))
-        step_number = step_number[0]
+            step_number = step_number[0]
         # if epoch < 3:
             # update_vec = ps.sim_update.remote(*diff_vecs)
             #update_vec = ps.average_grads.remote(*diff_vecs)
         # else:
         # update_vec = ps.sim_update.remote(*diff_vecs)
-        ray.wait([worker.all_reduce.remote(diff_vecs) for worker in workers])
+            ray.wait([worker.all_reduce.remote(diff_vecs) for worker in workers])
         # update_vec = torch.mean(torch.stack(diff_vecs), dim=0)
         # update_vec = ps.average_grads.remote(*diff_vecs)
         # ray.wait([worker.apply_update.remote(update_vec) for i,worker in enumerate(workers)])
-        train_time = timer()
+            train_time = timer()
         test_loss, test_acc = list(zip(*ray.get([worker.train_epoch.remote(step_number, False) for worker in workers])))
         test_time = timer()
         stats = {
@@ -411,5 +412,5 @@ def train_worker(ps, workers, epochs=24, loggers=(), iterations=1, timer=None):
             logger.append(summary)
     return summary
 
-train_worker(ps, workers, args.epochs,
-      loggers=(TableLogger(), TSV), args.iterations, timer=timer)
+train_worker(ps, workers, num_batches/args.num_workers, args.epochs, args.iterations,
+      loggers=(TableLogger(), TSV), timer=timer)
