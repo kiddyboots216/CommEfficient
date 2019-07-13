@@ -349,12 +349,12 @@ parser.add_argument("--criterion", type=str, default="CrossEntropyLoss")
 parser.add_argument("--iterations", type=int, default=1)
 args = parser.parse_args()
 #args.batch_size = math.ceil(args.batch_size/args.num_workers) * args.num_workers
-
+args.batch_size = int(args.batch_size/args.num_workers)
 print('Downloading datasets')
 DATA_DIR = "sample_data"
 dataset = cifar10(DATA_DIR)
 
-lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
+lr_schedule = PiecewiseLinear([0, 10, args.epochs], [0, 0.4, 0])
 train_transforms = [Crop(32, 32), FlipLR(), Cutout(8, 8)]
 lr = lambda step: lr_schedule(step * args.num_workers/num_batches)/args.batch_size
 print('Starting timer')
