@@ -1,4 +1,141 @@
 import torch
+import os
+import collections
+import logging
+import glob
+import re
+
+import torch, torchvision
+import numpy as np
+
+import torch.nn as nn
+import torch.nn.functional as F
+import torchvision.datasets as datasets
+import torchvision.transforms as transforms
+
+from torch.utils.data.dataset import Dataset
+
+import itertools as it
+import copy
+
+class CustomImageDataset(Dataset):
+        '''
+        A custom Dataset class for images
+        inputs : numpy array [n_data x shape]
+        labels : numpy array [n_data (x 1)]
+        '''
+        def __init__(self, inputs, labels, transforms=None):
+                        assert inputs.shape[0] == labels.shape[0]
+                        self.inputs = torch.Tensor(inputs)
+                        self.labels = torch.Tensor(labels).long()
+                        self.transforms = transforms 
+
+        def __getitem__(self, index):
+                        img, label = self.inputs[index], self.labels[index]
+
+                        if self.transforms is not None:
+                                img = self.transforms(img)
+
+                        return (img, label)
+
+        def __len__(self):
+                        return self.inputs.shape[0]
+                                        
+
+def get_default_data_transforms(name, train=True, verbose=True):
+        transforms_train = {
+        'mnist' : transforms.Compose([
+                transforms.ToPILImage(),
+                transforms.Resize((32, 32)),
+                #transforms.RandomCrop(32, padding=4),
+                transforms.ToTensor(),
+                transforms.Normalize((0.06078,),(0.1957,))
+                ]),
+        'fashionmnist' : transforms.Compose([
+                transforms.ToPILImage(),
+                transforms.Resize((32, 32)),
+                #transforms.RandomCrop(32, padding=4),
+                transforms.ToTensor(),
+                transforms.Normalize((0.1307,), (0.3081,))
+                ]),
+        'cifar10' : transforms.Compose([
+                transforms.ToPILImage(),
+                transforms.RandomCrop(32, padding=4),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))]),#(0.24703223, 0.24348513, 0.26158784)
+        'kws' : None
+        }
+        transforms_eval = {
+        'mnist' : transforms.Compose([
+                transforms.ToPILImage(),
+                transforms.Resize((32, 32)),
+                transforms.ToTensor(),
+                transforms.Normalize((0.06078,),(0.1957,))
+                ]),
+        'fashionmnist' : transforms.Compose([
+                transforms.ToPILImage(),
+                transforms.Resize((32, 32)),
+                transforms.ToTensor(),
+                transforms.Normalize((0.1307,), (0.3081,))
+                ]),
+        'cifar10' : transforms.Compose([
+                transforms.ToPILImage(),
+                transforms.ToTensor(),
+                transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))]),#
+        'kws' : None
+        }
+
+        if verbose:
+                print("\nData preprocessing: ")
+                for transformation in transforms_train[name].transforms:
+                        print(' -', transformation)
+                print()
+
+        return (transforms_train[name], transforms_eval[name])
+
+
+def get_data_loaders(hp, verbose=True):
+        
+        x_train, y_train, x_test, y_test = globals()['get_'+hp['dataset']]()
+
+        if verbose:
+                print_image_data_stats(x_train, y_train, x_test, y_test)
+
+        transforms_train, transforms_eval = get_default_data_transforms(hp['dataset'], verbose=False)
+
+        split = split_image_data(x_train, y_train, n_clients=hp['n_clients'], 
+                                        classes_per_client=hp['classes_per_client'], balancedness=hp['balancedness'], verbose=verbose)
+
+        client_loaders = [torch.utils.data.DataLoader(CustomImageDataset(x, y, transforms_train), 
+                          batch_size=hp['batch_size'], shuffle=True) for x, y in split]
+        train_loader = torch.utils.data.DataLoader(CustomImageDataset(x_train, y_train, transforms_eval), batch_size=100, shuffle=False)
+        test_loader  = torch.utils.data.DataLoader(CustomImageDataset(x_test, y_test, transforms_eval), batch_size=100, shuffle=False) 
+
+        stats = {"split" : [x.shape[0] for x, y in split]}
+
+        return client_loaders, train_loader, test_loader, stats
+
+hp_default = {
+    "dataset" : "cifar10", 
+    "net" : "logistic",
+
+    "iterations" : 2000,
+
+    "n_clients" : 4,
+    "participation_rate" : 1.0,
+    "classes_per_client" : 10,
+    "batch_size" : 1,
+    "balancedness" : 1.0,   
+
+    "momentum" : 0.9,
+
+
+    "compression" : ["none", {}],
+
+    "log_frequency" : 30,
+    "log_path" : "results/trash/"
+}
 import torch.nn as nn
 import torch.optim as optim
 import copy
@@ -141,8 +278,8 @@ class FedSketchWorker(object):
         self.crit = nn.CrossEntropyLoss(reduction='none').to(self.device)
         self.acc = Correct().to(self.device)
         step_number = 0
-        # self.opt = optim.SGD(self.model.parameters(), **self.param_values(step_number))
-        self.opt = 
+        self.opt = optim.SGD(self.model.parameters(), **self.param_values(step_number))
+        #self.opt = 
         self._sketcher_init(**{
             'k': self.hp['k'], 
             'p2': self.hp['p2'], 
@@ -433,140 +570,3 @@ print(f"Running {updates_per_epoch} updates for {args.iterations} iterations for
 train_worker(ps, workers, updates_per_epoch, args.epochs, args.iterations,
       loggers=(TableLogger(), TSV), timer=timer)
 
-import os
-import collections
-import logging
-import glob
-import re
-
-import torch, torchvision
-import numpy as np
-
-import torch.nn as nn
-import torch.nn.functional as F
-import torchvision.datasets as datasets
-import torchvision.transforms as transforms
-
-from torch.utils.data.dataset import Dataset
-
-import itertools as it
-import copy
-
-class CustomImageDataset(Dataset):
-        '''
-        A custom Dataset class for images
-        inputs : numpy array [n_data x shape]
-        labels : numpy array [n_data (x 1)]
-        '''
-        def __init__(self, inputs, labels, transforms=None):
-                        assert inputs.shape[0] == labels.shape[0]
-                        self.inputs = torch.Tensor(inputs)
-                        self.labels = torch.Tensor(labels).long()
-                        self.transforms = transforms 
-
-        def __getitem__(self, index):
-                        img, label = self.inputs[index], self.labels[index]
-
-                        if self.transforms is not None:
-                                img = self.transforms(img)
-
-                        return (img, label)
-
-        def __len__(self):
-                        return self.inputs.shape[0]
-                                        
-
-def get_default_data_transforms(name, train=True, verbose=True):
-        transforms_train = {
-        'mnist' : transforms.Compose([
-                transforms.ToPILImage(),
-                transforms.Resize((32, 32)),
-                #transforms.RandomCrop(32, padding=4),
-                transforms.ToTensor(),
-                transforms.Normalize((0.06078,),(0.1957,))
-                ]),
-        'fashionmnist' : transforms.Compose([
-                transforms.ToPILImage(),
-                transforms.Resize((32, 32)),
-                #transforms.RandomCrop(32, padding=4),
-                transforms.ToTensor(),
-                transforms.Normalize((0.1307,), (0.3081,))
-                ]),
-        'cifar10' : transforms.Compose([
-                transforms.ToPILImage(),
-                transforms.RandomCrop(32, padding=4),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))]),#(0.24703223, 0.24348513, 0.26158784)
-        'kws' : None
-        }
-        transforms_eval = {
-        'mnist' : transforms.Compose([
-                transforms.ToPILImage(),
-                transforms.Resize((32, 32)),
-                transforms.ToTensor(),
-                transforms.Normalize((0.06078,),(0.1957,))
-                ]),
-        'fashionmnist' : transforms.Compose([
-                transforms.ToPILImage(),
-                transforms.Resize((32, 32)),
-                transforms.ToTensor(),
-                transforms.Normalize((0.1307,), (0.3081,))
-                ]),
-        'cifar10' : transforms.Compose([
-                transforms.ToPILImage(),
-                transforms.ToTensor(),
-                transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))]),#
-        'kws' : None
-        }
-
-        if verbose:
-                print("\nData preprocessing: ")
-                for transformation in transforms_train[name].transforms:
-                        print(' -', transformation)
-                print()
-
-        return (transforms_train[name], transforms_eval[name])
-
-
-def get_data_loaders(hp, verbose=True):
-        
-        x_train, y_train, x_test, y_test = globals()['get_'+hp['dataset']]()
-
-        if verbose:
-                print_image_data_stats(x_train, y_train, x_test, y_test)
-
-        transforms_train, transforms_eval = get_default_data_transforms(hp['dataset'], verbose=False)
-
-        split = split_image_data(x_train, y_train, n_clients=hp['n_clients'], 
-                                        classes_per_client=hp['classes_per_client'], balancedness=hp['balancedness'], verbose=verbose)
-
-        client_loaders = [torch.utils.data.DataLoader(CustomImageDataset(x, y, transforms_train), 
-                          batch_size=hp['batch_size'], shuffle=True) for x, y in split]
-        train_loader = torch.utils.data.DataLoader(CustomImageDataset(x_train, y_train, transforms_eval), batch_size=100, shuffle=False)
-        test_loader  = torch.utils.data.DataLoader(CustomImageDataset(x_test, y_test, transforms_eval), batch_size=100, shuffle=False) 
-
-        stats = {"split" : [x.shape[0] for x, y in split]}
-
-        return client_loaders, train_loader, test_loader, stats
-
-hp_default = {
-    "dataset" : "cifar10", 
-    "net" : "logistic",
-
-    "iterations" : 2000,
-
-    "n_clients" : 4,
-    "participation_rate" : 1.0,
-    "classes_per_client" : 10,
-    "batch_size" : 1,
-    "balancedness" : 1.0,   
-
-    "momentum" : 0.9,
-
-
-    "compression" : ["none", {}],
-
-    "log_frequency" : 30,
-    "log_path" : "results/trash/"
-}
