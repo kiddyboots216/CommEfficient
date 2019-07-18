@@ -18,7 +18,7 @@ from torch.utils.data.dataset import Dataset
 import itertools as it
 import copy
 
-DATA_PATH = 'content/sample_data'
+DATA_PATH = 'sample_data'
 
 def get_cifar10():
     '''Return CIFAR10 train/test data and labels as numpy arrays'''
@@ -338,6 +338,7 @@ class FedSketchWorker(object):
     def __init__(self, loader, worker_index, kwargs):
         self.device = torch.device("cuda")
         self.loader = loader
+        self.test_loader = loader
         self.hp = kwargs
         self.worker_index = worker_index
         print(f"Initializing worker {self.worker_index}")
@@ -384,8 +385,30 @@ class FedSketchWorker(object):
         assert len(self.opt.param_groups) == 1
         return {'lr': self.opt.param_groups[0]['lr'], 'momentum': self.opt.param_groups[0]['momentum'], 'weight_decay': self.opt.param_groups[0]['weight_decay'], 'nesterov': self.opt.param_groups[0]['nesterov'], 'dampening': self.opt.param_groups[0]['dampening']}
 
-    def all_reduce(self, diff_vecs):
+    def all_reduce(self, *diff_vecs):
         self.apply_update(torch.mean(torch.stack(diff_vecs), dim=0))
+
+    def all_reduce_model(self, *models):
+        self.replace_model(torch.mean(torch.stack(models), dim=0))
+
+    def all_reduce_model_sketched(self, *diff_vecs):
+        diff_vecs = [diff_vec.to(self.device) for diff_vec in diff_vecs]
+        self.sketch.zero()
+        for diff_vec in diff_vecs:
+            self.sketch += diff_vec[self.sketch_mask]
+            #/len(diff_vecs)
+        candidate_top_k = self.sketch.unSketch(k=self.p2*self.k)
+        candidate_hh_coords = candidate_top_k.nonzero()
+        hhs = [diff_vec[candidate_hh_coords] for diff_vec in diff_vecs]
+        candidate_top_k[candidate_hh_coords] = torch.sum(
+            torch.stack(hhs),dim=0)
+        weights = self.topk(candidate_top_k, k=self.k)
+        weight_update = torch.zeros(self.grad_size, device=self.device)
+        weight_update[self.sketch_mask] = weights
+        weight_update[~self.sketch_mask] = torch.sum(
+            torch.stack(
+                [diff_vec[~self.sketch_mask] for diff_vec in diff_vecs]), dim=0)
+        self.replace_model(weight_update)
 
     def all_reduce_sketched(self, *diff_vecs):
         diff_vecs = [diff_vec.to(self.device) for diff_vec in diff_vecs]
@@ -406,7 +429,7 @@ class FedSketchWorker(object):
                 [diff_vec[~self.sketch_mask] for diff_vec in diff_vecs]), dim=0)
         self.apply_update(weight_update)
 
-    def train_iters(self, step_number, training, iterations):
+    def train_iters(self, step_number, training, iterations, grad=True):
         model = self.model
         optimizer = self.opt
         if training:
@@ -426,8 +449,10 @@ class FedSketchWorker(object):
                 dataloader_iterator = iter(dataloader)
                 inputs, targets = next(dataloader_iterator)
             optimizer.zero_grad()
-            inputs = batch["input"]
-            targets = batch["target"]
+            #inputs = batch["input"]
+            #targets = batch["target"]
+            inputs = inputs.cuda()
+            targets = targets.cuda()
             outputs = model(inputs)
             loss = criterion(outputs, targets)
             acc = accuracy(outputs, targets)
@@ -439,7 +464,7 @@ class FedSketchWorker(object):
             running_loss += loss.float().mean().detach().cpu().numpy()
             running_acc += acc.float().mean().detach().cpu().numpy()
         if training:
-            return (running_loss/len(dataloader)), (running_acc/len(dataloader)), step_number, self.model_diff(opt_copy).cpu()
+            return (running_loss/len(dataloader)), (running_acc/len(dataloader)), step_number, self.model_diff(opt_copy, grad).cpu()
         else:
             return (running_loss/len(dataloader)), (running_acc/len(dataloader))
 
@@ -456,9 +481,12 @@ class FedSketchWorker(object):
         running_loss = 0.0
         running_acc = 0.0
         for idx, batch in enumerate(dataloader):
+            inputs, targets = batch
+            inputs = inputs.cuda()
+            targets = targets.cuda()
             optimizer.zero_grad()
-            inputs = batch["input"]
-            targets = batch["target"]
+            #inputs = batch["input"]
+            #targets = batch["target"]
             outputs = model(inputs)
             loss = criterion(outputs, targets)
             acc = accuracy(outputs, targets)
@@ -474,14 +502,18 @@ class FedSketchWorker(object):
         else:
             return (running_loss/len(dataloader)), (running_acc/len(dataloader))
 
-    def model_diff(self, opt_copy):
+    def model_diff(self, opt_copy, grad=True):
         diff_vec = []
         for group_id, param_group in enumerate(self.opt.param_groups):
             for idx, p in enumerate(param_group['params']):
-                # calculate the difference between the current model and the stored model
-                diff_vec.append(opt_copy[group_id]['params'][idx].data.view(-1).float() - p.data.view(-1).float())
-                # reset the current model to the stored model for later
-                p.data = opt_copy[group_id]['params'][idx].data
+                if grad:
+                    # calculate the difference between the current model and the stored model
+                    diff_vec.append(opt_copy[group_id]['params'][idx].data.view(-1).float() - p.data.view(-1).float())
+                    # reset the current model to the stored model for later
+                    p.data = opt_copy[group_id]['params'][idx].data
+                else:
+                    # just give the current model
+                    diff_vec.append(p.data.view(-1).float())
         self.diff_vec = torch.cat(diff_vec).to(self.device)
         return self.diff_vec
         #import pdb; pdb.set_trace()
@@ -501,6 +533,15 @@ class FedSketchWorker(object):
     #     unsketched = self.diff_vec[~self.sketch_mask]
     #     # COMMUNICATE
     #     return self.diff_vec[hhcoords], unsketched
+    def replace_model(self, model):
+        model = model.to(self.device)
+        start = 0
+        for param_group in self.opt.param_groups:
+            for p in param_group['params']:
+                end = start + torch.numel(p)
+                # we previously had diff_vec = copy - (copy - grad) = grad, so subtract here 
+                p.data = model[start:end].reshape(p.data.shape)
+                start = end
 
     def apply_update(self, weight_update):
         weight_update = weight_update.to(self.device)
@@ -563,14 +604,15 @@ parser.add_argument("--iterations", type=int, default=1)
 args = parser.parse_args()
 #args.batch_size = math.ceil(args.batch_size/args.num_workers) * args.num_workers
 args.batch_size = int(args.batch_size/args.num_workers)
-
+hp_default['batch_size'] = args.batch_size
+num_batches = 97
 lr_schedule = PiecewiseLinear([0, 10, args.epochs], [0, 0.4, 0])
 lr = lambda step: lr_schedule(step * args.num_workers/num_batches)/args.batch_size
 print('Starting timer')
 timer = Timer()
 
 print('Preprocessing training data')
-loaders = get_data_loaders(hp_default, verbose=False)
+client_loaders, train_loader, test_loader, stats = get_data_loaders(hp_default, verbose=False)
 print('Finished in {:.2f} seconds'.format(timer()))
 
 TSV = TSVLogger()
@@ -593,7 +635,7 @@ kwargs = {
     "batch_size": args.batch_size,
 }
 ray.init(num_gpus=8)
-workers = [FedSketchWorker.remote(loaders[worker_index], worker_index, kwargs) for worker_index in range(args.num_workers)]
+workers = [FedSketchWorker.remote(client_loaders[worker_index], worker_index, kwargs) for worker_index in range(args.num_workers)]
 #ps = SketchFedServer.remote(kwargs)
 ps = "bleh"
 def train_worker(ps, workers, iters_per_epoch, epochs, iterations, loggers=(), timer=None):
@@ -602,7 +644,7 @@ def train_worker(ps, workers, iters_per_epoch, epochs, iterations, loggers=(), t
     for epoch in range(epochs):
         train_losses, train_accs, train_time = 0.0, 0.0, 0.0
         for _ in range(iters_per_epoch):
-            train_loss, train_acc, step_number, diff_vecs = list(zip(*ray.get([worker.train_iters.remote(step_number, True, iterations) for worker in workers])))
+            train_loss, train_acc, step_number, diff_vecs = list(zip(*ray.get([worker.train_iters.remote(step_number, True, iterations, True) for worker in workers])))
         # train_loss, train_acc, step_number, diff_vecs = list(zip(*ray.get([worker.train_epoch.remote(step_number, True) for worker in workers])))
             step_number = step_number[0]
         # if epoch < 3:
