@@ -84,7 +84,7 @@ class SketchedOptimizer(object):
         Gives the workers the optimizers and then wraps optimizer methods. 
         """
         self.workers = workers
-        [worker.set_optimizer.remote(optimizer) for worker in self.workers]
+        ray.wait([worker.set_optimizer.remote(optimizer.param_groups) for worker in self.workers])
     
     def zero_grad(self):
         [worker.optimizer_zero_grad.remote() for worker in self.workers]
@@ -95,7 +95,18 @@ class SketchedOptimizer(object):
 
 @ray.remote(num_gpus=1)
 class SketchedWorker(object):
-    def __init__(self):
+    def __init__(self, k=0, p2=0, num_cols=0, num_rows=0, p1=0, num_blocks=1, lr=0, momentum=0, dampening=0, weight_decay=0, nesterov=False):
+        self.k = k
+        self.p2 = p2
+        self.num_cols = num_cols
+        self.num_rows = num_rows
+        self.p1 = p1
+        self.num_blocks = num_blocks
+        self.lr = lr
+        self.momentum = momentum
+        self.dampening = dampening
+        self.weight_decay = weight_decay
+        self.nesterov = nesterov
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def set_model(self, model):
@@ -126,26 +137,28 @@ class SketchedWorker(object):
     def loss_backward(self):
         self.loss.backward()
 
-    def set_optimizer(self, optimizer):
-        self.opt = optimizer
+    def set_optimizer(self, param_groups):
+        self.param_groups = param_groups
+        import pdb; pdb.set_trace()
         grad_size = 0
-        sketchMask = []
-        for group in self.opt.param_groups:
+        sketch_mask = []
+        for group in self.param_groups:
             for p in group["params"]:
                 if p.requires_grad:
                     size = torch.numel(p)
+                    #import pdb; pdb.set_trace()
                     if p.do_sketching:
-                        sketchMask.append(torch.ones(size))
+                        sketch_mask.append(torch.ones(size))
                     else:
-                        sketchMask.append(torch.zeros(size))
+                        sketch_mask.append(torch.zeros(size))
                     grad_size += size
         self.grad_size = grad_size
         print(f"Total dimension is {self.grad_size} using k {self.k} and p2 {self.p2}")
-        self.sketchMask = torch.cat(sketchMask).byte().to(self.device)
+        self.sketch_mask = torch.cat(sketch_mask).byte().to(self.device)
         #print(f"sketchMask.sum(): {self.sketchMask.sum()}")
 #         print(f"Make CSVec of dim{numRows}, {numCols}")
-        self.sketch = CSVec(d=self.sketchMask.sum().item(), c=numCols, r=numRows, 
-                            device=self.device, nChunks=1, numBlocks=numBlocks)
+        self.sketch = CSVec(d=self.sketch_mask.sum().item(), c=self.num_cols, r=self.num_rows, 
+                            device=self.device, nChunks=1, numBlocks=self.num_blocks)
         self.u = torch.zeros(self.grad_size, device=self.device)
         self.v = torch.zeros(self.grad_size, device=self.device)
 
@@ -356,9 +369,9 @@ model_config = {
     "out_size": D_out,
     "hidden_sizes": H_sizes,
 }
-
-model = FCNet(**model_config).cuda()
-workers = [SketchedWorker.remote() for _ in range(2)]
+sketched_params = [10, 1, 100, 5, 0, 1, 1e-3, 0.9, 0, 0, False]
+model = FCNet(**model_config)
+workers = [SketchedWorker.remote(*sketched_params) for _ in range(2)]
 sketched_model = SketchedModel(model, workers)
 opt = optim.SGD(sketched_model.parameters(), lr=1e-3)
 sketched_optim = SketchedOptimizer(opt, workers)
