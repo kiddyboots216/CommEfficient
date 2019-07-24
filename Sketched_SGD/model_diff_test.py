@@ -10,18 +10,11 @@ class SketchedModel:
     # doesn't actually add "model" to self.__dict__ -- instead, nn.Module
     # creates a key/value pair in some internal dictionary that keeps
     # track of submodules
-    def __init__(self, model, workers, sketchBiases=False, sketchParamsLargerThan=0):
+    def __init__(self, model, workers):
         self.model = model
         self.workers = workers
         # sketch everything larger than sketchParamsLargerThan
-        for p in self.model.parameters():
-            p.do_sketching = p.numel() >= sketchParamsLargerThan
-
-        # override bias terms with whatever sketchBiases is
-        for m in self.model.modules():
-            if isinstance(m, torch.nn.Linear):
-                if m.bias is not None:
-                    m.bias.do_sketching = sketchBiases
+        
         [worker.set_model.remote(self.model) for worker in self.workers]
         #[worker.set_model(self.model) for worker in self.workers]
 
@@ -84,7 +77,7 @@ class SketchedOptimizer(object):
         Gives the workers the optimizers and then wraps optimizer methods. 
         """
         self.workers = workers
-        ray.wait([worker.set_optimizer.remote(optimizer.param_groups) for worker in self.workers])
+        ray.wait([worker.set_optimizer.remote(opt) for worker in self.workers])
     
     def zero_grad(self):
         [worker.optimizer_zero_grad.remote() for worker in self.workers]
@@ -95,7 +88,9 @@ class SketchedOptimizer(object):
 
 @ray.remote(num_gpus=1)
 class SketchedWorker(object):
-    def __init__(self, k=0, p2=0, num_cols=0, num_rows=0, p1=0, num_blocks=1, lr=0, momentum=0, dampening=0, weight_decay=0, nesterov=False):
+    def __init__(self, k=0, p2=0, num_cols=0, num_rows=0, p1=0, num_blocks=1, 
+                lr=0, momentum=0, dampening=0, weight_decay=0, nesterov=False,
+                sketch_params_larger_than=0, sketch_biases=False):
         self.k = k
         self.p2 = p2
         self.num_cols = num_cols
@@ -111,6 +106,14 @@ class SketchedWorker(object):
 
     def set_model(self, model):
         self.model = model.to(self.device)
+        for p in self.model.parameters():
+            p.do_sketching = p.numel() >= self.sketch_params_larger_than
+
+        # override bias terms with whatever sketchBiases is
+        for m in self.model.modules():
+            if isinstance(m, torch.nn.Linear):
+                if m.bias is not None:
+                    m.bias.do_sketching = self.sketch_biases
 
     def set_loss(self, criterion):
         self.criterion = criterion.to(self.device)
@@ -137,8 +140,8 @@ class SketchedWorker(object):
     def loss_backward(self):
         self.loss.backward()
 
-    def set_optimizer(self, param_groups):
-        self.param_groups = param_groups
+    def set_optimizer(self, opt):
+        self.param_groups = opt.param_groups
         import pdb; pdb.set_trace()
         grad_size = 0
         sketch_mask = []
@@ -163,7 +166,7 @@ class SketchedWorker(object):
         self.v = torch.zeros(self.grad_size, device=self.device)
 
     def optimizer_zero_grad(self):
-        self.opt.zero_grad()
+        self.zero_grad()
 
     def compute_grad(self):
         # compute grad 
