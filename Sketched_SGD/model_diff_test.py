@@ -22,12 +22,12 @@ class SketchedModel:
             if isinstance(m, torch.nn.Linear):
                 if m.bias is not None:
                     m.bias.do_sketching = sketchBiases
-#         [worker.set_model.remote(self.model) for worker in self.workers]
-        [worker.set_model(self.model) for worker in self.workers]
+        [worker.set_model.remote(self.model) for worker in self.workers]
+        #[worker.set_model(self.model) for worker in self.workers]
 
     def __call__(self, *args, **kwargs):
-#         return [worker.model_call.remote(*args) for worker in self.workers]
-        return [worker.model_call(*args) for worker in self.workers]
+        return [worker.model_call.remote(*args) for worker in self.workers]
+        #return [worker.model_call(*args) for worker in self.workers]
 
     def __getattr__(self, name):
         return getattr(self.model, name)
@@ -44,26 +44,36 @@ class SketchedLoss(object):
         [worker.set_loss.remote(criterion) for worker in self.workers]
 
     def __call__(self, *args, **kwargs):
+        #import pdb; pdb.set_trace()
         if len(kwargs) > 0:
             print("Kwargs aren't supported by Ray")
             return
         # TODO: fix this partitioning
-        results = [worker.loss_call.remote(args)
-                    for worker_id, worker in enumerate(self.workers)]
+        # results = [worker.loss_call.remote(args)
+        #            for worker_id, worker in enumerate(self.workers)]
 #         for worker_id, worker in enumerate(self.workers):
 #             worker.loss_call.remote(args[worker_id])
 #         [worker.loss_call.remote()
 #         for worker_id, worker in enumerate(self.workers)]
 #         results = torch.zeros(2)
-#         results = torch.stack(
-#             *ray.get(
-#                 [worker.loss_call.remote(args[worker_id])
-#                 for worker_id, worker in enumerate(self.workers)]
-#             ), 
-#             dim=0)
-        results.register_backward_hook(self._backward)
+        results = torch.stack(
+             ray.get(
+                 [worker.loss_call.remote(*args)
+                 for worker_id, worker in enumerate(self.workers)]
+             ), 
+             dim=0)
+        #results.register_backward_hook(self._backward)
+        result = SketchedLossResult(results, self.workers)
+        return result
 
-    def _backward(self):
+class SketchedLossResult(object):
+    def __init__(self, tensor, workers):
+        self._tensor = tensor
+        self.workers = workers
+
+    def __repr__(self):
+        return self.__tensor.__repr__()
+    def backward(self):
         [worker.loss_backward.remote()
             for worker in self.workers]
 
@@ -73,16 +83,17 @@ class SketchedOptimizer(object):
         Takes in an already-initialized optimizer and list of workers (object IDs).
         Gives the workers the optimizers and then wraps optimizer methods. 
         """
-        [worker.set_optimizer.remote(optimizer) for worker in workers]
+        self.workers = workers
+        [worker.set_optimizer.remote(optimizer) for worker in self.workers]
     
     def zero_grad(self):
-        [worker.optimizer_zero_grad.remote() for worker in workers]
+        [worker.optimizer_zero_grad.remote() for worker in self.workers]
 
     def step(self):
-        grads = [worker.compute_grad.remote() for worker in workers]
-        [worker.all_reduce_sketched.remote(*grads) for worker in workers]
+        grads = [worker.compute_grad.remote() for worker in self.workers]
+        [worker.all_reduce_sketched.remote(*grads) for worker in self.workers]
 
-# @ray.remote(num_gpus=1)
+@ray.remote(num_gpus=1)
 class SketchedWorker(object):
     def __init__(self):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -91,7 +102,7 @@ class SketchedWorker(object):
         self.model = model.to(self.device)
 
     def set_loss(self, criterion):
-        self.loss = criterion.to(self.device)
+        self.criterion = criterion.to(self.device)
 
     def model_call(self, *args):
         return self.model(*args)
@@ -106,7 +117,11 @@ class SketchedWorker(object):
             self.model.setattr(name, value)
 
     def loss_call(self, *args):
-        return self.loss(*args)
+        list_outs = ray.get(args[0])
+        outs = torch.stack(list_outs, dim=0)
+        #import pdb; pdb.set_trace()
+        self.loss = self.criterion(outs, args[1])
+        return self.loss
 
     def loss_backward(self):
         self.loss.backward()
@@ -343,15 +358,17 @@ model_config = {
 }
 
 model = FCNet(**model_config).cuda()
-workers = [SketchedWorker() for _ in range(2)]
+workers = [SketchedWorker.remote() for _ in range(2)]
 sketched_model = SketchedModel(model, workers)
+opt = optim.SGD(sketched_model.parameters(), lr=1e-3)
+sketched_optim = SketchedOptimizer(opt, workers)
 batch_size = 32
 x = torch.randn(batch_size, D_in, device="cuda")
 y = torch.randn(batch_size, D_out, device="cuda")
 outputs = sketched_model(x)
 criterion = torch.nn.MSELoss(reduction='sum')
 sketched_criterion = SketchedLoss(criterion, workers)
-sketched_criterion(outputs, y)
-# train_loss = sketched_criterion(sketched_model(x), y)
-# train_loss.backward()
-# sketched_optim.step()
+# sketched_criterion(outputs, y)
+train_loss = sketched_criterion(sketched_model(x), y)
+train_loss.backward()
+sketched_optim.step()
