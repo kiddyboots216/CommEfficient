@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
+from csvec import CSVec
 
 class SketchedModel:
     # not inheriting from nn.Module to avoid the fact that implementing
@@ -77,7 +78,7 @@ class SketchedOptimizer(object):
         Gives the workers the optimizers and then wraps optimizer methods. 
         """
         self.workers = workers
-        ray.wait([worker.set_optimizer.remote(opt) for worker in self.workers])
+        ray.wait([worker.set_optimizer.remote(optimizer) for worker in self.workers])
     
     def zero_grad(self):
         [worker.optimizer_zero_grad.remote() for worker in self.workers]
@@ -102,11 +103,14 @@ class SketchedWorker(object):
         self.dampening = dampening
         self.weight_decay = weight_decay
         self.nesterov = nesterov
+        self.sketch_params_larger_than = sketch_params_larger_than
+        self.sketch_biases = sketch_biases
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def set_model(self, model):
         self.model = model.to(self.device)
         for p in self.model.parameters():
+            p.requires_grad = True
             p.do_sketching = p.numel() >= self.sketch_params_larger_than
 
         # override bias terms with whatever sketchBiases is
@@ -119,7 +123,8 @@ class SketchedWorker(object):
         self.criterion = criterion.to(self.device)
 
     def model_call(self, *args):
-        return self.model(*args)
+        self.outs = self.model(*args)
+        return self.outs
 
     def model_getattr(self, name):
         return getattr(self.model, name)
@@ -134,20 +139,30 @@ class SketchedWorker(object):
         list_outs = ray.get(args[0])
         outs = torch.stack(list_outs, dim=0)
         #import pdb; pdb.set_trace()
-        self.loss = self.criterion(outs, args[1])
+        self.loss = self.criterion(self.outs, args[1])
+        #import pdb; pdb.set_trace()
         return self.loss
 
     def loss_backward(self):
+        #import pdb; pdb.set_trace()
         self.loss.backward()
 
     def set_optimizer(self, opt):
+        p = opt.param_groups[0]
+        lr = p['lr']
+        dampening = p['dampening']
+        nesterov = p['nesterov']
+        weight_decay = p['weight_decay']
+        momentum = p['momentum']
+        opt = optim.SGD(self.model.parameters(), lr=lr, dampening=dampening, nesterov=nesterov, weight_decay=weight_decay, momentum=momentum)
         self.param_groups = opt.param_groups
-        import pdb; pdb.set_trace()
+        #import pdb; pdb.set_trace()
         grad_size = 0
         sketch_mask = []
         for group in self.param_groups:
             for p in group["params"]:
-                if p.requires_grad:
+                if True:
+                #if p.requires_grad:
                     size = torch.numel(p)
                     #import pdb; pdb.set_trace()
                     if p.do_sketching:
@@ -200,7 +215,7 @@ class SketchedWorker(object):
             #/len(diff_vecs)
         candidate_top_k = self.sketch.unSketch(k=self.p2*self.k)
         candidate_hh_coords = candidate_top_k.nonzero()
-        hhs = [diff_vec[candidate_hh_coords] for diff_vec in diff_vecs]
+        hhs = [grad[candidate_hh_coords] for grad in grads]
         candidate_top_k[candidate_hh_coords] = torch.sum(
             torch.stack(hhs),dim=0)
         weights = self.topk(candidate_top_k, k=self.k)
@@ -208,16 +223,25 @@ class SketchedWorker(object):
         weight_update[self.sketch_mask] = weights
         weight_update[~self.sketch_mask] = torch.sum(
             torch.stack(
-                [diff_vec[~self.sketch_mask] for diff_vec in diff_vecs]), dim=0)
-        self.apply_update(weight_update)
+                [grad[~self.sketch_mask] for grad in grads]), dim=0)
+        self._apply_update(weight_update)
+    def topk(self, vec, k):
+        """ Return the largest k elements (by magnitude) of vec"""
+        ret = torch.zeros_like(vec)
 
+        # on a gpu, sorting is faster than pytorch's topk method
+        topkIndices = torch.sort(vec**2)[1][-k:]
+                        #_, topkIndices = torch.topk(vec**2, k)
+
+        ret[topkIndices] = vec[topkIndices]
+        return ret
     def _apply_update(self, update):
         # set update
-        self.u[weightUpdate.nonzero()] = 0
-        self.v[weightUpdate.nonzero()] = 0
-        self.v[~self.sketchMask] = 0
+        self.u[update.nonzero()] = 0
+        self.v[update.nonzero()] = 0
+        self.v[~self.sketch_mask] = 0
         #self.sync(weightUpdate * self._getLRVec())
-        self._setGradVec(weightUpdate * self._getLRVec())
+        self._setGradVec(update * self._getLRVec())
         self._updateParamsWithGradVec()
 
     def _getLRVec(self):

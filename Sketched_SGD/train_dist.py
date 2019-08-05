@@ -652,7 +652,7 @@ def train_worker(ps, workers, iters_per_epoch, epochs, iterations, loggers=(), t
             #update_vec = ps.average_grads.remote(*diff_vecs)
         # else:
         # update_vec = ps.sim_update.remote(*diff_vecs)
-            ray.wait([worker.all_reduce_sketched.remote(*diff_vecs) for worker in workers])
+            ray.wait([worker.all_reduce.remote(*diff_vecs) for worker in workers])
         # update_vec = torch.mean(torch.stack(diff_vecs), dim=0)
         # update_vec = ps.average_grads.remote(*diff_vecs)
         # ray.wait([worker.apply_update.remote(update_vec) for i,worker in enumerate(workers)])
