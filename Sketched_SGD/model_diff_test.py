@@ -59,7 +59,7 @@ class SketchedLossResult(object):
         self.workers = workers
 
     def __repr__(self):
-        return self.__tensor.__repr__()
+        return self._tensor.__repr__()
     def backward(self):
         [worker.loss_backward.remote()
             for worker in self.workers]
@@ -78,7 +78,7 @@ class SketchedOptimizer(object):
 
     def step(self):
         grads = [worker.compute_grad.remote() for worker in self.workers]
-        [worker.all_reduce_sketched.remote(*grads) for worker in self.workers]
+        ray.wait([worker.all_reduce_sketched.remote(*grads) for worker in self.workers])
 
 @ray.remote(num_gpus=1)
 class SketchedWorker(object):
@@ -166,10 +166,11 @@ class SketchedWorker(object):
 # >>>>>>> Stashed changes
         grad_size = 0
         sketch_mask = []
+        #for p in self.model.parameters():
         for group in self.param_groups:
             for p in group["params"]:
-                if True:
-                #if p.requires_grad:
+            #if True:
+                if p.requires_grad:
                     size = torch.numel(p)
                     #import pdb; pdb.set_trace()
                     if p.do_sketching:
@@ -412,12 +413,15 @@ sketched_model = SketchedModel(model_cls, model_config, workers)
 opt = optim.SGD(sketched_model.parameters(), lr=1e-3)
 sketched_opt = SketchedOptimizer(opt, workers)
 batch_size = 32
-x = torch.randn(batch_size, D_in, device=device)
-y = torch.randn(batch_size, D_out, device=device)
+x = torch.zeros(batch_size, D_in, device=device)
+y = torch.ones(batch_size, D_out, device=device)
 outputs = sketched_model(x)
 criterion = torch.nn.MSELoss(reduction='sum')
 sketched_criterion = SketchedLoss(criterion, workers)
 # sketched_criterion(outputs, y)
-train_loss = sketched_criterion(sketched_model(x), y)
-train_loss.backward()
-sketched_opt.step()
+steps = 2000
+for _ in range(steps):
+    train_loss = sketched_criterion(sketched_model(x), y)
+    print(train_loss)
+    train_loss.backward()
+    sketched_opt.step()
