@@ -6,17 +6,10 @@ import torch.nn.functional as F
 from csvec import CSVec
 
 class SketchedModel:
-    # not inheriting from nn.Module to avoid the fact that implementing
-    # __getattr__ on a nn.Module is tricky, since self.model = model
-    # doesn't actually add "model" to self.__dict__ -- instead, nn.Module
-    # creates a key/value pair in some internal dictionary that keeps
-    # track of submodules
-    def __init__(self, model, workers):
-        self.model = model
+    def __init__(self, model_cls, model_config, workers, sketch_biases=False, sketch_params_larger_than=0):
         self.workers = workers
-        # sketch everything larger than sketchParamsLargerThan
-        
-        [worker.set_model.remote(self.model) for worker in self.workers]
+        self.model = model_cls(**model_config)
+        [worker.set_model.remote(model_cls, model_config, sketch_biases, sketch_params_larger_than) for worker in self.workers]
         #[worker.set_model(self.model) for worker in self.workers]
 
     def __call__(self, *args, **kwargs):
@@ -107,17 +100,25 @@ class SketchedWorker(object):
         self.sketch_biases = sketch_biases
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    def set_model(self, model):
-        self.model = model.to(self.device)
-        for p in self.model.parameters():
-            p.requires_grad = True
-            p.do_sketching = p.numel() >= self.sketch_params_larger_than
+# <<<<<<< Updated upstream
+#     def set_model(self, model):
+#         self.model = model.to(self.device)
+#         for p in self.model.parameters():
+#             p.requires_grad = True
+#             p.do_sketching = p.numel() >= self.sketch_params_larger_than
+# =======
+    def set_model(self, model_cls, model_config, sketch_biases, sketch_params_larger_than):
+        model = model_cls(**model_config)
+        for p in model.parameters():
+            p.do_sketching = p.numel() >= sketch_params_larger_than
+# >>>>>>> Stashed changes
 
         # override bias terms with whatever sketchBiases is
-        for m in self.model.modules():
+        for m in model.modules():
             if isinstance(m, torch.nn.Linear):
                 if m.bias is not None:
-                    m.bias.do_sketching = self.sketch_biases
+                    m.bias.do_sketching = sketch_biases
+        self.model = model.to(self.device)
 
     def set_loss(self, criterion):
         self.criterion = criterion.to(self.device)
@@ -148,15 +149,21 @@ class SketchedWorker(object):
         self.loss.backward()
 
     def set_optimizer(self, opt):
-        p = opt.param_groups[0]
-        lr = p['lr']
-        dampening = p['dampening']
-        nesterov = p['nesterov']
-        weight_decay = p['weight_decay']
-        momentum = p['momentum']
-        opt = optim.SGD(self.model.parameters(), lr=lr, dampening=dampening, nesterov=nesterov, weight_decay=weight_decay, momentum=momentum)
+# <<<<<<< Updated upstream
+#         p = opt.param_groups[0]
+#         lr = p['lr']
+#         dampening = p['dampening']
+#         nesterov = p['nesterov']
+#         weight_decay = p['weight_decay']
+#         momentum = p['momentum']
+#         opt = optim.SGD(self.model.parameters(), lr=lr, dampening=dampening, nesterov=nesterov, weight_decay=weight_decay, momentum=momentum)
+#         self.param_groups = opt.param_groups
+#         #import pdb; pdb.set_trace()
+# =======
+        assert self.model is not None, "model must be already initialized"
         self.param_groups = opt.param_groups
-        #import pdb; pdb.set_trace()
+#         import pdb; pdb.set_trace()
+# >>>>>>> Stashed changes
         grad_size = 0
         sketch_mask = []
         for group in self.param_groups:
@@ -364,7 +371,6 @@ class SketchedWorker(object):
                 p.data.add_(-p.grad.data)
 #                 except:
 #                     from IPython.core.debugger import set_trace; set_trace()
-
 ray.init(ignore_reinit_error=True)
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 # CONSTANTS
@@ -396,19 +402,22 @@ model_config = {
     "out_size": D_out,
     "hidden_sizes": H_sizes,
 }
+model_cls = FCNet
 sketched_params = [10, 1, 100, 5, 0, 1, 1e-3, 0.9, 0, 0, False]
-model = FCNet(**model_config)
 workers = [SketchedWorker.remote(*sketched_params) for _ in range(2)]
-sketched_model = SketchedModel(model, workers)
+sketched_model = SketchedModel(model_cls, model_config, workers)
+
+# model = FCNet(**model_config)
+# sketched_model = SketchedModel(model, workers)
 opt = optim.SGD(sketched_model.parameters(), lr=1e-3)
-sketched_optim = SketchedOptimizer(opt, workers)
+sketched_opt = SketchedOptimizer(opt, workers)
 batch_size = 32
-x = torch.randn(batch_size, D_in, device="cuda")
-y = torch.randn(batch_size, D_out, device="cuda")
+x = torch.randn(batch_size, D_in, device=device)
+y = torch.randn(batch_size, D_out, device=device)
 outputs = sketched_model(x)
 criterion = torch.nn.MSELoss(reduction='sum')
 sketched_criterion = SketchedLoss(criterion, workers)
 # sketched_criterion(outputs, y)
 train_loss = sketched_criterion(sketched_model(x), y)
 train_loss.backward()
-sketched_optim.step()
+sketched_opt.step()

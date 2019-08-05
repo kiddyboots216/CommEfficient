@@ -1144,7 +1144,7 @@ class Worker(object):
             self.add_param_group(param_group)
         # set all the regular SGD params as instance vars
         self.momentum = momentum
-        self.weight_decay = weight_decay
+        self.weight_decay = weight_decay 
         self.nesterov = nesterov
         # set the sketched params as instance vars
         self.p2 = p2
