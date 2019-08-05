@@ -149,19 +149,19 @@ class SketchedWorker(object):
         self.loss.backward()
 
     def set_optimizer(self, opt):
+        assert self.model is not None, "model must be already initialized"
 # <<<<<<< Updated upstream
-#         p = opt.param_groups[0]
-#         lr = p['lr']
-#         dampening = p['dampening']
-#         nesterov = p['nesterov']
-#         weight_decay = p['weight_decay']
-#         momentum = p['momentum']
-#         opt = optim.SGD(self.model.parameters(), lr=lr, dampening=dampening, nesterov=nesterov, weight_decay=weight_decay, momentum=momentum)
-#         self.param_groups = opt.param_groups
+        p = opt.param_groups[0]
+        lr = p['lr']
+        dampening = p['dampening']
+        nesterov = p['nesterov']
+        weight_decay = p['weight_decay']
+        momentum = p['momentum']
+        opt = optim.SGD(self.model.parameters(), lr=lr, dampening=dampening, nesterov=nesterov, weight_decay=weight_decay, momentum=momentum)
+        self.param_groups = opt.param_groups
 #         #import pdb; pdb.set_trace()
 # =======
-        assert self.model is not None, "model must be already initialized"
-        self.param_groups = opt.param_groups
+#        self.param_groups = opt.param_groups
 #         import pdb; pdb.set_trace()
 # >>>>>>> Stashed changes
         grad_size = 0
