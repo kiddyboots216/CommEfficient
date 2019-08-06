@@ -46,8 +46,8 @@ sketched_model = SketchedModel(model_cls, model_config, workers)
 opt = optim.SGD(sketched_model.parameters(), lr=1e-3)
 sketched_opt = SketchedOptimizer(opt, workers)
 batch_size = 32
-x = torch.zeros(batch_size, D_in, device=device)
-y = torch.ones(batch_size, D_out, device=device)
+x = torch.zeros(batch_size, D_in, device="cpu")
+y = torch.ones(batch_size, D_out, device="cpu")
 outputs = sketched_model(x)
 criterion = torch.nn.MSELoss(reduction='sum')
 sketched_criterion = SketchedLoss(criterion, workers)
@@ -55,6 +55,6 @@ sketched_criterion = SketchedLoss(criterion, workers)
 steps = 2000
 for _ in range(steps):
     train_loss = sketched_criterion(sketched_model(x), y)
-    print(train_loss)
+    print(train_loss.mean())
     train_loss.backward()
     sketched_opt.step()

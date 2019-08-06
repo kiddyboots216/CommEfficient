@@ -15,11 +15,12 @@ class SketchedModel:
     def __call__(self, *args, **kwargs):
         input_minibatches = []
         batch_size = len(args[0])
+        #import pdb; pdb.set_trace()
         num_workers = len(self.workers)
-        for i, _ in enumerate(workers):
+        for i, _ in enumerate(self.workers):
             start = i * batch_size // num_workers
             end = (i+1) * batch_size // num_workers
-            input_minibatches.append(args[start:end])
+            input_minibatches.append(args[0][start:end])
             # target_minibatches.append(targets[start:end])
         return [worker.model_call.remote(input_minibatches[worker_id]) for worker_id, worker in enumerate(self.workers)]
         #return [worker.model_call(*args) for worker in self.workers]
@@ -43,6 +44,18 @@ class SketchedLoss(object):
         if len(kwargs) > 0:
             print("Kwargs aren't supported by Ray")
             return
+        input_minibatches = args[0]
+        target_minibatches = []
+        batch_size = len(args[1])
+        #assert len(args[0]) == len(args[1]), f"{len(args[0])} != {len(args[1])}"
+        #import pdb; pdb.set_trace()
+        num_workers = len(self.workers)
+        for i, _ in enumerate(self.workers):
+            start = i * batch_size // num_workers
+            end = (i+1) * batch_size // num_workers
+            #input_minibatches.append(args[0][start:end])
+            target_minibatches.append(args[1][start:end])
+            # target_minibatches.append(targets[start:end])
         # TODO: fix this partitioning
         # results = [worker.loss_call.remote(args)
         #            for worker_id, worker in enumerate(self.workers)]
@@ -53,7 +66,7 @@ class SketchedLoss(object):
 #         results = torch.zeros(2)
         results = torch.stack(
              ray.get(
-                 [worker.loss_call.remote(*args)
+                 [worker.loss_call.remote(input_minibatches[worker_id], target_minibatches[worker_id])
                  for worker_id, worker in enumerate(self.workers)]
              ), 
              dim=0)
@@ -136,6 +149,8 @@ class SketchedWorker(object):
         self.criterion = criterion.to(self.device)
 
     def model_call(self, *args):
+        #import pdb; pdb.set_trace()
+        args = [arg.to(self.device) for arg in args]
         self.outs = self.model(*args)
         return self.outs
 
@@ -149,9 +164,11 @@ class SketchedWorker(object):
             self.model.setattr(name, value)
 
     def loss_call(self, *args):
-        list_outs = ray.get(args[0])
-        outs = torch.stack(list_outs, dim=0)
+        args = [arg.to(self.device) for arg in args]
+        #list_outs = ray.get(args[0])
+        #outs = torch.stack(list_outs, dim=0)
         #import pdb; pdb.set_trace()
+        #self.loss = self.criterion(args[0], args[1])
         self.loss = self.criterion(self.outs, args[1])
         #import pdb; pdb.set_trace()
         return self.loss
@@ -378,8 +395,8 @@ class SketchedWorker(object):
         """Update parameters with the gradient"""
         for group in self.param_groups:
             for p in group["params"]:
-#                if p.grad is None:
-#                    continue
+                if p.grad is None:
+                    continue
 #                 try:
                 p.data.add_(-p.grad.data)
 #                 except:
