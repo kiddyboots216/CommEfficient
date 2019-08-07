@@ -6,10 +6,12 @@ import torch.nn.functional as F
 from csvec import CSVec
 
 class SketchedModel:
-    def __init__(self, model_cls, model_config, workers, sketch_biases=False, sketch_params_larger_than=0):
+    def __init__(self, model_cls, model_config, workers, 
+                sketch_biases=False, sketch_params_larger_than=0):
         self.workers = workers
         self.model = model_cls(**model_config)
-        [worker.set_model.remote(model_cls, model_config, sketch_biases, sketch_params_larger_than) for worker in self.workers]
+        [worker.set_model.remote(model_cls, model_config, 
+            sketch_biases, sketch_params_larger_than) for worker in self.workers]
         #[worker.set_model(self.model) for worker in self.workers]
 
     def __call__(self, *args, **kwargs):
@@ -22,7 +24,8 @@ class SketchedModel:
             end = (i+1) * batch_size // num_workers
             input_minibatches.append(args[0][start:end])
             # target_minibatches.append(targets[start:end])
-        return [worker.model_call.remote(input_minibatches[worker_id]) for worker_id, worker in enumerate(self.workers)]
+        return [worker.model_call.remote(
+            input_minibatches[worker_id]) for worker_id, worker in enumerate(self.workers)]
         #return [worker.model_call(*args) for worker in self.workers]
 
     def __getattr__(self, name):
@@ -32,7 +35,7 @@ class SketchedModel:
         if name in ["model", "workers"]:
             self.__dict__[name] = value
         else:
-            self.model.setattr(name, value)
+            [worker.model_setattr.remote(name, value) for worker in self.workers]
 
 class SketchedLoss(object):
     def __init__(self, criterion, workers):
@@ -66,7 +69,8 @@ class SketchedLoss(object):
 #         results = torch.zeros(2)
         results = torch.stack(
              ray.get(
-                 [worker.loss_call.remote(input_minibatches[worker_id], target_minibatches[worker_id])
+                 [worker.loss_call.remote(
+                    input_minibatches[worker_id], target_minibatches[worker_id])
                  for worker_id, worker in enumerate(self.workers)]
              ), 
              dim=0)
@@ -89,13 +93,15 @@ class SketchedLossResult(object):
     def __getattr__(self, name):
         return getattr(self._tensor, name)
 
-class SketchedOptimizer(object):
+class SketchedOptimizer(optim.Optimizer):
     def __init__(self, optimizer, workers):
         """
         Takes in an already-initialized optimizer and list of workers (object IDs).
         Gives the workers the optimizers and then wraps optimizer methods. 
         """
         self.workers = workers
+        self.head_worker = self.workers[0]
+        # self.param_groups = optimizer.param_groups
         ray.wait([worker.set_optimizer.remote(optimizer) for worker in self.workers])
     
     def zero_grad(self):
@@ -103,7 +109,49 @@ class SketchedOptimizer(object):
 
     def step(self):
         grads = [worker.compute_grad.remote() for worker in self.workers]
-        ray.wait([worker.all_reduce_sketched.remote(*grads) for worker in self.workers])
+        ray.wait([worker.all_reduce_sketched.remote(*grads) for worker in self.workers]) 
+
+    def __getattr__(self, name):
+        if name=="param_groups":
+            param_groups = ray.get(self.head_worker.get_param_groups.remote())
+            print(param_groups)
+            return [SketchedParamGroup(param_group, self.workers, idx) for idx, param_group in enumerate(param_groups)]
+            # param_groups = [worker.optimizer.param_groups for worker in self.workers]
+            # return [SketchedParamGroup(item, self.workers) for sublist in param_groups for item in sublist]
+
+class SketchedParamGroup(object):
+    def __init__(self, param_group, workers, index):
+        """
+        workers is a list of object IDs
+        """
+        self.workers = workers
+        self.param_group = param_group
+        self.index = index
+
+    def setdefault(self, name, value):
+        ray.wait([worker.param_group_setdefault.remote(self.index, name, value) for worker in self.workers])
+#         [worker.remote.get_param_groups.remote()[self.index].setdefault(name, value) for worker in self.workers]
+    
+    def __getitem__(self, name):
+        return self.param_group.__getitem__(name)
+    
+    def __setitem__(self, name, value):
+        ray.wait([worker.param_group_setitem.remote(self.index, name, value) for worker in self.workers])
+    
+    def __getattr__(self, name):
+        return self.param_group[name]
+
+    def __setattr__(self, name, value):
+        if name in ["workers", "param_group", "index"]:
+            self.__dict__[name] = value
+        else:
+            ray.wait([worker.param_group_setattr.remote(self.index, name, value) for worker in self.workers])
+            
+    def __getstate__(self):
+        return self.param_group.__getstate__()
+
+    def __setstate__(self, state):
+        self.param_group.__dict__.update(state)
 
 @ray.remote(num_gpus=1)
 class SketchedWorker(object):
@@ -125,19 +173,11 @@ class SketchedWorker(object):
         self.sketch_biases = sketch_biases
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# <<<<<<< Updated upstream
-#     def set_model(self, model):
-#         self.model = model.to(self.device)
-#         for p in self.model.parameters():
-#             p.requires_grad = True
-#             p.do_sketching = p.numel() >= self.sketch_params_larger_than
-# =======
-    def set_model(self, model_cls, model_config, sketch_biases, sketch_params_larger_than):
+    def set_model(self, model_cls, model_config, 
+        sketch_biases, sketch_params_larger_than):
         model = model_cls(**model_config)
         for p in model.parameters():
             p.do_sketching = p.numel() >= sketch_params_larger_than
-# >>>>>>> Stashed changes
-
         # override bias terms with whatever sketchBiases is
         for m in model.modules():
             if isinstance(m, torch.nn.Linear):
@@ -163,6 +203,22 @@ class SketchedWorker(object):
         else:
             self.model.setattr(name, value)
 
+    def param_group_setitem(self, index, name, value):
+        self.param_groups[index].__setitem__(name, value)
+        
+    def param_group_setattr(self, index, name, value):
+        self.param_groups[index].setattr(name, value)
+        
+    def param_group_setdefault(self, index, name, value):
+        self.param_groups[index].setdefault(name, value)
+        
+    def get_param_groups(self):
+        try:
+            return [{'initial_lr': group['initial_lr'], 'lr': group['lr']} for group in self.param_groups]
+        except Exception as e:
+            print(e)
+            return [{'lr': group['lr']} for group in self.param_groups]
+    
     def loss_call(self, *args):
         args = [arg.to(self.device) for arg in args]
         #list_outs = ray.get(args[0])
@@ -179,20 +235,19 @@ class SketchedWorker(object):
 
     def set_optimizer(self, opt):
         assert self.model is not None, "model must be already initialized"
-# <<<<<<< Updated upstream
         p = opt.param_groups[0]
         lr = p['lr']
         dampening = p['dampening']
         nesterov = p['nesterov']
         weight_decay = p['weight_decay']
         momentum = p['momentum']
-        opt = optim.SGD(self.model.parameters(), lr=lr, dampening=dampening, nesterov=nesterov, weight_decay=weight_decay, momentum=momentum)
+        opt = optim.SGD(self.model.parameters(), 
+            lr=lr, 
+            dampening=dampening, 
+            nesterov=nesterov, 
+            weight_decay=weight_decay, 
+            momentum=momentum)
         self.param_groups = opt.param_groups
-#         #import pdb; pdb.set_trace()
-# =======
-#        self.param_groups = opt.param_groups
-#         import pdb; pdb.set_trace()
-# >>>>>>> Stashed changes
         grad_size = 0
         sketch_mask = []
         #for p in self.model.parameters():
@@ -212,8 +267,12 @@ class SketchedWorker(object):
         self.sketch_mask = torch.cat(sketch_mask).byte().to(self.device)
         #print(f"sketchMask.sum(): {self.sketchMask.sum()}")
 #         print(f"Make CSVec of dim{numRows}, {numCols}")
-        self.sketch = CSVec(d=self.sketch_mask.sum().item(), c=self.num_cols, r=self.num_rows, 
-                            device=self.device, nChunks=1, numBlocks=self.num_blocks)
+        self.sketch = CSVec(d=self.sketch_mask.sum().item(), 
+            c=self.num_cols, 
+            r=self.num_rows, 
+            device=self.device, 
+            nChunks=1, 
+            numBlocks=self.num_blocks)
         self.u = torch.zeros(self.grad_size, device=self.device)
         self.v = torch.zeros(self.grad_size, device=self.device)
 
