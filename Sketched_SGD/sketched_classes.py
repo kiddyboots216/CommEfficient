@@ -84,8 +84,8 @@ class SketchedLossResult(object):
         self.workers = workers
 
     def backward(self):
-        [worker.loss_backward.remote()
-            for worker in self.workers]
+        ray.wait([worker.loss_backward.remote()
+            for worker in self.workers])
 
     def __repr__(self):
         return self._tensor.__repr__()
@@ -114,7 +114,7 @@ class SketchedOptimizer(optim.Optimizer):
     def __getattr__(self, name):
         if name=="param_groups":
             param_groups = ray.get(self.head_worker.get_param_groups.remote())
-            print(param_groups)
+            print(f"Param groups are {param_groups}")
             return [SketchedParamGroup(param_group, self.workers, idx) for idx, param_group in enumerate(param_groups)]
             # param_groups = [worker.optimizer.param_groups for worker in self.workers]
             # return [SketchedParamGroup(item, self.workers) for sublist in param_groups for item in sublist]
@@ -129,6 +129,7 @@ class SketchedParamGroup(object):
         self.index = index
 
     def setdefault(self, name, value):
+        #import pdb; pdb.set_trace()
         ray.wait([worker.param_group_setdefault.remote(self.index, name, value) for worker in self.workers])
 #         [worker.remote.get_param_groups.remote()[self.index].setdefault(name, value) for worker in self.workers]
     
@@ -138,20 +139,20 @@ class SketchedParamGroup(object):
     def __setitem__(self, name, value):
         ray.wait([worker.param_group_setitem.remote(self.index, name, value) for worker in self.workers])
     
-    def __getattr__(self, name):
-        return self.param_group[name]
+    #def __getattr__(self, name):
+    #    return self.param_group[name]
 
-    def __setattr__(self, name, value):
-        if name in ["workers", "param_group", "index"]:
-            self.__dict__[name] = value
-        else:
-            ray.wait([worker.param_group_setattr.remote(self.index, name, value) for worker in self.workers])
+    #def __setattr__(self, name, value):
+    #    if name in ["workers", "param_group", "index"]:
+    #        self.__dict__[name] = value
+    #    else:
+    #        ray.wait([worker.param_group_setattr.remote(self.index, name, value) for worker in self.workers])
             
-    def __getstate__(self):
-        return self.param_group.__getstate__()
+    #def __getstate__(self):
+    #    return self.param_group.__getstate__()
 
-    def __setstate__(self, state):
-        self.param_group.__dict__.update(state)
+    #def __setstate__(self, state):
+    #    self.param_group.__dict__.update(state)
 
 @ray.remote(num_gpus=1)
 class SketchedWorker(object):
@@ -216,7 +217,7 @@ class SketchedWorker(object):
         try:
             return [{'initial_lr': group['initial_lr'], 'lr': group['lr']} for group in self.param_groups]
         except Exception as e:
-            print(e)
+            print(f"Exception is {e}")
             return [{'lr': group['lr']} for group in self.param_groups]
     
     def loss_call(self, *args):
@@ -300,7 +301,6 @@ class SketchedWorker(object):
         del candidateSketch
         # COMMUNICATE ONLY THE TABLE
         return self.sketch.table
-        return grad
 
     def all_reduce_sketched(self, *grads):
         # compute update
@@ -348,7 +348,9 @@ class SketchedWorker(object):
         number.
         """
         if len(self.param_groups) == 1:
-            return self.param_groups[0]["lr"]
+            lr = self.param_groups[0]["lr"]
+            print(f"Lr is {lr}")
+            return lr
 
         lrVec = []
         for group in self.param_groups:
