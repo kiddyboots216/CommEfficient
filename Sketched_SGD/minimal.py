@@ -1075,6 +1075,7 @@ class _RequiredParameter(object):
 required = _RequiredParameter()
 class Correct(nn.Module):
     def forward(self, classifier, target):
+        #import pdb; pdb.set_trace()
         return classifier.max(dim = 1)[1] == target
 
 @ray.remote(num_gpus=0.75)

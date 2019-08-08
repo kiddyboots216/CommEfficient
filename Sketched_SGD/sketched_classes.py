@@ -156,20 +156,21 @@ class SketchedParamGroup(object):
 
 @ray.remote(num_gpus=1)
 class SketchedWorker(object):
-    def __init__(self, k=0, p2=0, num_cols=0, num_rows=0, p1=0, num_blocks=1, 
-                lr=0, momentum=0, dampening=0, weight_decay=0, nesterov=False,
+    def __init__(self, args,
+                #k=0, p2=0, num_cols=0, num_rows=0, p1=0, num_blocks=1, 
+                #lr=0, momentum=0, dampening=0, weight_decay=0, nesterov=False,
                 sketch_params_larger_than=0, sketch_biases=False):
-        self.k = k
-        self.p2 = p2
-        self.num_cols = num_cols
-        self.num_rows = num_rows
-        self.p1 = p1
-        self.num_blocks = num_blocks
-        self.lr = lr
-        self.momentum = momentum
-        self.dampening = dampening
-        self.weight_decay = weight_decay
-        self.nesterov = nesterov
+        self.num_workers = args['num_workers']
+        self.k = args['k']
+        self.p2 = args['p2']
+        self.num_cols = args['num_cols']
+        self.num_rows = args['num_rows']
+        self.num_blocks = args['num_blocks']
+        self.lr = args['lr']
+        self.momentum = args['momentum']
+        self.dampening = args['dampening']
+        self.weight_decay = args['weight_decay']
+        self.nesterov = args['nesterov']
         self.sketch_params_larger_than = sketch_params_larger_than
         self.sketch_biases = sketch_biases
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -321,6 +322,7 @@ class SketchedWorker(object):
             torch.stack(
                 [grad[~self.sketch_mask] for grad in grads]), dim=0)
         self._apply_update(weight_update)
+
     def topk(self, vec, k):
         """ Return the largest k elements (by magnitude) of vec"""
         ret = torch.zeros_like(vec)
@@ -331,6 +333,7 @@ class SketchedWorker(object):
 
         ret[topkIndices] = vec[topkIndices]
         return ret
+
     def _apply_update(self, update):
         # set update
         self.u[update.nonzero()] = 0
@@ -349,7 +352,7 @@ class SketchedWorker(object):
         """
         if len(self.param_groups) == 1:
             lr = self.param_groups[0]["lr"]
-            print(f"Lr is {lr}")
+#            print(f"Lr is {lr}")
             return lr
 
         lrVec = []
@@ -454,6 +457,7 @@ class SketchedWorker(object):
                 startPos += size
     def _updateParamsWithGradVec(self):
         """Update parameters with the gradient"""
+        #import pdb; pdb.set_trace()
         for group in self.param_groups:
             for p in group["params"]:
                 if p.grad is None:

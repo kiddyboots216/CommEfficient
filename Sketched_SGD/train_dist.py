@@ -20,10 +20,10 @@ import itertools as it
 import copy
 
 from minimal import *
-from sketched_optimizer import SketchedModel, SketchedWorker, SketchedLoss, SketchedOptimizer
+from sketched_classes import SketchedModel, SketchedWorker, SketchedLoss, SketchedOptimizer
 
 DATA_PATH = 'sample_data'
-
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6"
 # def get_cifar10():
 #     '''Return CIFAR10 train/test data and labels as numpy arrays'''
 #     data_train = torchvision.datasets.CIFAR10(root=os.path.join(DATA_PATH, "CIFAR10"), train=True, download=True) 
@@ -223,6 +223,10 @@ def train(model, opt, scheduler, criterion, accuracy,
     train_loader, val_loader, epochs, loggers=(), timer=None):
     timer = timer or Timer()
     for epoch in range(args.epochs):
+        scheduler.step()
+        print(scheduler.get_lr()[0])
+        scheduler.step()
+        print(scheduler.get_lr()[0])
         train_losses, train_accs = run_batches(sketched_model, sketched_opt, 
             sketched_criterion, accuracy, train_loader, True)
         train_time = timer()
@@ -231,14 +235,14 @@ def train(model, opt, scheduler, criterion, accuracy,
         val_time = timer()
         epoch_stats = {
             'train_time': train_time,
-            'train_loss': np.mean(train_losses)
-            'train_acc': np.mean(train_accs)
-            'val_time': val_time,
-            'val_loss': np.mean(val_loss)
-            'val_acc': np.mean(val_accs)
-            'total_time': timer.total_time
+            'train_loss': np.mean(train_losses),
+            'train_acc': np.mean(train_accs),
+            'test_time': val_time,
+            'test_loss': np.mean(val_losses),
+            'test_acc': np.mean(val_accs),
+            'total_time': timer.total_time,
         }
-        summary = union({'epoch': epoch+1, 'lr': scheduler.get_lr()}, epoch_stats)
+        summary = union({'epoch': epoch+1, 'lr': scheduler.get_lr()[0]}, epoch_stats)
         for logger in loggers:
             logger.append(summary)
     return summary
@@ -256,7 +260,7 @@ def run_batches(model, opt, criterion, accuracy, loader, training):
             batch_loss.backward()
             opt.step()
         losses.append(batch_loss.mean())
-        batch_acc = accuracy(outs, targets).mean().cpu().numpy()
+        batch_acc = accuracy(*ray.get(outs), targets).float().mean().cpu().numpy()
         accs.append(batch_acc)
     return losses, accs
 
@@ -280,6 +284,8 @@ parser.add_argument("--optimizer", type=str, default="SGD")
 parser.add_argument("--criterion", type=str, default="CrossEntropyLoss")
 parser.add_argument("--iterations", type=int, default=1)
 args = parser.parse_args()
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 print('Downloading datasets')
 DATA_DIR = "sample_data"
@@ -308,9 +314,9 @@ val_loader = Batches(test_set, args.batch_size, shuffle=False,
 sketched_params = {
     "k": args.k,
     "p2": args.p2,
-    "numCols": args.cols,
-    "numRows": args.rows,
-    "numBlocks": args.num_blocks,
+    "num_cols": args.cols,
+    "num_rows": args.rows,
+    "num_blocks": args.num_blocks,
     "lr": 1,
     "num_workers": args.num_workers,
     "momentum": args.momentum,
@@ -321,17 +327,19 @@ sketched_params = {
     "dampening": 0,
     "batch_size": args.batch_size,
 }
-ray.init(num_gpus=8)
+ray.init(num_gpus=7)
 model_cls = Net
-model_config = {}
-workers = [SketchedWorker.remote(*sketched_params) for _ in range(args.num_workers)]
+model_config = {
+        'channels': {'prep': 1, 'layer1': 1, 'layer2': 1, 'layer3': 1},
+}
+workers = [SketchedWorker.remote(sketched_params) for _ in range(args.num_workers)]
 sketched_model = SketchedModel(model_cls, model_config, workers)
 opt = optim.SGD(sketched_model.parameters(), lr=1)
 sketched_opt = SketchedOptimizer(opt, workers)
-criterion = torch.nn.MSELoss(reduction='sum')
+criterion = torch.nn.CrossEntropyLoss(reduction='sum')
 sketched_criterion = SketchedLoss(criterion, workers)
 accuracy = Correct().to(device)
-lambda_step = lambda t: np.interp([t], [0, 5, args.epochs], [0, 0.4, 0])
+lambda_step = lambda t: np.interp([t], [0, 5, args.epochs+1], [0, 0.4, 0])[0]
 scheduler = optim.lr_scheduler.LambdaLR(sketched_opt, lr_lambda=[lambda_step])
 train(sketched_model, sketched_opt, scheduler, sketched_criterion, accuracy,
     train_loader, val_loader, args.epochs, loggers=(TableLogger(), TSVLogger()), timer=timer)

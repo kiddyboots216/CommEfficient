@@ -48,14 +48,14 @@ x = torch.zeros(batch_size, D_in, device="cpu")
 y = torch.ones(batch_size, D_out, device="cpu")
 criterion = torch.nn.MSELoss(reduction='sum')
 sketched_criterion = SketchedLoss(criterion, workers)
-lambda1 = lambda epoch: (epoch + 1) // 30 
+lambda1 = lambda epoch: (epoch + 1) / 30 
 scheduler = optim.lr_scheduler.LambdaLR(sketched_opt, lr_lambda=[lambda1])
 
-steps = 4
+steps = 300
 for i in range(steps):
     train_loss = sketched_criterion(sketched_model(x), y)
     print(train_loss.mean())
     train_loss.backward()
     sketched_opt.step()
-    #if i % 1000 == 0:
-    #    scheduler.step()
+    if i % 10 == 0:
+        scheduler.step()
