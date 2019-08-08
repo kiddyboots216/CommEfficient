@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from csvec import CSVec
+from minimal import CSVec
 
 class SketchedModel:
     def __init__(self, model_cls, model_config, workers, 
@@ -176,7 +176,10 @@ class SketchedWorker(object):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def set_model(self, model_cls, model_config, 
-        sketch_biases, sketch_params_larger_than):
+            sketch_biases, sketch_params_larger_than):
+        rand_state = torch.random.get_rng_state()
+        torch.random.manual_seed(42)
+        torch.random.set_rng_state(rand_state)
         model = model_cls(**model_config)
         for p in model.parameters():
             p.do_sketching = p.numel() >= sketch_params_larger_than
@@ -233,7 +236,7 @@ class SketchedWorker(object):
 
     def loss_backward(self):
         #import pdb; pdb.set_trace()
-        self.loss.backward()
+        self.loss.sum().backward()
 
     def set_optimizer(self, opt):
         assert self.model is not None, "model must be already initialized"
@@ -340,7 +343,9 @@ class SketchedWorker(object):
         self.v[update.nonzero()] = 0
         self.v[~self.sketch_mask] = 0
         #self.sync(weightUpdate * self._getLRVec())
-        self._setGradVec(update * self._getLRVec())
+        weight_update = update * self._getLRVec()
+        #import pdb; pdb.set_trace()
+        self._setGradVec(weight_update)
         self._updateParamsWithGradVec()
 
     def _getLRVec(self):
