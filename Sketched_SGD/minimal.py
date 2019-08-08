@@ -1585,7 +1585,7 @@ if __name__ == "__main__":
         "dampening": 0,
     }
 
-    ray.init(num_gpus=8)
+    ray.init(num_gpus=7, redis_password="sketched-sgd")
     num_workers = args.num_workers
     minibatch_size = args.batch_size/num_workers
     print(f"Passing in args {optim_args}")

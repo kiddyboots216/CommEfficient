@@ -1,12 +1,16 @@
-import torch
 import os
 import collections
 import logging
 import glob
 import re
+from functools import singledispatch
+from collections import OrderedDict
+from collections import namedtuple
+from inspect import signature
 
 import torch, torchvision
 import numpy as np
+import ray
 
 import torch.optim as optim
 import torch.nn as nn
@@ -1026,7 +1030,9 @@ class SketchedWorker(object):
         self.v[update.nonzero()] = 0
         self.v[~self.sketch_mask] = 0
         #self.sync(weightUpdate * self._getLRVec())
-        self._setGradVec(update * self._getLRVec())
+        weight_update = update * self._getLRVec()
+        #import pdb; pdb.set_trace()
+        self._setGradVec(weight_update)
         self._updateParamsWithGradVec()
 
     def _getLRVec(self):
@@ -1162,11 +1168,11 @@ def train(model, opt, scheduler, criterion, accuracy,
     scheduler.step()
     for epoch in range(args.epochs):
         scheduler.step()
-        train_losses, train_accs = run_batches(sketched_model, sketched_opt, 
-            sketched_criterion, accuracy, train_loader, True)
+        train_losses, train_accs = run_batches(model, opt, 
+            criterion, accuracy, train_loader, True)
         train_time = timer()
-        val_losses, val_accs = run_batches(sketched_model, None, 
-            sketched_criterion, accuracy, val_loader, False)
+        val_losses, val_accs = run_batches(model, None, 
+            criterion, accuracy, val_loader, False)
         val_time = timer()
         epoch_stats = {
             'train_time': train_time,
@@ -1188,10 +1194,10 @@ def run_batches(model, opt, criterion, accuracy, loader, training):
     for idx, batch in enumerate(loader):
         inputs = batch["input"]
         targets = batch["target"]
-        opt.zero_grad()
         outs = model(inputs)
         batch_loss = criterion(outs, targets)
         if training:
+            opt.zero_grad()
             batch_loss.backward()
             opt.step()
         losses.append(batch_loss.mean())
@@ -1263,7 +1269,7 @@ sketched_params = {
     "dampening": 0,
     "batch_size": args.batch_size,
 }
-ray.init(num_gpus=7)
+ray.init(num_gpus=7, redis_password="sketched_sgd")
 model_cls = Net
 model_config = {}
 if args.test:
