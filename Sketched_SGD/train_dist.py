@@ -23,7 +23,7 @@ from torch.utils.data.dataset import Dataset
 import itertools as it
 import copy
 
-from minimal import Net, cifar10, Correct, \
+from minimal import Net, cifar10, Correct, union, \
         Timer, TableLogger, normalise, pad, transpose, \
         Crop, FlipLR, Cutout, Transform, Batches, TSVLogger
 
@@ -71,7 +71,7 @@ def run_batches(model, opt, criterion, accuracy, loader, training):
             batch_loss.backward()
             opt.step()
         losses.append(batch_loss.mean())
-        batch_acc = accuracy(*ray.get(outs), targets).float().mean().cpu().numpy()
+        batch_acc = accuracy(torch.cat(ray.get(outs), dim=0), targets).float().mean().cpu().numpy()
         accs.append(batch_acc)
     return losses, accs
 
