@@ -283,6 +283,7 @@ parser.add_argument("--epochs_per_iter", type=int, default=1)
 parser.add_argument("--optimizer", type=str, default="SGD")
 parser.add_argument("--criterion", type=str, default="CrossEntropyLoss")
 parser.add_argument("--iterations", type=int, default=1)
+parser.add_argument("--test", type=bool, default=False)
 args = parser.parse_args()
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -329,9 +330,11 @@ sketched_params = {
 }
 ray.init(num_gpus=7)
 model_cls = Net
-model_config = {
+model_config = {}
+if args.test:
+    model_config = {
         'channels': {'prep': 1, 'layer1': 1, 'layer2': 1, 'layer3': 1},
-}
+    }
 workers = [SketchedWorker.remote(sketched_params) for _ in range(args.num_workers)]
 sketched_model = SketchedModel(model_cls, model_config, workers)
 opt = optim.SGD(sketched_model.parameters(), lr=1)
