@@ -9,6 +9,7 @@ from minimal import Net, cifar10, Correct, union, PiecewiseLinear, \
 
 from fed_data_utils import *
 
+
 @ray.remote(num_gpus=1.0, num_cpus=2.0)
 class SketchFedServer(object):
     def __init__(self, kwargs):
