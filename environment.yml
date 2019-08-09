@@ -9,6 +9,6 @@ dependencies:
   - numpy=1.15.1
   - torchvision=0.2.1
   - pip:
-    - torch==1.0
+    - torch==1.1
     - ray
     - track-ml

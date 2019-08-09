@@ -23,7 +23,7 @@ from torch.utils.data.dataset import Dataset
 import itertools as it
 import copy
 
-from minimal import Net, cifar10, Correct, union, \
+from minimal import Net, cifar10, Correct, union, PiecewiseLinear, \
         Timer, TableLogger, normalise, pad, transpose, \
         Crop, FlipLR, Cutout, Transform, Batches, TSVLogger
 
@@ -33,62 +33,61 @@ DATA_PATH = 'sample_data'
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6"
 
 def train(model, opt, scheduler, criterion, accuracy, 
-    train_loader, val_loader, epochs, loggers=(), timer=None):
+    train_loader, val_loader, epochs, batch_size, loggers=(), timer=None):
     timer = timer or Timer()
-    scheduler.step()
     for epoch in range(args.epochs):
-        scheduler.step()
-        train_losses, train_accs = run_batches(model, opt, 
+        train_loss, train_acc = run_batches(model, opt, scheduler, 
             criterion, accuracy, train_loader, True)
         train_time = timer()
-        val_losses, val_accs = run_batches(model, None, 
+        val_loss, val_acc = run_batches(model, None, scheduler,
             criterion, accuracy, val_loader, False)
         val_time = timer()
         epoch_stats = {
             'train_time': train_time,
-            'train_loss': np.mean(train_losses),
-            'train_acc': np.mean(train_accs),
+            'train_loss': train_loss,
+            'train_acc': train_acc,
             'test_time': val_time,
-            'test_loss': np.mean(val_losses),
-            'test_acc': np.mean(val_accs),
+            'test_loss': val_loss,
+            'test_acc': val_acc,
             'total_time': timer.total_time,
         }
-        summary = union({'epoch': epoch+1, 'lr': scheduler.get_lr()[0]}, epoch_stats)
+        summary = union({'epoch': epoch+1, 'lr': scheduler.get_lr()[0]*batch_size}, epoch_stats)
         for logger in loggers:
             logger.append(summary)
     return summary
 
-def run_batches(model, opt, criterion, accuracy, loader, training):
+def run_batches(model, opt, scheduler, criterion, accuracy, loader, training):
     losses = []
     accs = []
     for idx, batch in enumerate(loader):
-        inputs = batch["input"]
-        targets = batch["target"]
+        inputs = batch["input"].to(device)
+        targets = batch["target"].to(device)
         outs = model(inputs)
         batch_loss = criterion(outs, targets)
         if training:
             opt.zero_grad()
+            #batch_loss.sum().backward()
             batch_loss.backward()
+            scheduler.step()
             opt.step()
+        #losses.append(batch_loss.detach().mean().cpu().numpy())
         losses.append(batch_loss.mean())
+        #batch_acc = accuracy(outs, targets).float().mean().cpu().numpy()
         batch_acc = accuracy(torch.cat(ray.get(outs), dim=0), targets).float().mean().cpu().numpy()
         accs.append(batch_acc)
-    return losses, accs
+    return np.mean(losses), np.mean(accs)
 
 import argparse
 parser = argparse.ArgumentParser()
-parser.add_argument("--sketched", action="store_true")
-parser.add_argument("--sketch_biases", action="store_true")
-parser.add_argument("--sketch_params_larger_than", action="store_true")
 parser.add_argument("-k", type=int, default=50000)
 parser.add_argument("--p2", type=int, default=1)
 parser.add_argument("--cols", type=int, default=500000)
 parser.add_argument("--rows", type=int, default=5)
 parser.add_argument("--num_workers", type=int, default=1)
-parser.add_argument("--num_blocks", type=int, default=2)
+parser.add_argument("--num_blocks", type=int, default=1)
 parser.add_argument("--batch_size", type=int, default=512)
 parser.add_argument("--nesterov", type=bool, default=False)
-parser.add_argument("--momentum", type=float, default=0.0)
+parser.add_argument("--momentum", type=float, default=0.9)
 parser.add_argument("--epochs", type=int, default=24)
 parser.add_argument("--epochs_per_iter", type=int, default=1)
 parser.add_argument("--optimizer", type=str, default="SGD")
@@ -134,7 +133,7 @@ sketched_params = {
     "momentum": args.momentum,
     "optimizer" : args.optimizer,
     "criterion": args.criterion,
-    "weight_decay": 5e-4*args.batch_size/args.num_workers,
+    "weight_decay": 5e-4*args.batch_size,
     "nesterov": args.nesterov,
     "dampening": 0,
     "batch_size": args.batch_size,
@@ -147,13 +146,29 @@ if args.test:
         'channels': {'prep': 1, 'layer1': 1, 'layer2': 1, 'layer3': 1},
     }
 workers = [SketchedWorker.remote(sketched_params) for _ in range(args.num_workers)]
-sketched_model = SketchedModel(model_cls, model_config, workers)
-opt = optim.SGD(sketched_model.parameters(), lr=1)
-sketched_opt = SketchedOptimizer(opt, workers)
+model = SketchedModel(model_cls, model_config, workers)
+opt = optim.SGD(model.parameters(), lr=1)
+opt = SketchedOptimizer(opt, workers)
 criterion = torch.nn.CrossEntropyLoss(reduction='none')
-sketched_criterion = SketchedLoss(criterion, workers)
+criterion = SketchedLoss(criterion, workers)
 accuracy = Correct().to(device)
-lambda_step = lambda t: np.interp([t], [0, 5, args.epochs+1], [0, 0.4, 0])[0]
-scheduler = optim.lr_scheduler.LambdaLR(sketched_opt, lr_lambda=[lambda_step])
-train(sketched_model, sketched_opt, scheduler, sketched_criterion, accuracy,
-    train_loader, val_loader, args.epochs, loggers=(TableLogger(), TSVLogger()), timer=timer)
+#lambda_step = lambda t: np.interp([t/len(train_loader)], [0, 5, args.epochs], [0, 0.4, 0])[0]/args.batch_size
+lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
+lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
+#scheduler = optim.lr_scheduler.LambdaLR(sketched_opt, lr_lambda=[lambda_step])
+class FakeSched(object):
+    def __init__(self):
+        self.x = 0
+    def step(self):
+        self.x += 1
+    def get_lr(self):
+        return [self.x]
+#scheduler = FakeSched()
+#train(sketched_model, sketched_opt, scheduler, sketched_criterion, accuracy,
+#    train_loader, val_loader, args.epochs, loggers=(TableLogger(), TSVLogger()), timer=timer)
+#model = model_cls(**model_config).to(device)
+#opt = optim.SGD(model.parameters(), lr=1)
+scheduler = optim.lr_scheduler.LambdaLR(opt, lr_lambda=[lambda_step])
+#scheduler = FakeSched()
+train(model, opt, scheduler, criterion, accuracy, train_loader, val_loader, args.epochs, args.batch_size,
+        loggers=(TableLogger(), TSVLogger()), timer=timer)

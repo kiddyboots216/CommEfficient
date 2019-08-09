@@ -96,7 +96,7 @@ class SketchedOptimizer(optim.Optimizer):
     def __getattr__(self, name):
         if name=="param_groups":
             param_groups = ray.get(self.head_worker.get_param_groups.remote())
-            print(f"Param groups are {param_groups}")
+            #print(f"Param groups are {param_groups}")
             return [SketchedParamGroup(param_group, self.workers, idx) for idx, param_group in enumerate(param_groups)]
 
 class SketchedParamGroup(object):
@@ -142,8 +142,8 @@ class SketchedWorker(object):
             sketch_biases, sketch_params_larger_than):
         rand_state = torch.random.get_rng_state()
         torch.random.manual_seed(42)
-        torch.random.set_rng_state(rand_state)
         model = model_cls(**model_config)
+        torch.random.set_rng_state(rand_state)
         for p in model.parameters():
             p.do_sketching = p.numel() >= sketch_params_larger_than
         # override bias terms with whatever sketchBiases is
@@ -184,7 +184,7 @@ class SketchedWorker(object):
         try:
             return [{'initial_lr': group['initial_lr'], 'lr': group['lr']} for group in self.param_groups]
         except Exception as e:
-            print(f"Exception is {e}")
+            #print(f"Exception is {e}")
             return [{'lr': group['lr']} for group in self.param_groups]
     
     def loss_call(self, *args):
@@ -239,13 +239,15 @@ class SketchedWorker(object):
         self._zero_grad()
 
     def compute_grad(self):
-        assert self._getLRVec() != 0.0, "invalid lr"
+        #assert self._getLRVec() != 0.0, "invalid lr"
         # compute grad 
         gradVec = self._getGradVec()
+        #return gradVec
         # weight decay
         if self.weight_decay != 0:
             gradVec.add_(self.weight_decay/self.num_workers, self._getParamVec())
         if self.nesterov:
+            #import pdb; pdb.set_trace()
             self.u.add_(gradVec).mul_(self.momentum)
             self.v.add_(self.u).add_(gradVec)
         else:
@@ -263,7 +265,11 @@ class SketchedWorker(object):
 
     def all_reduce_sketched(self, *grads):
         # compute update
+        """
         grads = [grad.to(self.device) for grad in grads]
+        self._apply_update(torch.mean(torch.stack(grads), dim=0))
+        return
+        """
         self.sketch.zero()
         for grad in grads:
             self.sketch += grad[self.sketch_mask]
@@ -279,6 +285,7 @@ class SketchedWorker(object):
             torch.stack(
                 [grad[~self.sketch_mask] for grad in grads]), dim=0)
         self._apply_update(weight_update)
+        #"""
 
     def _topk(self, vec, k):
         """ Return the largest k elements (by magnitude) of vec"""
@@ -295,13 +302,14 @@ class SketchedWorker(object):
         self.v[~self.sketch_mask] = 0
         #self.sync(weightUpdate * self._getLRVec())
         weight_update = update * self._getLRVec()
+        #import pdb; pdb.set_trace()
         weight_update = weight_update.to(self.device)
         start = 0
         for param_group in self.param_groups:
             for p in param_group['params']:
                 end = start + torch.numel(p)
                 # we previously had diff_vec = copy - (copy - grad) = grad, so subtract here 
-                p.data -= weight_update[start:end].reshape(p.data.shape)
+                p.data.add_(-weight_update[start:end].reshape(p.data.shape))
                 start = end
         #import pdb; pdb.set_trace()
         # self._setGradVec(weight_update)
@@ -357,10 +365,8 @@ class SketchedWorker(object):
                         gradVec.append(torch.zeros_like(p.data.view(-1)))
                     else:
                         gradVec.append(p.grad.data.view(-1).float())
-
             # concat into a single vector
             gradVec = torch.cat(gradVec).to(self.device)
-
         return gradVec
     
     def _getParamVec(self):
@@ -370,6 +376,7 @@ class SketchedWorker(object):
             for p in group["params"]:
                 d.append(p.data.view(-1).float())
         return torch.cat(d).to(self.device)
+
     def _zero_grad(self):
         """Zero out param grads"""
         """Update params w gradient"""
@@ -383,17 +390,16 @@ class SketchedWorker(object):
                 i += 1
                 if p.grad is None:
                     continue
-
                 assert(size == torch.numel(p))
                 p.grad.data.zero_()
                 startPos += size
+
     def _setGradVec(self, vec):
         """Update params w gradient"""
         vec = vec.to(self.device)
         gradShapes, gradSizes = self._getGradShapes()
         startPos = 0
         i = 0
-#         print(vec.mean())
         for group in self.param_groups:
             for p in group["params"]:
                 shape = gradShapes[i]
@@ -401,11 +407,11 @@ class SketchedWorker(object):
                 i += 1
                 if p.grad is None:
                     continue
-
                 assert(size == torch.numel(p))
                 p.grad.data.zero_()
                 p.grad.data.add_(vec[startPos:startPos + size].reshape(shape))
                 startPos += size
+
     def sync(self, vec):
         """Set params"""
         gradShapes, gradSizes = self._getGradShapes()
@@ -419,6 +425,7 @@ class SketchedWorker(object):
                 assert(size == torch.numel(p))
                 p.data = vec[startPos:startPos + size].reshape(shape)
                 startPos += size
+
     def _updateParamsWithGradVec(self):
         """Update parameters with the gradient"""
         #import pdb; pdb.set_trace()
