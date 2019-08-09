@@ -179,7 +179,6 @@ class FedSketchWorker(object):
         self.sketch.zero()
         for diff_vec in diff_vecs:
             self.sketch += diff_vec[self.sketch_mask]
-            #/len(diff_vecs)
         candidate_top_k = self.sketch.unSketch(k=self.p2*self.k)
         candidate_hh_coords = candidate_top_k.nonzero()
         hhs = [diff_vec[candidate_hh_coords] for diff_vec in diff_vecs]
@@ -397,7 +396,7 @@ kwargs = {
     "metrics": ['loss', 'acc'],
     "batch_size": args.batch_size,
 }
-ray.init(num_gpus=8)
+ray.init(num_gpus=7, redis_password="sketched_sgd")
 workers = [FedSketchWorker.remote(train_sets[worker_index], test_sets[worker_index], train_transforms, worker_index, kwargs) for worker_index in range(args.num_workers)]
 #ps = SketchFedServer.remote(kwargs)
 ps = "bleh"

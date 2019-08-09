@@ -1510,6 +1510,7 @@ def train(ps, workers, train_batches, test_batches, epochs, minibatch_size,
         for logger in loggers:
             logger.append(summary)
     return summary
+    
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
