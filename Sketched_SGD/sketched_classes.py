@@ -97,7 +97,18 @@ class SketchedOptimizer(optim.Optimizer):
         if name=="param_groups":
             param_groups = ray.get(self.head_worker.get_param_groups.remote())
             #print(f"Param groups are {param_groups}")
-            return [SketchedParamGroup(param_group, self.workers, idx) for idx, param_group in enumerate(param_groups)]
+            return [SketchedParamGroup(param_group, self.workers, idx
+                ) for idx, param_group in enumerate(param_groups)]
+
+class FedSketchedOptimizer(SketchedOptimizer):
+    def __init__(self, optimizer, workers, fed_params):
+        self.updates_per_iter = fed_params['updates_per_iter']
+        super().__init__(optimizer, workers)
+
+    def step(self):
+        for i in range(self.updates_per_iter):
+            ray.wait([worker.local_step() for worker in self.workers])
+        
 
 class SketchedParamGroup(object):
     def __init__(self, param_group, workers, index):

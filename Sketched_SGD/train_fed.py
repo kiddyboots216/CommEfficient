@@ -3,7 +3,11 @@ import torch.nn as nn
 import torch.optim as optim
 import copy
 
-from minimal import *
+from minimal import Net, cifar10, Correct, union, PiecewiseLinear, \
+        Timer, TableLogger, normalise, pad, transpose, \
+        Crop, FlipLR, Cutout, Transform, Batches, TSVLogger
+
+from fed_data_utils import *
 
 @ray.remote(num_gpus=1.0, num_cpus=2.0)
 class SketchFedServer(object):

@@ -98,29 +98,33 @@ args = parser.parse_args()
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-print('Downloading datasets')
-DATA_DIR = "sample_data"
-dataset = cifar10(DATA_DIR)
+# print('Downloading datasets')
+# DATA_DIR = "sample_data"
+# dataset = cifar10(DATA_DIR)
 
-train_transforms = [Crop(32, 32), FlipLR(), Cutout(8, 8)]
-print('Starting timer')
-timer = Timer()
+# train_transforms = [Crop(32, 32), FlipLR(), Cutout(8, 8)]
+# print('Starting timer')
+# timer = Timer()
 
-print('Preprocessing training data')
-train_set = list(zip(
-        transpose(normalise(pad(dataset['train']['data'], 4))),
-        dataset['train']['labels']))
-print('Finished in {:.2f} seconds'.format(timer()))
-print('Preprocessing test data')
-test_set = list(zip(transpose(normalise(dataset['test']['data'])),
-                    dataset['test']['labels']))
-print('Finished in {:.2f} seconds'.format(timer()))
+# print('Preprocessing training data')
+# train_set = list(zip(
+#         transpose(normalise(pad(dataset['train']['data'], 4))),
+#         dataset['train']['labels']))
+# print('Finished in {:.2f} seconds'.format(timer()))
+# print('Preprocessing test data')
+# test_set = list(zip(transpose(normalise(dataset['test']['data'])),
+#                     dataset['test']['labels']))
+# print('Finished in {:.2f} seconds'.format(timer()))
 
-train_loader = Batches(Transform(train_set, train_transforms),
-                        args.batch_size, shuffle=True,
-                        set_random_choices=True, drop_last=True)
-val_loader = Batches(test_set, args.batch_size, shuffle=False,
-                       drop_last=False)
+# train_loader = Batches(Transform(train_set, train_transforms),
+#                         args.batch_size, shuffle=True,
+#                         set_random_choices=True, drop_last=True)
+# val_loader = Batches(test_set, args.batch_size, shuffle=False,
+#                        drop_last=False)
+
+from fed_data_utils import *
+
+client_loaders, train_loader, val_loader, stats = get_data_loaders(hp_default, verbose=True)
 
 sketched_params = {
     "k": args.k,
