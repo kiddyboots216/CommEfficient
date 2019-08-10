@@ -3,12 +3,14 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
+import numpy as np
+
 from minimal import CSVec
 
 class SketchedModel:
     def __init__(self, model_cls, model_config, workers, 
                 sketch_biases=False, sketch_params_larger_than=0):
-        self.workers = workers
+        self.workers = np.array(workers)
         self.model = model_cls(**model_config)
         [worker.set_model.remote(model_cls, model_config, 
             sketch_biases, sketch_params_larger_than) for worker in self.workers]
@@ -35,7 +37,7 @@ class SketchedModel:
 
 class SketchedLoss(object):
     def __init__(self, criterion, workers):
-        self.workers = workers
+        self.workers = np.array(workers)
         [worker.set_loss.remote(criterion) for worker in self.workers]
 
     def __call__(self, *args, **kwargs):
@@ -84,7 +86,7 @@ class SketchedOptimizer(optim.Optimizer):
         Takes in an already-initialized optimizer and list of workers (object IDs).
         Gives the workers the optimizers and then wraps optimizer methods. 
         """
-        self.workers = workers
+        self.workers = np.array(workers)
         self.head_worker = self.workers[0]
         # self.param_groups = optimizer.param_groups
         ray.wait([worker.set_optimizer.remote(optimizer) for worker in self.workers])
@@ -203,7 +205,7 @@ class SketchedWorker(object):
     def loss_backward(self):
         #import pdb; pdb.set_trace()
         self.loss.sum().backward()
-        del self.outs
+        #del self.outs
 
     def set_optimizer(self, opt):
         assert self.model is not None, "model must be already initialized"
@@ -450,44 +452,47 @@ class FedSketchedModel(SketchedModel):
                 sketch_biases=False, sketch_params_larger_than=0):
         self.participation = fed_params["participation_rate"]
         self.rounds = []
-        self.head_worker = workers[0]
         super().__init__(model_cls, model_config, workers, 
                 sketch_biases, sketch_params_larger_than)
 
-    def train(training):
+    def train(self, training):
         self.training = training
 
+    def set_head(self, head_worker):
+        self.head_worker = head_worker
+
     def __call__(self, *args, **kwargs):
-        if training:
+        if self.training:
             num_workers = len(self.workers)
-            idx = np.random.choice(np.arange(num_workers), self.participation, replace=False)
+            idx = np.random.choice(np.arange(num_workers), int(num_workers * self.participation), replace=False)
             participating_clients = self.workers[idx]
             client_loaders = args[0]
-            participating_client_loaders = client_loaders[idx]
+            participating_client_loaders = np.array(client_loaders)[idx]
             self.rounds.append(idx)
             # pass both inputs and targets to the worker; worker will save targets temporarily
             return [client.model_call.remote(next(iter(loader))) for client, loader in list(zip(
                 participating_clients, participating_client_loaders))]
         else:
-            return self.head_worker.model_call.remote(args[0])
+            return self.workers[0].model_call.remote(args[0])
 
     def __setattr__(self, name, value):
-        if name in ["model", "workers", "participation", "rounds", "head_worker"]:
+        if name in ["model", "workers", "participation", "rounds", "head_worker", "training"]:
             self.__dict__[name] = value
         else:
             [worker.model_setattr.remote(name, value) for worker in self.workers]
 
 class FedSketchedOptimizer(SketchedOptimizer):
     def __init__(self, optimizer, workers, fed_model):
-        self.model = fed_model
         super().__init__(optimizer, workers)
+        self.model = fed_model
 
     def step(self):
         train_workers = self._get_workers()
-        update_workers = train_workers.append(self.head_worker)
+        update_workers = np.append(train_workers, self.workers[0])
         self._step(train_workers, update_workers)
-        [worker.cpu.remote() for worker in self.workers]
 
+    def set_head(self, head_worker):
+        self.head_worker = head_worker
     def zero_grad(self):
         self._zero_grad(self._get_workers())
 
@@ -501,13 +506,15 @@ class FedSketchedLoss(SketchedLoss):
         self.model = fed_model
         super().__init__(criterion, workers)
 
+    def set_head(self, head_worker):
+        self.head_worker = head_worker
     def __call__(self, *args, **kwargs):
         if len(kwargs) > 0:
             print("Kwargs aren't supported by Ray")
             return
         if len(args) == 2:
-            results = self.model.head_worker.remote(args[0], args[1])
-            result = SketchedLossResult(results, [self.model.head_worker])
+            results = ray.get(self.workers[0].loss_call.remote(*args))
+            result = SketchedLossResult(results, [self.workers[0]])
             return result
         else:
             participating_clients = self._get_workers()
@@ -549,7 +556,7 @@ class FedSketchedWorker(object):
             sketch_biases, sketch_params_larger_than):
         rand_state = torch.random.get_rng_state()
         torch.random.manual_seed(42)
-        model = model_cls(**model_config)
+        model = model_cls(**model_config).to(self.device)
         torch.random.set_rng_state(rand_state)
         for p in model.parameters():
             p.do_sketching = p.numel() >= sketch_params_larger_than
@@ -558,21 +565,26 @@ class FedSketchedWorker(object):
             if isinstance(m, torch.nn.Linear):
                 if m.bias is not None:
                     m.bias.do_sketching = sketch_biases
-        self.model = self.model.to("cpu")
+        #self.model = model.to("cpu")
 
     def set_loss(self, criterion):
         self.criterion = criterion.to(self.device)
 
     def model_call(self, *args):
-        self.cuda()
+        args = args[0]
+        #self.cuda()
         args = [arg.to(self.device) for arg in args]
         self.outs = self.model(args[0])
         self.targets = args[1]
         return self.outs
 
     def loss_call(self, *args):
-        self.loss = self.criterion(self.outs, self.targets)
-        del self.targets
+        #import pdb; pdb.set_trace()
+        if len(args) == 2:
+            self.loss = self.criterion(args[0], args[1])
+        else:
+            self.loss = self.criterion(self.outs, self.targets)
+        #del self.targets
         return self.loss
 
     def model_getattr(self, name):
@@ -603,7 +615,7 @@ class FedSketchedWorker(object):
     def loss_backward(self):
         #import pdb; pdb.set_trace()
         self.loss.sum().backward()
-        del self.outs
+        #del self.outs
 
     def set_optimizer(self, opt):
         assert self.model is not None, "model must be already initialized"
@@ -650,7 +662,7 @@ class FedSketchedWorker(object):
     def compute_grad(self):
         #assert self._getLRVec() != 0.0, "invalid lr"
         # compute grad 
-        gradVec = self._getGradVec()
+        gradVec = self._getGradVec().cuda()
         #return gradVec
         # weight decay
         if self.weight_decay != 0:
@@ -694,7 +706,7 @@ class FedSketchedWorker(object):
             torch.stack(
                 [grad[~self.sketch_mask] for grad in grads]), dim=0)
         self._apply_update(weight_update)
-        self.cpu()
+        #self.cpu()
         #"""
 
     def _topk(self, vec, k):
@@ -846,15 +858,16 @@ class FedSketchedWorker(object):
                 p.data.add_(-p.grad.data)
 
     def cpu(self):
-        self.model.cpu()
-        self.u.cpu()
-        self.v.cpu()
-        self.sketch.cpu()
-        self.sketch_mask.cpu()
+        self.model = self.model.cpu()
+        self.u = self.u.cpu()
+        self.v = self.v.cpu()
+        self.sketch = self.sketch.cpu()
+        self.sketch_mask = self.sketch_mask.cpu()
 
     def cuda(self):
-        self.model.cuda()
-        self.u.cuda()
-        self.v.cuda()
-        self.sketch.cuda()
-        self.sketch_mask.cuda()
+        #import pdb; pdb.set_trace()
+        self.model = self.model.cuda()
+        self.u = self.u.cuda()
+        self.v = self.v.cuda()
+        self.sketch = self.sketch.cuda()
+        self.sketch_mask = self.sketch_mask.cuda()

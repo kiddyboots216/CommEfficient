@@ -169,7 +169,10 @@ class CSVec(object):
 
     def zero(self):
         self.table.zero_()
-
+    def cpu(self):
+        self.table = self.table.cpu()
+    def cuda(self):
+        self.table = self.table.cuda()
     def __deepcopy__(self, memodict={}):
         # don't initialize new CSVec, since that will calculate bc,
         # which is slow, even though we can just copy it over

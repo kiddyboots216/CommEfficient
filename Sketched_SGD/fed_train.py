@@ -97,12 +97,13 @@ def run_fed_batches(model, opt, scheduler, criterion, accuracy, loaders, trainin
             opt.step()
             #losses.append(batch_loss.detach().mean().cpu().numpy())
             losses.append(batch_loss.mean())
+            # TODO: Fix train acc calculation
             #batch_acc = accuracy(outs, targets).float().mean().cpu().numpy()
-            batch_acc = accuracy(torch.cat(ray.get(outs), dim=0), 
-                    targets).float().mean().cpu().numpy()
-            accs.append(batch_acc)
+            #batch_acc = accuracy(torch.cat(ray.get(outs), dim=0), 
+            #        targets).float().mean().cpu().numpy()
+            #accs.append(batch_acc)
     else:
-        for idx, batch in loaders:
+        for idx, batch in enumerate(loaders):
             inputs, targets = batch
             outs = model(inputs)
             batch_loss = criterion(outs, targets)
@@ -121,11 +122,11 @@ parser.add_argument("-rows", type=int, default=5)
 parser.add_argument("-num_workers", type=int, default=1)
 parser.add_argument("-num_blocks", type=int, default=1)
 parser.add_argument("-batch_size", type=int, default=512)
-parser.add_argument("-nesterov", type=bool, default=False)
+parser.add_argument("-nesterov", action="store_true")
 parser.add_argument("-momentum", type=float, default=0.9)
 parser.add_argument("-epochs", type=int, default=24)
-parser.add_argument("-test", type=bool, default=False)
-parser.add_argument("-fed", type=bool, default=False)
+parser.add_argument("-test", action="store_true")
+parser.add_argument("-fed", action="store_true")
 parser.add_argument("-clients", type=int, default=1)
 parser.add_argument("-rate", type=float, default=1.0)
 
@@ -139,7 +140,7 @@ if args.fed:
     hp_default["n_clients"] = args.clients
     DATA_LEN = 50000
     hp_default["batch_size"] = int(DATA_LEN/hp_default["n_clients"])
-    client_loaders, train_loader, val_loader, stats = get_data_loaders(hp_default, verbose=True)
+    train_loader, central_train_loader, val_loader, stats = get_data_loaders(hp_default, verbose=True)
     fed_params = hp_default
 else:
     print('Downloading datasets')
@@ -188,6 +189,8 @@ if args.test:
     model_config = {
         'channels': {'prep': 1, 'layer1': 1, 'layer2': 1, 'layer3': 1},
     }
+lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
+lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
 if args.fed:
     workers = [FedSketchedWorker.remote(sketched_params) for _ in range(args.num_workers)]
     model = FedSketchedModel(model_cls, model_config, workers, fed_params)
@@ -195,6 +198,8 @@ if args.fed:
     opt = FedSketchedOptimizer(opt, workers, model)
     criterion = torch.nn.CrossEntropyLoss(reduction='none')
     criterion = FedSketchedLoss(criterion, workers, model)
+    scheduler = optim.lr_scheduler.LambdaLR(opt, lr_lambda=[lambda_step])
+    accuracy = Correct().to(device)
 else:
     workers = [SketchedWorker.remote(sketched_params) for _ in range(args.num_workers)]
     model = SketchedModel(model_cls, model_config, workers)
@@ -202,9 +207,9 @@ else:
     opt = SketchedOptimizer(opt, workers)
     criterion = torch.nn.CrossEntropyLoss(reduction='none')
     criterion = SketchedLoss(criterion, workers)
+    scheduler = optim.lr_scheduler.LambdaLR(opt, lr_lambda=[lambda_step])
+    accuracy = Correct().to(device)
 #lambda_step = lambda t: np.interp([t/len(train_loader)], [0, 5, args.epochs], [0, 0.4, 0])[0]/args.batch_size
-lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
-lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
 #scheduler = optim.lr_scheduler.LambdaLR(sketched_opt, lr_lambda=[lambda_step])
 class FakeSched(object):
     def __init__(self):
@@ -218,7 +223,6 @@ class FakeSched(object):
 #    train_loader, val_loader, args.epochs, loggers=(TableLogger(), TSVLogger()), timer=timer)
 #model = model_cls(**model_config).to(device)
 #opt = optim.SGD(model.parameters(), lr=1)
-scheduler = optim.lr_scheduler.LambdaLR(opt, lr_lambda=[lambda_step])
 #scheduler = FakeSched()
 print('Finished in {:.2f} seconds'.format(timer()))
 train(model, opt, scheduler, criterion, accuracy, train_loader, val_loader, args.epochs, args.batch_size,
