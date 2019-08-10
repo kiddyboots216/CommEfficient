@@ -189,14 +189,19 @@ if args.test:
         'channels': {'prep': 1, 'layer1': 1, 'layer2': 1, 'layer3': 1},
     }
 if args.fed:
-
-workers = [SketchedWorker.remote(sketched_params) for _ in range(args.num_workers)]
-model = SketchedModel(model_cls, model_config, workers)
-opt = optim.SGD(model.parameters(), lr=1)
-opt = SketchedOptimizer(opt, workers)
-criterion = torch.nn.CrossEntropyLoss(reduction='none')
-criterion = SketchedLoss(criterion, workers)
-accuracy = Correct().to(device)
+    workers = [FedSketchedWorker.remote(sketched_params) for _ in range(args.num_workers)]
+    model = FedSketchedModel(model_cls, model_config, workers)
+    opt = optim.SGD(model.parameters(), lr=1)
+    opt = FedSketchedOptimizer(opt, workers, model)
+    criterion = torch.nn.CrossEntropyLoss(reduction='none')
+    criterion = FedSketchedLoss(criterion, workers, model)
+else:
+    workers = [SketchedWorker.remote(sketched_params) for _ in range(args.num_workers)]
+    model = SketchedModel(model_cls, model_config, workers)
+    opt = optim.SGD(model.parameters(), lr=1)
+    opt = SketchedOptimizer(opt, workers)
+    criterion = torch.nn.CrossEntropyLoss(reduction='none')
+    criterion = SketchedLoss(criterion, workers)
 #lambda_step = lambda t: np.interp([t/len(train_loader)], [0, 5, args.epochs], [0, 0.4, 0])[0]/args.batch_size
 lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
 lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
