@@ -92,13 +92,13 @@ class SketchedOptimizer(optim.Optimizer):
     def zero_grad(self):
         self._zero_grad(self.workers)
 
-    def _zero_grad(self, workers)
+    def _zero_grad(self, workers):
         [worker.optimizer_zero_grad.remote() for worker in workers]
 
     def step(self):
         self._step(self.workers, self.workers)
 
-    def _step(self, train_workers, update_workers)
+    def _step(self, train_workers, update_workers):
         grads = [worker.compute_grad.remote() for worker in train_workers]
         ray.wait([worker.all_reduce_sketched.remote(*grads) for worker in update_workers]) 
 
@@ -469,9 +469,9 @@ class FedSketchedModel(SketchedModel):
             participating_client_loaders = client_loaders[idx]
             self.rounds.append(idx)
             # pass both inputs and targets to the worker; worker will save targets temporarily
-            return [client.model_call.remote(next(iter(loader))) for client, loader
-             in list(zip(participating_clients, participating_client_loaders))]
-         else:
+            return [client.model_call.remote(next(iter(loader))) for client, loader in list(zip(
+                participating_clients, participating_client_loaders))]
+        else:
             return self.head_worker.model_call.remote(args[0])
 
 class FedSketchedOptimizer(SketchedOptimizer):

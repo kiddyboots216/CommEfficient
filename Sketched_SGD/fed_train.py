@@ -76,8 +76,8 @@ def run_batches(model, opt, scheduler, criterion, accuracy, loader, training, fe
         #losses.append(batch_loss.detach().mean().cpu().numpy())
         losses.append(batch_loss.mean())
         #batch_acc = accuracy(outs, targets).float().mean().cpu().numpy()
-        batch_acc = accuracy(torch.cat(ray.get(outs), dim=0), targets)
-                    .float().mean().cpu().numpy()
+        batch_acc = accuracy(torch.cat(ray.get(outs), dim=0), 
+                targets).float().mean().cpu().numpy()
         accs.append(batch_acc)
     return np.mean(losses), np.mean(accs)
 
@@ -98,8 +98,8 @@ def run_fed_batches(model, opt, scheduler, criterion, accuracy, loaders, trainin
             #losses.append(batch_loss.detach().mean().cpu().numpy())
             losses.append(batch_loss.mean())
             #batch_acc = accuracy(outs, targets).float().mean().cpu().numpy()
-            batch_acc = accuracy(torch.cat(ray.get(outs), dim=0), targets)
-                        .float().mean().cpu().numpy()
+            batch_acc = accuracy(torch.cat(ray.get(outs), dim=0), 
+                    targets).float().mean().cpu().numpy()
             accs.append(batch_acc)
     else:
         for idx, batch in loaders:
@@ -107,8 +107,8 @@ def run_fed_batches(model, opt, scheduler, criterion, accuracy, loaders, trainin
             outs = model(inputs)
             batch_loss = criterion(outs, targets)
             losses.append(batch_loss.mean())
-            batch_acc = accuracy(torch.cat(ray.get(outs), dim=0), targets)
-                        .float().mean().cpu().numpy()
+            batch_acc = accuracy(torch.cat(ray.get(outs), dim=0), 
+                    targets).float().mean().cpu().numpy()
             accs.append(batch_acc)
     return np.mean(losses), np.mean(accs)
 
@@ -130,17 +130,24 @@ parser.add_argument("-clients", type=int, default=1)
 parser.add_argument("-rate", type=float, default=1.0)
 
 args = parser.parse_args()
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-if args.augment:
+timer = Timer()
+if args.fed:
+    from data_utils import *
+    hp_default["participation_rate"] = args.rate
+    hp_default["n_clients"] = args.clients
+    DATA_LEN = 50000
+    hp_default["batch_size"] = int(DATA_LEN/hp_default["n_clients"])
+    client_loaders, train_loader, val_loader, stats = get_data_loaders(hp_default, verbose=True)
+    fed_params = hp_default
+else:
     print('Downloading datasets')
     DATA_DIR = "sample_data"
     dataset = cifar10(DATA_DIR)
 
     train_transforms = [Crop(32, 32), FlipLR(), Cutout(8, 8)]
     print('Starting timer')
-    timer = Timer()
 
     print('Preprocessing training data')
     train_set = list(zip(
@@ -158,15 +165,8 @@ if args.augment:
     val_loader = Batches(test_set, args.batch_size, shuffle=False,
                            drop_last=False)
     fed_params = None
-else:
-    from fed_data_utils import *
-    hp_default["participation_rate"] = args.rate
-    hp_default["n_clients"] = args.clients
-    DATA_LEN = 50000
-    hp_default["batch_size"] = int(DATA_LEN/hp_default["n_clients"])
-    client_loaders, train_loader, val_loader, stats = get_data_loaders(hp_default, verbose=True)
-    fed_params = hp_default
 
+print('Initializing everything')
 sketched_params = {
     "k": args.k,
     "p2": args.p2,
@@ -176,8 +176,6 @@ sketched_params = {
     "lr": 1,
     "num_workers": args.num_workers,
     "momentum": args.momentum,
-    "optimizer" : args.optimizer,
-    "criterion": args.criterion,
     "weight_decay": 5e-4*args.batch_size,
     "nesterov": args.nesterov,
     "dampening": 0,
@@ -190,6 +188,8 @@ if args.test:
     model_config = {
         'channels': {'prep': 1, 'layer1': 1, 'layer2': 1, 'layer3': 1},
     }
+if args.fed:
+
 workers = [SketchedWorker.remote(sketched_params) for _ in range(args.num_workers)]
 model = SketchedModel(model_cls, model_config, workers)
 opt = optim.SGD(model.parameters(), lr=1)
@@ -215,5 +215,6 @@ class FakeSched(object):
 #opt = optim.SGD(model.parameters(), lr=1)
 scheduler = optim.lr_scheduler.LambdaLR(opt, lr_lambda=[lambda_step])
 #scheduler = FakeSched()
+print('Finished in {:.2f} seconds'.format(timer()))
 train(model, opt, scheduler, criterion, accuracy, train_loader, val_loader, args.epochs, args.batch_size,
         loggers=(TableLogger(), TSVLogger()), timer=timer, fed_params=fed_params)

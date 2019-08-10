@@ -163,9 +163,6 @@ def get_data_loaders(hp, verbose=True):
         
         x_train, y_train, x_test, y_test = globals()['get_'+hp['dataset']]()
 
-        if verbose:
-                print_image_data_stats(x_train, y_train, x_test, y_test)
-
         transforms_train, transforms_eval = get_default_data_transforms(hp['dataset'], verbose=False)
 
         split = split_image_data(x_train, y_train, n_clients=hp['n_clients'], 
