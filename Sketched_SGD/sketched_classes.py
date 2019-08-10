@@ -449,9 +449,9 @@ class SketchedWorker(object):
 
 class FedSketchedModel(SketchedModel):
     def __init__(self, model_cls, model_config, workers,
-                participation, 
+                fed_params, 
                 sketch_biases=False, sketch_params_larger_than=0):
-        self.participation = participation
+        self.participation = fed_params["participation_rate"]
         self.rounds = []
         self.head_worker = workers[0]
         super().__init__(model_cls, model_config, workers, 
@@ -474,9 +474,15 @@ class FedSketchedModel(SketchedModel):
         else:
             return self.head_worker.model_call.remote(args[0])
 
+    def __setattr__(self, name, value):
+        if name in ["model", "workers", "participation", "rounds", "head_worker"]:
+            self.__dict__[name] = value
+        else:
+            [worker.model_setattr.remote(name, value) for worker in self.workers]
+
+
 class FedSketchedOptimizer(SketchedOptimizer):
-    def __init__(self, optimizer, workers, fed_params, fed_model):
-        self.updates_per_iter = fed_params['updates_per_iter']
+    def __init__(self, optimizer, workers, fed_model):
         self.model = fed_model
         super().__init__(optimizer, workers)
 
@@ -525,9 +531,9 @@ class FedSketchedLoss(SketchedLoss):
 
 # note: when using FedSketchedWorker, many more GPUs than are actually available must be specified
 @ray.remote(num_gpus=0.5)
-class FedSketchedWorker(object):
+class FedSketchedWorker(SketchedWorker):
     def __init__(self, args, sketch_params_larger_than=0, sketch_biases=False):
-        super().__init__(args, sketch_params_larger_than, sketch_biases)
+        super().__init__.remote(args, sketch_params_larger_than, sketch_biases)
 
     def set_model(self, model_cls, model_config, 
             sketch_biases, sketch_params_larger_than):

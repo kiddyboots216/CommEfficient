@@ -27,7 +27,7 @@ from minimal import Net, cifar10, Correct, union, PiecewiseLinear, \
         Timer, TableLogger, normalise, pad, transpose, \
         Crop, FlipLR, Cutout, Transform, Batches, TSVLogger
 
-from sketched_classes import SketchedModel, SketchedWorker, SketchedOptimizer, SketchedLoss
+from sketched_classes import *
 
 DATA_PATH = 'sample_data'
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6"
@@ -190,7 +190,7 @@ if args.test:
     }
 if args.fed:
     workers = [FedSketchedWorker.remote(sketched_params) for _ in range(args.num_workers)]
-    model = FedSketchedModel(model_cls, model_config, workers)
+    model = FedSketchedModel(model_cls, model_config, workers, fed_params)
     opt = optim.SGD(model.parameters(), lr=1)
     opt = FedSketchedOptimizer(opt, workers, model)
     criterion = torch.nn.CrossEntropyLoss(reduction='none')
