@@ -160,12 +160,13 @@ class FedSketchedWorker(object):
         #self.cuda()
         args = [arg.to(self.device) for arg in args]
         self.outs = self.model(args[0])
+        print(len(self.outs))
         self.targets = args[1]
         return self.outs
 
     def loss_call(self, *args):
-        #import pdb; pdb.set_trace()
-        print(len(self.outs), len(self.targets))
+        import pdb; pdb.set_trace()
+        #print(len(self.outs), len(self.targets))
         self.loss = self.criterion(self.outs, self.targets)
         #del self.targets
         return self.loss

@@ -52,7 +52,7 @@ class SketchedLoss(object):
             start = i * batch_size // num_workers
             end = (i+1) * batch_size // num_workers
             target_minibatches.append(args[1][start:end])
-        return self._loss(input_minibatches, target_minibatches, workers)
+        return self._loss(input_minibatches, target_minibatches, self.workers)
 
     def _loss(self, input_minibatches, target_minibatches, workers):
         results = torch.stack(
