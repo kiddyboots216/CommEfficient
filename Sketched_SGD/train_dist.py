@@ -32,15 +32,18 @@ from sketched_classes import SketchedModel, SketchedWorker, SketchedOptimizer, S
 DATA_PATH = 'sample_data'
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6"
 
-def train(model, opt, scheduler, criterion, accuracy, 
-    train_loader, val_loader, epochs, batch_size, loggers=(), timer=None):
+def train(model, opt, scheduler, criterion, accuracy, train_loader, val_loader, 
+    epochs, batch_size, loggers=(), timer=None, fed_params=None):
     timer = timer or Timer()
+    f = run_batches
+    if fed_params:
+        f = run_fed_batches
     for epoch in range(args.epochs):
-        train_loss, train_acc = run_batches(model, opt, scheduler, 
-            criterion, accuracy, train_loader, True)
+        train_loss, train_acc = f(model, opt, scheduler, 
+            criterion, accuracy, train_loader, True, fed_params)
         train_time = timer()
-        val_loss, val_acc = run_batches(model, None, scheduler,
-            criterion, accuracy, val_loader, False)
+        val_loss, val_acc = f(model, None, scheduler,
+            criterion, accuracy, val_loader, False, fed_params)
         val_time = timer()
         epoch_stats = {
             'train_time': train_time,
@@ -56,7 +59,7 @@ def train(model, opt, scheduler, criterion, accuracy,
             logger.append(summary)
     return summary
 
-def run_batches(model, opt, scheduler, criterion, accuracy, loader, training):
+def run_batches(model, opt, scheduler, criterion, accuracy, loader, training, fed_params):
     losses = []
     accs = []
     for idx, batch in enumerate(loader):
@@ -73,8 +76,40 @@ def run_batches(model, opt, scheduler, criterion, accuracy, loader, training):
         #losses.append(batch_loss.detach().mean().cpu().numpy())
         losses.append(batch_loss.mean())
         #batch_acc = accuracy(outs, targets).float().mean().cpu().numpy()
-        batch_acc = accuracy(torch.cat(ray.get(outs), dim=0), targets).float().mean().cpu().numpy()
+        batch_acc = accuracy(torch.cat(ray.get(outs), dim=0), targets)
+                    .float().mean().cpu().numpy()
         accs.append(batch_acc)
+    return np.mean(losses), np.mean(accs)
+
+def run_fed_batches(model, opt, scheduler, criterion, accuracy, loaders, training, fed_params):
+    participation = fed_params['participation_rate']
+    model.train(training)
+    losses = []
+    accs = []
+    if training:
+        for _ in range(int(1/participation)):
+            outs = model(loaders)
+            batch_loss = criterion()
+            opt.zero_grad()
+            #batch_loss.sum().backward()
+            batch_loss.backward()
+            scheduler.step()
+            opt.step()
+            #losses.append(batch_loss.detach().mean().cpu().numpy())
+            losses.append(batch_loss.mean())
+            #batch_acc = accuracy(outs, targets).float().mean().cpu().numpy()
+            batch_acc = accuracy(torch.cat(ray.get(outs), dim=0), targets)
+                        .float().mean().cpu().numpy()
+            accs.append(batch_acc)
+    else:
+        for idx, batch in loaders:
+            inputs, targets = batch
+            outs = model(inputs)
+            batch_loss = criterion(outs, targets)
+            losses.append(batch_loss.mean())
+            batch_acc = accuracy(torch.cat(ray.get(outs), dim=0), targets)
+                        .float().mean().cpu().numpy()
+            accs.append(batch_acc)
     return np.mean(losses), np.mean(accs)
 
 import argparse
@@ -94,37 +129,39 @@ parser.add_argument("--optimizer", type=str, default="SGD")
 parser.add_argument("--criterion", type=str, default="CrossEntropyLoss")
 parser.add_argument("--iterations", type=int, default=1)
 parser.add_argument("--test", type=bool, default=False)
+parser.add_argument("--augment", type=bool, default=True)
 args = parser.parse_args()
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# print('Downloading datasets')
-# DATA_DIR = "sample_data"
-# dataset = cifar10(DATA_DIR)
+if args.augment:
+    print('Downloading datasets')
+    DATA_DIR = "sample_data"
+    dataset = cifar10(DATA_DIR)
 
-# train_transforms = [Crop(32, 32), FlipLR(), Cutout(8, 8)]
-# print('Starting timer')
-# timer = Timer()
+    train_transforms = [Crop(32, 32), FlipLR(), Cutout(8, 8)]
+    print('Starting timer')
+    timer = Timer()
 
-# print('Preprocessing training data')
-# train_set = list(zip(
-#         transpose(normalise(pad(dataset['train']['data'], 4))),
-#         dataset['train']['labels']))
-# print('Finished in {:.2f} seconds'.format(timer()))
-# print('Preprocessing test data')
-# test_set = list(zip(transpose(normalise(dataset['test']['data'])),
-#                     dataset['test']['labels']))
-# print('Finished in {:.2f} seconds'.format(timer()))
+    print('Preprocessing training data')
+    train_set = list(zip(
+            transpose(normalise(pad(dataset['train']['data'], 4))),
+            dataset['train']['labels']))
+    print('Finished in {:.2f} seconds'.format(timer()))
+    print('Preprocessing test data')
+    test_set = list(zip(transpose(normalise(dataset['test']['data'])),
+                        dataset['test']['labels']))
+    print('Finished in {:.2f} seconds'.format(timer()))
 
-# train_loader = Batches(Transform(train_set, train_transforms),
-#                         args.batch_size, shuffle=True,
-#                         set_random_choices=True, drop_last=True)
-# val_loader = Batches(test_set, args.batch_size, shuffle=False,
-#                        drop_last=False)
+    train_loader = Batches(Transform(train_set, train_transforms),
+                            args.batch_size, shuffle=True,
+                            set_random_choices=True, drop_last=True)
+    val_loader = Batches(test_set, args.batch_size, shuffle=False,
+                           drop_last=False)
+else:
+    from fed_data_utils import *
 
-from fed_data_utils import *
-
-client_loaders, train_loader, val_loader, stats = get_data_loaders(hp_default, verbose=True)
+    client_loaders, train_loader, val_loader, stats = get_data_loaders(hp_default, verbose=True)
 
 sketched_params = {
     "k": args.k,

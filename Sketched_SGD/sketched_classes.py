@@ -50,14 +50,17 @@ class SketchedLoss(object):
             start = i * batch_size // num_workers
             end = (i+1) * batch_size // num_workers
             target_minibatches.append(args[1][start:end])
+        return self._loss(input_minibatches, target_minibatches, workers)
+
+    def _loss(self, input_minibatches, target_minibatches, workers):
         results = torch.stack(
              ray.get(
                  [worker.loss_call.remote(
                     input_minibatches[worker_id], target_minibatches[worker_id])
-                 for worker_id, worker in enumerate(self.workers)]
+                 for worker_id, worker in enumerate(workers)]
              ), 
              dim=0)
-        result = SketchedLossResult(results, self.workers)
+        result = SketchedLossResult(results, workers)
         return result
     
 class SketchedLossResult(object):
@@ -87,11 +90,17 @@ class SketchedOptimizer(optim.Optimizer):
         ray.wait([worker.set_optimizer.remote(optimizer) for worker in self.workers])
     
     def zero_grad(self):
-        [worker.optimizer_zero_grad.remote() for worker in self.workers]
+        self._zero_grad(self.workers)
+
+    def _zero_grad(self, workers)
+        [worker.optimizer_zero_grad.remote() for worker in workers]
 
     def step(self):
-        grads = [worker.compute_grad.remote() for worker in self.workers]
-        ray.wait([worker.all_reduce_sketched.remote(*grads) for worker in self.workers]) 
+        self._step(self.workers, self.workers)
+
+    def _step(self, train_workers, update_workers)
+        grads = [worker.compute_grad.remote() for worker in train_workers]
+        ray.wait([worker.all_reduce_sketched.remote(*grads) for worker in update_workers]) 
 
     def __getattr__(self, name):
         if name=="param_groups":
@@ -99,16 +108,6 @@ class SketchedOptimizer(optim.Optimizer):
             #print(f"Param groups are {param_groups}")
             return [SketchedParamGroup(param_group, self.workers, idx
                 ) for idx, param_group in enumerate(param_groups)]
-
-class FedSketchedOptimizer(SketchedOptimizer):
-    def __init__(self, optimizer, workers, fed_params):
-        self.updates_per_iter = fed_params['updates_per_iter']
-        super().__init__(optimizer, workers)
-
-    def step(self):
-        for i in range(self.updates_per_iter):
-            ray.wait([worker.local_step() for worker in self.workers])
-        
 
 class SketchedParamGroup(object):
     def __init__(self, param_group, workers, index):
@@ -206,6 +205,7 @@ class SketchedWorker(object):
     def loss_backward(self):
         #import pdb; pdb.set_trace()
         self.loss.sum().backward()
+        del self.outs
 
     def set_optimizer(self, opt):
         assert self.model is not None, "model must be already initialized"
@@ -445,3 +445,95 @@ class SketchedWorker(object):
                 if p.grad is None:
                     continue
                 p.data.add_(-p.grad.data)
+
+class FedSketchedModel(SketchedModel):
+    def __init__(self, model_cls, model_config, workers,
+                participation, 
+                sketch_biases=False, sketch_params_larger_than=0):
+        self.participation = participation
+        self.rounds = []
+        self.head_worker = workers[0]
+        super().__init__(model_cls, model_config, workers, 
+                sketch_biases, sketch_params_larger_than)
+
+    def train(training):
+        self.training = training
+
+    def __call__(self, *args, **kwargs):
+        if training:
+            num_workers = len(self.workers)
+            idx = np.random.choice(np.arange(num_workers), self.participation, replace=False)
+            participating_clients = self.workers[idx]
+            client_loaders = args[0]
+            participating_client_loaders = client_loaders[idx]
+            self.rounds.append(idx)
+            # pass both inputs and targets to the worker; worker will save targets temporarily
+            return [client.model_call.remote(next(loader)) for client, loader
+             in list(zip(participating_clients, participating_client_loaders))]
+         else:
+            return self.head_worker.model_call.remote(args[0])
+
+class FedSketchedOptimizer(SketchedOptimizer):
+    def __init__(self, optimizer, workers, fed_params, fed_model):
+        self.updates_per_iter = fed_params['updates_per_iter']
+        self.model = fed_model
+        super().__init__(optimizer, workers)
+
+    def step(self):
+        train_workers = self._get_workers()
+        update_workers = train_workers.append(self.head_worker)
+        self._step(train_workers, update_workers)
+
+    def zero_grad(self):
+        self._zero_grad(self._get_workers())
+
+    def _get_workers(self):
+        cur_round = self.model.rounds[-1]
+        participating_clients = self.workers[cur_round]
+        return participating_clients
+
+class FedSketchedLoss(SketchedLoss):
+    def __init__(self, criterion, workers, fed_model):
+        self.model = fed_model
+        super().__init__(criterion, workers)
+
+    def __call__(self, *args, **kwargs):
+        if len(kwargs) > 0:
+            print("Kwargs aren't supported by Ray")
+            return
+        if len(args) == 2:
+            results = self.model.head_worker.remote(args[0], args[1])
+            result = SketchedLossResult(results, [self.model.head_worker])
+            return result
+        else:
+            participating_clients = self._get_workers()
+            results = torch.stack(
+                 ray.get(
+                     [worker.loss_call.remote()
+                     for worker_id, worker in enumerate(participating_clients)]
+                 ), 
+                 dim=0)
+            result = SketchedLossResult(results, participating_clients)
+            return result
+
+    def _get_workers(self):
+        cur_round = self.model.rounds[-1]
+        participating_clients = self.workers[cur_round]
+        return participating_clients
+
+# note: when using FedSketchedWorker, many more GPUs than are actually available must be specified
+@ray.remote(num_gpus=0.5)
+class FedSketchedWorker(object):
+    def __init__(self, args, sketch_params_larger_than=0, sketch_biases=False):
+        super().__init__(args, sketch_params_larger_than, sketch_biases)
+
+    def model_call(self, *args):
+        args = [arg.to(self.device) for arg in args]
+        self.outs = self.model(args[0])
+        self.targets = args[1]
+        return self.outs
+
+    def loss_call(self, *args):
+        self.loss = self.criterion(self.outs, self.targets)
+        del self.targets
+        return self.loss
