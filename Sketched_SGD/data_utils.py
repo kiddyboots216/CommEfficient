@@ -167,11 +167,13 @@ def get_data_loaders(hp, verbose=True):
 
         split = split_image_data(x_train, y_train, n_clients=hp['n_clients'], 
                                         classes_per_client=hp['classes_per_client'], balancedness=hp['balancedness'], verbose=verbose)
-
-        client_loaders = [torch.utils.data.DataLoader(CustomImageDataset(x, y, transforms_train), 
-                          batch_size=hp['batch_size'], shuffle=True) for x, y in split]
-        train_loader = torch.utils.data.DataLoader(CustomImageDataset(x_train, y_train, transforms_eval), batch_size=100, shuffle=False)
-        test_loader  = torch.utils.data.DataLoader(CustomImageDataset(x_test, y_test, transforms_eval), batch_size=100, shuffle=False) 
+        datasets = [CustomImageDataset(x, y, transforms_train) for x, y in split]
+        client_loaders = [torch.utils.data.DataLoader(dataset, batch_size=len(dataset)) for dataset in datasets]
+        #import pdb; pdb.set_trace()
+        #client_loaders = [torch.utils.data.DataLoader(CustomImageDataset(x, y, transforms_train), 
+        #                  batch_size=hp['batch_size'], shuffle=True) for x, y in split]
+        train_loader = torch.utils.data.DataLoader(CustomImageDataset(x_train, y_train, transforms_eval), batch_size=512, shuffle=False)
+        test_loader  = torch.utils.data.DataLoader(CustomImageDataset(x_test, y_test, transforms_eval), batch_size=512, shuffle=False) 
 
         stats = {"split" : [x.shape[0] for x, y in split]}
 

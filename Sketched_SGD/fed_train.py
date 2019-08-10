@@ -106,11 +106,11 @@ def run_fed_batches(model, opt, scheduler, criterion, accuracy, loaders, trainin
     else:
         for idx, batch in enumerate(loaders):
             inputs, targets = batch
-            outs = model(inputs)
+            outs = model(inputs, targets)
             batch_loss = criterion(outs, targets)
             losses.append(batch_loss.mean())
-            batch_acc = accuracy(torch.cat(ray.get(outs), dim=0), 
-                    targets).float().mean().cpu().numpy()
+            batch_acc = accuracy(ray.get(outs), 
+                    targets.cuda()).float().mean().cpu().numpy()
             accs.append(batch_acc)
     return np.mean(losses), np.mean(accs)
 

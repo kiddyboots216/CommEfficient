@@ -7,7 +7,7 @@ import numpy as np
 
 from minimal import CSVec
 
-from sketched_classes import SketchedLossResult
+from sketched_classes import SketchedLossResult, SketchedParamGroup
 
 class FedSketchedModel:
     def __init__(self, model_cls, model_config, workers,
@@ -30,6 +30,7 @@ class FedSketchedModel:
         if self.training:
             num_workers = len(self.workers)
             idx = np.random.choice(np.arange(num_workers), int(num_workers * self.participation), replace=False)
+            print(f"Idx: {idx}")
             participating_clients = self.workers[idx]
             client_loaders = args[0]
             participating_client_loaders = np.array(client_loaders)[idx]
@@ -38,7 +39,7 @@ class FedSketchedModel:
             return [client.model_call.remote(next(iter(loader))) for client, loader in list(zip(
                 participating_clients, participating_client_loaders))]
         else:
-            return self.workers[0].model_call.remote(args[0])
+            return self.workers[0].model_call.remote(args)
 
     def __setattr__(self, name, value):
         if name in ["model", "workers", "participation", "rounds", "head_worker", "training"]:
@@ -49,7 +50,7 @@ class FedSketchedModel:
     def __getattr__(self, name):
         return getattr(self.model, name)
 
-class FedSketchedOptimizer:
+class FedSketchedOptimizer(optim.Optimizer):
     def __init__(self, optimizer, workers, fed_model):
         self.workers = np.array(workers)
         self.head_worker = self.workers[0]
@@ -96,7 +97,7 @@ class FedSketchedLoss:
             print("Kwargs aren't supported by Ray")
             return
         if len(args) == 2:
-            results = ray.get(self.workers[0].loss_call.remote(*args))
+            results = ray.get(self.workers[0].loss_call.remote())
             result = SketchedLossResult(results, [self.workers[0]])
             return result
         else:
@@ -112,6 +113,7 @@ class FedSketchedLoss:
 
     def _get_workers(self):
         cur_round = self.model.rounds[-1]
+        print(f"Cur round for loss: {cur_round}")
         participating_clients = self.workers[cur_round]
         return participating_clients
 
@@ -148,7 +150,7 @@ class FedSketchedWorker(object):
             if isinstance(m, torch.nn.Linear):
                 if m.bias is not None:
                     m.bias.do_sketching = sketch_biases
-        #self.model = model.to("cpu")
+        self.model = model.to(self.device)
 
     def set_loss(self, criterion):
         self.criterion = criterion.to(self.device)
@@ -163,10 +165,8 @@ class FedSketchedWorker(object):
 
     def loss_call(self, *args):
         #import pdb; pdb.set_trace()
-        if len(args) == 2:
-            self.loss = self.criterion(args[0], args[1])
-        else:
-            self.loss = self.criterion(self.outs, self.targets)
+        print(len(self.outs), len(self.targets))
+        self.loss = self.criterion(self.outs, self.targets)
         #del self.targets
         return self.loss
 

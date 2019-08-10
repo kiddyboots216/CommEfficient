@@ -161,6 +161,7 @@ class SketchedWorker(object):
             if isinstance(m, torch.nn.Linear):
                 if m.bias is not None:
                     m.bias.do_sketching = sketch_biases
+        self.model = model.to(self.device)
 
     def set_loss(self, criterion):
         self.criterion = criterion.to(self.device)
