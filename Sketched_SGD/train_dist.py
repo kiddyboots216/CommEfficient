@@ -157,6 +157,7 @@ if args.augment:
                             set_random_choices=True, drop_last=True)
     val_loader = Batches(test_set, args.batch_size, shuffle=False,
                            drop_last=False)
+    fed_params = None
 else:
     from fed_data_utils import *
     hp_default["participation_rate"] = args.rate
@@ -164,6 +165,7 @@ else:
     DATA_LEN = 50000
     hp_default["batch_size"] = int(DATA_LEN/hp_default["n_clients"])
     client_loaders, train_loader, val_loader, stats = get_data_loaders(hp_default, verbose=True)
+    fed_params = hp_default
 
 sketched_params = {
     "k": args.k,
@@ -214,4 +216,4 @@ class FakeSched(object):
 scheduler = optim.lr_scheduler.LambdaLR(opt, lr_lambda=[lambda_step])
 #scheduler = FakeSched()
 train(model, opt, scheduler, criterion, accuracy, train_loader, val_loader, args.epochs, args.batch_size,
-        loggers=(TableLogger(), TSVLogger()), timer=timer)
+        loggers=(TableLogger(), TSVLogger()), timer=timer, fed_params=fed_params)

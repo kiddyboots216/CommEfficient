@@ -469,7 +469,7 @@ class FedSketchedModel(SketchedModel):
             participating_client_loaders = client_loaders[idx]
             self.rounds.append(idx)
             # pass both inputs and targets to the worker; worker will save targets temporarily
-            return [client.model_call.remote(next(loader)) for client, loader
+            return [client.model_call.remote(next(iter(loader))) for client, loader
              in list(zip(participating_clients, participating_client_loaders))]
          else:
             return self.head_worker.model_call.remote(args[0])
