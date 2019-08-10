@@ -165,7 +165,7 @@ class FedSketchedWorker(object):
         return self.outs
 
     def loss_call(self, *args):
-        import pdb; pdb.set_trace()
+        #import pdb; pdb.set_trace()
         #print(len(self.outs), len(self.targets))
         self.loss = self.criterion(self.outs, self.targets)
         #del self.targets

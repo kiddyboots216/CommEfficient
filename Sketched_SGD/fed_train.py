@@ -190,6 +190,10 @@ if args.test:
     model_config = {
         'channels': {'prep': 1, 'layer1': 1, 'layer2': 1, 'layer3': 1},
     }
+else:
+    model_config = {
+            'channels': {'prep': 64, 'layer1': 128, 'layer2': 256, 'layer3': 512},
+    }
 lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
 lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
 if args.fed:
