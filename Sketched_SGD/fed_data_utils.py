@@ -1,9 +1,10 @@
 import torchvision
+import torch
 import numpy as np
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 from torch.utils.data.dataset import Dataset
-
+DATA_PATH = 'sample_data'
 def get_cifar10():
     '''Return CIFAR10 train/test data and labels as numpy arrays'''
     data_train = torchvision.datasets.CIFAR10(root=os.path.join(DATA_PATH, "CIFAR10"), train=True, download=True) 
@@ -179,7 +180,7 @@ def get_data_loaders(hp, verbose=True):
         return client_loaders, train_loader, test_loader, stats
 
 hp_default = {
-    "dataset" : "cifar10", 
+    "dataset" : "cifar10",
     "net" : "logistic",
 
     "iterations" : 2000,

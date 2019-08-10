@@ -115,21 +115,20 @@ def run_fed_batches(model, opt, scheduler, criterion, accuracy, loaders, trainin
 import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("-k", type=int, default=50000)
-parser.add_argument("--p2", type=int, default=1)
-parser.add_argument("--cols", type=int, default=500000)
-parser.add_argument("--rows", type=int, default=5)
-parser.add_argument("--num_workers", type=int, default=1)
-parser.add_argument("--num_blocks", type=int, default=1)
-parser.add_argument("--batch_size", type=int, default=512)
-parser.add_argument("--nesterov", type=bool, default=False)
-parser.add_argument("--momentum", type=float, default=0.9)
-parser.add_argument("--epochs", type=int, default=24)
-parser.add_argument("--epochs_per_iter", type=int, default=1)
-parser.add_argument("--optimizer", type=str, default="SGD")
-parser.add_argument("--criterion", type=str, default="CrossEntropyLoss")
-parser.add_argument("--iterations", type=int, default=1)
-parser.add_argument("--test", type=bool, default=False)
-parser.add_argument("--augment", type=bool, default=True)
+parser.add_argument("-p2", type=int, default=1)
+parser.add_argument("-cols", type=int, default=500000)
+parser.add_argument("-rows", type=int, default=5)
+parser.add_argument("-num_workers", type=int, default=1)
+parser.add_argument("-num_blocks", type=int, default=1)
+parser.add_argument("-batch_size", type=int, default=512)
+parser.add_argument("-nesterov", type=bool, default=False)
+parser.add_argument("-momentum", type=float, default=0.9)
+parser.add_argument("-epochs", type=int, default=24)
+parser.add_argument("-test", type=bool, default=False)
+parser.add_argument("-fed", type=bool, default=False)
+parser.add_argument("-clients", type=int, default=1)
+parser.add_argument("-rate", type=float, default=1.0)
+
 args = parser.parse_args()
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -160,7 +159,10 @@ if args.augment:
                            drop_last=False)
 else:
     from fed_data_utils import *
-
+    hp_default["participation_rate"] = args.rate
+    hp_default["n_clients"] = args.clients
+    DATA_LEN = 50000
+    hp_default["batch_size"] = int(DATA_LEN/hp_default["n_clients"])
     client_loaders, train_loader, val_loader, stats = get_data_loaders(hp_default, verbose=True)
 
 sketched_params = {

@@ -169,7 +169,8 @@ class SketchedWorker(object):
     def model_call(self, *args):
         #import pdb; pdb.set_trace()
         args = [arg.to(self.device) for arg in args]
-        self.outs = self.model(*args)
+        model = self.model.to(self.device)
+        self.outs = model(*args)
         return self.outs
 
     def model_getattr(self, name):
@@ -483,6 +484,7 @@ class FedSketchedOptimizer(SketchedOptimizer):
         train_workers = self._get_workers()
         update_workers = train_workers.append(self.head_worker)
         self._step(train_workers, update_workers)
+        [worker.cpu.remote() for worker in self.workers]
 
     def zero_grad(self):
         self._zero_grad(self._get_workers())
@@ -527,7 +529,14 @@ class FedSketchedWorker(object):
     def __init__(self, args, sketch_params_larger_than=0, sketch_biases=False):
         super().__init__(args, sketch_params_larger_than, sketch_biases)
 
+    def set_model(self, model_cls, model_config, 
+            sketch_biases, sketch_params_larger_than):
+        super().set_model(model_cls, model_config, 
+            sketch_biases, sketch_params_larger_than)
+        self.model = self.model.to("cpu")
+
     def model_call(self, *args):
+        self.cuda()
         args = [arg.to(self.device) for arg in args]
         self.outs = self.model(args[0])
         self.targets = args[1]
@@ -537,3 +546,21 @@ class FedSketchedWorker(object):
         self.loss = self.criterion(self.outs, self.targets)
         del self.targets
         return self.loss
+
+    def all_reduce_sketched(self, *grads):
+        self.all_reduce_sketched(*grads)
+        self.cpu()
+
+    def cpu(self):
+        self.model.cpu()
+        self.u.cpu()
+        self.v.cpu()
+        self.sketch.cpu()
+        self.sketch_mask.cpu()
+
+    def cuda(self):
+        self.model.cuda()
+        self.u.cuda()
+        self.v.cuda()
+        self.sketch.cuda()
+        self.sketch_mask.cuda()
