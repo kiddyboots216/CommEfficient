@@ -28,6 +28,7 @@ from minimal import Net, cifar10, Correct, union, PiecewiseLinear, \
         Crop, FlipLR, Cutout, Transform, Batches, TSVLogger
 
 from sketched_classes import *
+from fed_sketched_classes import *
 
 DATA_PATH = 'sample_data'
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6"
