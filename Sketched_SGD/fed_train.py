@@ -104,6 +104,7 @@ def run_fed_batches(model, opt, scheduler, criterion, accuracy, loaders, trainin
             #        targets).float().mean().cpu().numpy()
             #accs.append(batch_acc)
     else:
+        """
         for idx, batch in enumerate(loaders):
             inputs, targets = batch
             outs = model(inputs, targets)
@@ -112,6 +113,7 @@ def run_fed_batches(model, opt, scheduler, criterion, accuracy, loaders, trainin
             batch_acc = accuracy(ray.get(outs), 
                     targets.cuda()).float().mean().cpu().numpy()
             accs.append(batch_acc)
+        """
     return np.mean(losses), np.mean(accs)
 
 import argparse

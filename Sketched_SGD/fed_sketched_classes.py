@@ -36,8 +36,8 @@ class FedSketchedModel:
             participating_client_loaders = np.array(client_loaders)[idx]
             self.rounds.append(idx)
             # pass both inputs and targets to the worker; worker will save targets temporarily
-            return [client.model_call.remote(next(iter(loader))) for client, loader in list(zip(
-                participating_clients, participating_client_loaders))]
+            return ray.get([client.model_call.remote(next(iter(loader))) for client, loader in list(zip(
+                participating_clients, participating_client_loaders))])
         else:
             return self.workers[0].model_call.remote(args)
 
@@ -160,13 +160,13 @@ class FedSketchedWorker(object):
         #self.cuda()
         args = [arg.to(self.device) for arg in args]
         self.outs = self.model(args[0])
-        print(len(self.outs))
+        print(f"Length of self.outs is {len(self.outs)}")
         self.targets = args[1]
         return self.outs
 
     def loss_call(self, *args):
         #import pdb; pdb.set_trace()
-        #print(len(self.outs), len(self.targets))
+        print(f"Length of outs {len(self.outs)}, targets {len(self.targets)}")
         self.loss = self.criterion(self.outs, self.targets)
         #del self.targets
         return self.loss
