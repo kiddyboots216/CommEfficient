@@ -140,7 +140,9 @@ if args.fed:
     hp_default["participation_rate"] = args.rate
     hp_default["n_clients"] = args.clients
     DATA_LEN = 50000
-    hp_default["batch_size"] = int(DATA_LEN/hp_default["n_clients"])
+    #hp_default["batch_size"] = int(DATA_LEN/hp_default["n_clients"])
+    #hp_default["batch_size"] = args.batch_size
+    hp_default["batch_size"] = int(args.batch_size/(args.rate * args.clients))
     train_loader, central_train_loader, val_loader, stats = get_data_loaders(hp_default, verbose=True)
     fed_params = hp_default
 else:

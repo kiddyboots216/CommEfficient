@@ -168,7 +168,7 @@ def get_data_loaders(hp, verbose=True):
         split = split_image_data(x_train, y_train, n_clients=hp['n_clients'], 
                                         classes_per_client=hp['classes_per_client'], balancedness=hp['balancedness'], verbose=verbose)
         datasets = [CustomImageDataset(x, y, transforms_train) for x, y in split]
-        client_loaders = [torch.utils.data.DataLoader(dataset, batch_size=len(dataset)) for dataset in datasets]
+        client_loaders = [torch.utils.data.DataLoader(dataset, batch_size=hp['batch_size']) for dataset in datasets]
         #import pdb; pdb.set_trace()
         #client_loaders = [torch.utils.data.DataLoader(CustomImageDataset(x, y, transforms_train), 
         #                  batch_size=hp['batch_size'], shuffle=True) for x, y in split]
