@@ -90,7 +90,8 @@ def run_fed_batches(model, opt, scheduler, criterion, accuracy, loaders, trainin
     if training:
         for _ in range(int(1/participation)):
             outs = model(loaders)
-            batch_loss = criterion()
+            batch_loss = criterion(outs)
+            print(f"Loss: {batch_loss.mean()}")
             opt.zero_grad()
             #batch_loss.sum().backward()
             batch_loss.backward()

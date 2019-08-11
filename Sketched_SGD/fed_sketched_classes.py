@@ -30,7 +30,7 @@ class FedSketchedModel:
         if self.training:
             num_workers = len(self.workers)
             idx = np.random.choice(np.arange(num_workers), int(num_workers * self.participation), replace=False)
-            print(f"Idx: {idx}")
+            #print(f"Idx: {idx}")
             participating_clients = self.workers[idx]
             client_loaders = args[0]
             participating_client_loaders = np.array(client_loaders)[idx]
@@ -113,7 +113,7 @@ class FedSketchedLoss:
 
     def _get_workers(self):
         cur_round = self.model.rounds[-1]
-        print(f"Cur round for loss: {cur_round}")
+        #print(f"Cur round for loss: {cur_round}")
         participating_clients = self.workers[cur_round]
         return participating_clients
 
@@ -160,15 +160,16 @@ class FedSketchedWorker(object):
         #self.cuda()
         args = [arg.to(self.device) for arg in args]
         self.outs = self.model(args[0])
-        print(f"Length of self.outs is {len(self.outs)}")
+        #print(f"Length of self.outs is {len(self.outs)}")
         self.targets = args[1]
         return self.outs
 
     def loss_call(self, *args):
         #import pdb; pdb.set_trace()
-        print(f"Length of outs {len(self.outs)}, targets {len(self.targets)}")
+        #print(f"Length of outs {len(self.outs)}, targets {len(self.targets)}")
         self.loss = self.criterion(self.outs, self.targets)
-        #del self.targets
+        del self.targets
+        #self.cpu()
         return self.loss
 
     def model_getattr(self, name):
@@ -199,7 +200,7 @@ class FedSketchedWorker(object):
     def loss_backward(self):
         #import pdb; pdb.set_trace()
         self.loss.sum().backward()
-        #del self.outs
+        del self.outs
 
     def set_optimizer(self, opt):
         assert self.model is not None, "model must be already initialized"
@@ -228,15 +229,15 @@ class FedSketchedWorker(object):
                         sketch_mask.append(torch.zeros(size))
                     grad_size += size
         self.grad_size = grad_size
-        print(f"Total dimension is {self.grad_size} using k {self.k} and p2 {self.p2}")
+        #print(f"Total dimension is {self.grad_size} using k {self.k} and p2 {self.p2}")
         self.sketch_mask = torch.cat(sketch_mask).byte().to(self.device)
-        print(f"sketch_mask.sum(): {self.sketch_mask.sum()}")
         self.sketch = CSVec(d=self.sketch_mask.sum().item(), 
             c=self.num_cols,
             r=self.num_rows,
             device=self.device,
             nChunks=1,
             numBlocks=self.num_blocks)
+        print(f"Total dimension is {self.grad_size} using k {self.k} and p2 {self.p2} with sketch_mask.sum(): {self.sketch_mask.sum()}")
         self.u = torch.zeros(self.grad_size, device=self.device)
         self.v = torch.zeros(self.grad_size, device=self.device)
 
@@ -246,7 +247,8 @@ class FedSketchedWorker(object):
     def compute_grad(self):
         #assert self._getLRVec() != 0.0, "invalid lr"
         # compute grad 
-        gradVec = self._getGradVec().cuda()
+        #self.cuda()
+        gradVec = self._getGradVec().to(self.device)
         #return gradVec
         # weight decay
         if self.weight_decay != 0:
@@ -261,12 +263,6 @@ class FedSketchedWorker(object):
             #self.v = gradVec
         # this is v
         return self.v
-        candidateSketch = self.v[self.sketchMask]
-        self.sketch.zero()
-        self.sketch += candidateSketch
-        del candidateSketch
-        # COMMUNICATE ONLY THE TABLE
-        return self.sketch.table
 
     def all_reduce_sketched(self, *grads):
         # compute update
@@ -275,6 +271,7 @@ class FedSketchedWorker(object):
         self._apply_update(torch.mean(torch.stack(grads), dim=0))
         return
         """
+        #self.cuda()
         self.sketch.zero()
         for grad in grads:
             self.sketch += grad[self.sketch_mask]
@@ -445,7 +442,7 @@ class FedSketchedWorker(object):
         self.model = self.model.cpu()
         self.u = self.u.cpu()
         self.v = self.v.cpu()
-        self.sketch = self.sketch.cpu()
+        self.sketch.cpu()
         self.sketch_mask = self.sketch_mask.cpu()
 
     def cuda(self):
@@ -453,5 +450,5 @@ class FedSketchedWorker(object):
         self.model = self.model.cuda()
         self.u = self.u.cuda()
         self.v = self.v.cuda()
-        self.sketch = self.sketch.cuda()
+        self.sketch.cuda()
         self.sketch_mask = self.sketch_mask.cuda()
