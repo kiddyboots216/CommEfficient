@@ -70,6 +70,10 @@ class FedSketchedOptimizer(optim.Optimizer):
         train_workers = self._get_workers()
         update_workers = np.append(train_workers, self.workers[0])
         self._step(train_workers, update_workers)
+    def step_sync(self):
+        stale_workers = self._get_workers()
+        [w.sync.remote(self.param_server) for w in stale_workers]
+
     def _step(self, train_workers, update_workers):
         grads = [worker.compute_grad.remote() for worker in train_workers]
         ray.wait([worker.all_reduce_sketched.remote(
@@ -241,7 +245,6 @@ class FedSketchedWorker(object):
                     else:
                         sketch_mask.append(torch.zeros(size))
                     grad_size += size
-        self.grad_size = grad_size
         self.sketch_mask = torch.cat(sketch_mask).byte().to(self.device)
         self.sketch = CSVec(d=self.sketch_mask.sum().item(), 
             c=self.num_cols,
@@ -250,8 +253,8 @@ class FedSketchedWorker(object):
             nChunks=1,
             numBlocks=self.num_blocks)
         print(f"Total dimension is {self.grad_size} using k {self.k} and p2 {self.p2}  with sketch_mask.sum(): {self.sketch_mask.sum()}")
-        self.u = torch.zeros(self.grad_size, device=self.device)
-        self.v = torch.zeros(self.grad_size, device=self.device)
+        self.u = torch.zeros(grad_size, device=self.device)
+        self.v = torch.zeros(grad_size, device=self.device)
 
     def optimizer_zero_grad(self):
         self._zero_grad()
@@ -275,7 +278,7 @@ class FedSketchedWorker(object):
             self.v += (self.u)
             #self.v = gradVec
         # this is v
-        return self.v
+        return self.v * self._getLRVec()
 
     def all_reduce_sketched(self, *grads):
         # compute update
@@ -309,9 +312,8 @@ class FedSketchedWorker(object):
         self.v[update.nonzero()] = 0
         self.v[~self.sketch_mask] = 0
         #self.sync(weightUpdate * self._getLRVec())
-        weight_update = update * self._getLRVec()
         #import pdb; pdb.set_trace()
-        weight_update = weight_update.to(self.device)
+        weight_update = update.to(self.device)
         start = 0
         for param_group in self.param_groups:
             for p in param_group['params']:
@@ -344,7 +346,7 @@ class FedSketchedWorker(object):
         topkIndices = torch.sort(vec**2)[1][-k:]
         ret[topkIndices] = vec[topkIndices]
         return ret
-        
+
     def _getLRVec(self):
         """Return a vector of each gradient element's learning rate
         If all parameters have the same learning rate, this just

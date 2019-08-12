@@ -38,7 +38,6 @@ class FedParamServer:
 
     def _apply_update(self, update):
     	curr_weights = self.rounds[-1]
-    	update = update * self._getLRVec()
     	weight_update = curr_weights - update
     	self.rounds.append(weight_update)
         #self.sync(weightUpdate * self._getLRVec())
@@ -82,6 +81,7 @@ class FedParamServer:
         self.param_groups = opt.param_groups
         grad_size = 0
         sketch_mask = []
+        weight_vec = []
         for group in self.param_groups:
             for p in group["params"]:
                 if p.requires_grad:
@@ -90,9 +90,10 @@ class FedParamServer:
                         sketch_mask.append(torch.ones(size))
                     else:
                         sketch_mask.append(torch.zeros(size))
+                    weight_vec.append(p.data.view(-1).float())
                     grad_size += size
-                    del self.param_groups
         del self.param_groups
+        self.rounds.append(weight_vec)
         self.sketch_mask = torch.cat(sketch_mask).byte().to(self.device)
         self.sketch = CSVec(d=self.sketch_mask.sum().item(), 
             c=self.num_cols,
