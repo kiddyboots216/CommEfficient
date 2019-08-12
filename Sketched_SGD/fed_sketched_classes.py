@@ -249,9 +249,7 @@ class FedSketchedWorker(object):
             device=self.device,
             nChunks=1,
             numBlocks=self.num_blocks)
-        print(f"Total dimension is {self.grad_size
-            } using k {self.k} and p2 {self.p2
-            } with sketch_mask.sum(): {self.sketch_mask.sum()}")
+        print(f"Total dimension is {self.grad_size} using k {self.k} and p2 {self.p2}  with sketch_mask.sum(): {self.sketch_mask.sum()}")
         self.u = torch.zeros(self.grad_size, device=self.device)
         self.v = torch.zeros(self.grad_size, device=self.device)
 
