@@ -1,6 +1,9 @@
+@ray.remote(num_gpus=1)
 class FedParamServer:
-    def __init__(self, workers,
+    def __init__(self, args,
     	sketch_params_larger_than=0, sketch_biases=False):
+        self.k = args['k']
+        self.p2 = args['p2']
         self.workers = workers
         self.rounds = []
         self.sketch_params_larger_than = sketch_params_larger_than
@@ -8,7 +11,9 @@ class FedParamServer:
         self.device = torch.device("cuda" if 
             torch.cuda.is_available() else "cpu")
 
-    def sync():
+    def sync(self, round_id):
+        stale_update = self.rounds[round_id]
+        return stale_update
 
     def all_reduce_sketched(self, *grads):
         # compute update
@@ -77,7 +82,7 @@ class FedParamServer:
             nesterov=nesterov, 
             weight_decay=weight_decay, 
             momentum=momentum)
-        del self.model
+        # del self.model
         self.param_groups = opt.param_groups
         grad_size = 0
         sketch_mask = []
@@ -92,7 +97,7 @@ class FedParamServer:
                         sketch_mask.append(torch.zeros(size))
                     weight_vec.append(p.data.view(-1).float())
                     grad_size += size
-        del self.param_groups
+        # del self.param_groups
         self.rounds.append(weight_vec)
         self.sketch_mask = torch.cat(sketch_mask).byte().to(self.device)
         self.sketch = CSVec(d=self.sketch_mask.sum().item(), 
@@ -119,3 +124,17 @@ class FedParamServer:
                 if m.bias is not None:
                     m.bias.do_sketching = sketch_biases
         self.model = model.to(self.device)
+
+    def model_call(self, *args):
+        #self.cuda()
+        outs = self.model(args.to(self.device))
+        #print(f"Length of self.outs is {len(self.outs)}")
+        return outs
+
+    def loss_call(self, *args):
+        #import pdb; pdb.set_trace()
+        loss = self.criterion(
+            args[0].to(self.device), 
+            args[1].to(self.device))
+        #self.cpu()
+        return loss

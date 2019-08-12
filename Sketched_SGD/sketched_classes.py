@@ -169,8 +169,7 @@ class SketchedWorker(object):
     def model_call(self, *args):
         #import pdb; pdb.set_trace()
         args = [arg.to(self.device) for arg in args]
-        model = self.model.to(self.device)
-        self.outs = model(*args)
+        self.outs = self.model(*args)
         return self.outs
 
     def model_getattr(self, name):

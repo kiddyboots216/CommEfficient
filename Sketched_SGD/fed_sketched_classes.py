@@ -11,21 +11,20 @@ from sketched_classes import SketchedLossResult, SketchedParamGroup
 
 class FedSketchedModel:
     def __init__(self, model_cls, model_config, workers,
-                fed_params, 
+                param_server, fed_params, 
                 sketch_biases=False, sketch_params_larger_than=0):
         self.participation = fed_params["participation_rate"]
         self.rounds = []
         self.workers = np.array(workers)
+        self.param_server = param_server
+        to_set_model = np.append(self.workers, self.param_server)
         self.model = model_cls(**model_config)
         ray.wait([worker.set_model.remote(model_cls, model_config, 
             sketch_biases, sketch_params_larger_than
-            ) for worker in self.workers])
+            ) for worker in to_set_model])
 
     def train(self, training):
         self.training = training
-
-    def set_head(self, head_worker):
-        self.head_worker = head_worker
 
     def __call__(self, *args, **kwargs):
         if self.training:
@@ -44,11 +43,11 @@ class FedSketchedModel:
                 for client, loader in list(zip(
                 participating_clients, participating_client_loaders))])
         else:
-            return self.workers[0].model_call.remote(args)
+            return self.param_server.model_call.remote(args)
 
     def __setattr__(self, name, value):
         if name in ["model", "workers", "participation", 
-                    "rounds", "head_worker", "training"]:
+                    "rounds", "param_server", "training"]:
             self.__dict__[name] = value
         else:
             [worker.model_setattr.remote(
@@ -58,61 +57,68 @@ class FedSketchedModel:
         return getattr(self.model, name)
 
 class FedSketchedOptimizer(optim.Optimizer):
-    def __init__(self, optimizer, workers, fed_model):
+    def __init__(self, optimizer, workers, param_server, fed_model):
         self.workers = np.array(workers)
-        self.head_worker = self.workers[0]
+        self.param_server = param_server
         self.model = fed_model
+        to_set_optimize = np.append(self.workers, self.param_server)
         # self.param_groups = optimizer.param_groups
         ray.wait([worker.set_optimizer.remote(
-            optimizer) for worker in self.workers])
+            optimizer) for worker in to_set_optimize])
 
     def step(self):
-        train_workers = self._get_workers()
-        update_workers = np.append(train_workers, self.workers[0])
+        train_workers, update_workers = self._get_workers()
         self._step(train_workers, update_workers)
+
     def step_sync(self):
-        stale_workers = self._get_workers()
-        [w.sync.remote(self.param_server) for w in stale_workers]
+        stale_workers, update_workers = self._get_workers()
+        [w.sync.remote(
+            self.param_server.sync.remote(
+            w.get_last_round.remote()
+            )) for w in stale_workers]
+        to_update = np.append(train_workers, self.param_server)
+        self._step(train_workers, to_update)
+
+    def zero_grad(self):
+        self._zero_grad(self._get_workers())
 
     def _step(self, train_workers, update_workers):
         grads = [worker.compute_grad.remote() for worker in train_workers]
         ray.wait([worker.all_reduce_sketched.remote(
             *grads) for worker in update_workers]) 
-
-    def set_head(self, head_worker):
-        self.head_worker = head_worker
-    def zero_grad(self):
-        self._zero_grad(self._get_workers())
+    
     def _zero_grad(self, workers):
         [worker.optimizer_zero_grad.remote() for worker in workers]
 
     def _get_workers(self):
         cur_round = self.model.rounds[-1]
         participating_clients = self.workers[cur_round]
-        return participating_clients
+        return participating_clients, np.append(
+            participating_clients, self.param_server)
+    
     def __getattr__(self, name):
         if name=="param_groups":
             param_groups = ray.get(
-                self.head_worker.get_param_groups.remote())
+                self.param_server.get_param_groups.remote())
             #print(f"Param groups are {param_groups}")
             return [SketchedParamGroup(param_group, self.workers, idx
                 ) for idx, param_group in enumerate(param_groups)]
 
 class FedSketchedLoss:
-    def __init__(self, criterion, workers, fed_model):
+    def __init__(self, criterion, workers, param_server, fed_model):
         self.model = fed_model
         self.workers = np.array(workers)
-        [worker.set_loss.remote(criterion) for worker in self.workers]
+        self.param_server = param_server
+        to_set_loss = np.append(self.workers, self.param_server)
+        [worker.set_loss.remote(criterion) for worker in to_set_loss]
 
-    def set_head(self, head_worker):
-        self.head_worker = head_worker
     def __call__(self, *args, **kwargs):
         if len(kwargs) > 0:
             print("Kwargs aren't supported by Ray")
             return
         if len(args) == 2:
-            results = ray.get(self.workers[0].loss_call.remote())
-            result = SketchedLossResult(results, [self.workers[0]])
+            results = ray.get(self.param_server.loss_call.remote())
+            result = SketchedLossResult(results, [])
             return result
         else:
             participating_clients = self._get_workers()
@@ -172,7 +178,6 @@ class FedSketchedWorker(object):
         self.criterion = criterion.to(self.device)
 
     def model_call(self, *args):
-        args = args[0]
         #self.cuda()
         args = [arg.to(self.device) for arg in args]
         self.outs = self.model(args[0])

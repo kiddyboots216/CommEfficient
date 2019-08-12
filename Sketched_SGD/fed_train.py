@@ -29,22 +29,23 @@ from minimal import Net, cifar10, Correct, union, PiecewiseLinear, \
 
 from sketched_classes import *
 from fed_sketched_classes import *
+from fed_param_server import *
 
 DATA_PATH = 'sample_data'
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6"
 
-def train(model, opt, scheduler, criterion, accuracy, train_loader, val_loader, 
-    epochs, batch_size, loggers=(), timer=None, fed_params=None):
+def train(model, opt, scheduler, criterion, 
+    accuracy, train_loader, val_loader, 
+    params, loggers=(), timer=None, fed_params=None):
     timer = timer or Timer()
-    f = run_batches
-    if fed_params:
-        f = run_fed_batches
+    batch_size = params["batch_size"]
+    epochs = params["epochs"]
     for epoch in range(args.epochs):
-        train_loss, train_acc = f(model, opt, scheduler, 
-            criterion, accuracy, train_loader, True, fed_params)
+        train_loss, train_acc = run_batches(model, opt, scheduler, 
+            criterion, accuracy, train_loader, True)
         train_time = timer()
-        val_loss, val_acc = f(model, None, scheduler,
-            criterion, accuracy, val_loader, False, fed_params)
+        val_loss, val_acc = run_batches(model, None, scheduler,
+            criterion, accuracy, val_loader, False)
         val_time = timer()
         epoch_stats = {
             'train_time': train_time,
@@ -55,12 +56,14 @@ def train(model, opt, scheduler, criterion, accuracy, train_loader, val_loader,
             'test_acc': val_acc,
             'total_time': timer.total_time,
         }
-        summary = union({'epoch': epoch+1, 'lr': scheduler.get_lr()[0]*batch_size}, epoch_stats)
+        summary = union({'epoch': epoch+1, 
+            'lr': scheduler.get_lr()[0]*batch_size}, epoch_stats)
         for logger in loggers:
             logger.append(summary)
     return summary
 
-def run_batches(model, opt, scheduler, criterion, accuracy, loader, training, fed_params):
+def run_batches(model, opt, scheduler, criterion, 
+    accuracy, loader, training, fed_params):
     losses = []
     accs = []
     for idx, batch in enumerate(loader):
@@ -82,7 +85,36 @@ def run_batches(model, opt, scheduler, criterion, accuracy, loader, training, fe
         accs.append(batch_acc)
     return np.mean(losses), np.mean(accs)
 
-def run_fed_batches(model, opt, scheduler, criterion, accuracy, loaders, training, fed_params):
+def train_fed(model, opt, scheduler, criterion, 
+    accuracy, train_loader, val_loader, 
+    params, loggers=(), timer=None, fed_params=None):
+    timer = timer or Timer()
+    batch_size = params["batch_size"]
+    epochs = params["epochs"]
+    for epoch in range(args.epochs):
+        train_loss, train_acc = run_fed_batches(model, opt, scheduler, 
+            criterion, accuracy, train_loader, True, params)
+        train_time = timer()
+        val_loss, val_acc = run_fed_batches(model, None, scheduler,
+            criterion, accuracy, val_loader, False, params)
+        val_time = timer()
+        epoch_stats = {
+            'train_time': train_time,
+            'train_loss': train_loss,
+            'train_acc': train_acc,
+            'test_time': val_time,
+            'test_loss': val_loss,
+            'test_acc': val_acc,
+            'total_time': timer.total_time,
+        }
+        summary = union({'epoch': epoch+1, 
+            'lr': scheduler.get_lr()[0]*batch_size}, epoch_stats)
+        for logger in loggers:
+            logger.append(summary)
+    return summary
+
+def run_fed_batches(model, opt, scheduler, criterion, 
+    accuracy, loaders, training, fed_params):
     participation = fed_params['participation_rate']
     model.train(training)
     losses = []
@@ -105,7 +137,6 @@ def run_fed_batches(model, opt, scheduler, criterion, accuracy, loaders, trainin
             #        targets).float().mean().cpu().numpy()
             #accs.append(batch_acc)
     else:
-        """
         for idx, batch in enumerate(loaders):
             inputs, targets = batch
             outs = model(inputs, targets)
@@ -114,7 +145,6 @@ def run_fed_batches(model, opt, scheduler, criterion, accuracy, loaders, trainin
             batch_acc = accuracy(ray.get(outs), 
                     targets.cuda()).float().mean().cpu().numpy()
             accs.append(batch_acc)
-        """
     return np.mean(losses), np.mean(accs)
 
 import argparse
@@ -148,6 +178,8 @@ if args.fed:
     hp_default["batch_size"] = int(args.batch_size/(args.rate * args.clients))
     train_loader, central_train_loader, val_loader, stats = get_data_loaders(hp_default, verbose=True)
     fed_params = hp_default
+    fed_params["batch_size"] = args.batch_size
+    fed_params["epochs"] = args.epochs
 else:
     print('Downloading datasets')
     DATA_DIR = "sample_data"
@@ -171,7 +203,6 @@ else:
                             set_random_choices=True, drop_last=True)
     val_loader = Batches(test_set, args.batch_size, shuffle=False,
                            drop_last=False)
-    fed_params = None
 
 print('Initializing everything')
 sketched_params = {
@@ -187,27 +218,31 @@ sketched_params = {
     "nesterov": args.nesterov,
     "dampening": 0,
     "batch_size": args.batch_size,
+    "epochs": args.epochs,
 }
 ray.init(num_gpus=7, redis_password="sketched_sgd")
 model_cls = Net
 model_config = {}
 if args.test:
     model_config = {
-        'channels': {'prep': 1, 'layer1': 1, 'layer2': 1, 'layer3': 1},
+        'channels': {'prep': 1, 'layer1': 1, 
+        'layer2': 1, 'layer3': 1},
     }
 else:
     model_config = {
-            'channels': {'prep': 64, 'layer1': 128, 'layer2': 256, 'layer3': 512},
+            'channels': {'prep': 64, 'layer1': 128, 
+            'layer2': 256, 'layer3': 512},
     }
 lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
 lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
 if args.fed:
     workers = [FedSketchedWorker.remote(sketched_params) for _ in range(args.num_workers)]
-    model = FedSketchedModel(model_cls, model_config, workers, fed_params)
+    param_server = FedParamServer.remote(sketched_params)
+    model = FedSketchedModel(model_cls, model_config, workers, param_server, fed_params)
     opt = optim.SGD(model.parameters(), lr=1)
-    opt = FedSketchedOptimizer(opt, workers, model)
+    opt = FedSketchedOptimizer(opt, workers, param_server, model)
     criterion = torch.nn.CrossEntropyLoss(reduction='none')
-    criterion = FedSketchedLoss(criterion, workers, model)
+    criterion = FedSketchedLoss(criterion, workers, param_server, model)
     scheduler = optim.lr_scheduler.LambdaLR(opt, lr_lambda=[lambda_step])
     accuracy = Correct().to(device)
 else:
@@ -235,5 +270,11 @@ class FakeSched(object):
 #opt = optim.SGD(model.parameters(), lr=1)
 #scheduler = FakeSched()
 print('Finished in {:.2f} seconds'.format(timer()))
-train(model, opt, scheduler, criterion, accuracy, train_loader, val_loader, args.epochs, args.batch_size,
-        loggers=(TableLogger(), TSVLogger()), timer=timer, fed_params=fed_params)
+if args.fed:
+    train_fed(model, opt, scheduler, criterion, accuracy, 
+        train_loader, val_loader, fed_params,
+        loggers=(TableLogger(), TSVLogger()), timer=timer)
+else:
+    train(model, opt, scheduler, criterion, accuracy, 
+        train_loader, val_loader, sketched_params,
+        loggers=(TableLogger(), TSVLogger()), timer=timer)
