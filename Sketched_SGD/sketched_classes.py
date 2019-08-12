@@ -267,7 +267,7 @@ class SketchedWorker(object):
             self.v += (self.u)
             #self.v = gradVec
         # this is v
-        return self.v
+        return self.v * self._getLRVec()
         candidateSketch = self.v[self.sketchMask]
         self.sketch.zero()
         self.sketch += candidateSketch
@@ -313,7 +313,8 @@ class SketchedWorker(object):
         self.v[update.nonzero()] = 0
         self.v[~self.sketch_mask] = 0
         #self.sync(weightUpdate * self._getLRVec())
-        weight_update = update * self._getLRVec()
+        weight_update = update
+        # weight_update = update * self._getLRVec()
         #import pdb; pdb.set_trace()
         weight_update = weight_update.to(self.device)
         start = 0
