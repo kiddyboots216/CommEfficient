@@ -1,10 +1,23 @@
+import ray
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+import numpy as np
+
+from minimal import CSVec
+
+from sketched_classes import SketchedLossResult, SketchedParamGroup
+
 @ray.remote(num_gpus=1)
 class FedParamServer:
     def __init__(self, args,
     	sketch_params_larger_than=0, sketch_biases=False):
         self.k = args['k']
         self.p2 = args['p2']
-        self.workers = workers
+        self.num_cols = args['num_cols']
+        self.num_rows = args['num_rows']
+        self.num_blocks = args['num_blocks']
         self.rounds = []
         self.sketch_params_larger_than = sketch_params_larger_than
         self.sketch_biases = sketch_biases
@@ -84,9 +97,9 @@ class FedParamServer:
             momentum=momentum)
         # del self.model
         self.param_groups = opt.param_groups
-        grad_size = 0
+        self.grad_size = 0
         sketch_mask = []
-        weight_vec = []
+        weight_vec = torch.tensor([]).to(self.device)
         for group in self.param_groups:
             for p in group["params"]:
                 if p.requires_grad:
@@ -95,8 +108,10 @@ class FedParamServer:
                         sketch_mask.append(torch.ones(size))
                     else:
                         sketch_mask.append(torch.zeros(size))
-                    weight_vec.append(p.data.view(-1).float())
-                    grad_size += size
+                    #weight_vec.append(p.data.view(-1).float())
+                    d = p.data.view(-1).float()
+                    weight_vec = torch.cat((weight_vec, d), dim=0) 
+                    self.grad_size += size
         # del self.param_groups
         self.rounds.append(weight_vec)
         self.sketch_mask = torch.cat(sketch_mask).byte().to(self.device)
@@ -106,9 +121,7 @@ class FedParamServer:
             device=self.device,
             nChunks=1,
             numBlocks=self.num_blocks)
-        print(f"Total dimension is {grad_size
-            } using k {self.k} and p2 {self.p2
-            } with sketch_mask.sum(): {self.sketch_mask.sum()}")
+        print(f"Total dimension is {self.grad_size} using k {self.k} and p2 {self.p2} with sketch_mask.sum(): {self.sketch_mask.sum()}")
 
     def set_model(self, model_cls, model_config, 
             sketch_biases, sketch_params_larger_than):
@@ -127,14 +140,25 @@ class FedParamServer:
 
     def model_call(self, *args):
         #self.cuda()
-        outs = self.model(args.to(self.device))
+        outs = self.model(args[0].to(self.device))
         #print(f"Length of self.outs is {len(self.outs)}")
         return outs
 
+    def set_loss(self, criterion):
+        self.criterion = criterion.to(self.device)
+
     def loss_call(self, *args):
-        #import pdb; pdb.set_trace()
         loss = self.criterion(
             args[0].to(self.device), 
             args[1].to(self.device))
         #self.cpu()
         return loss
+
+    def get_param_groups(self):
+        try:
+            return [{'initial_lr': group['initial_lr'],
+             'lr': group['lr']} for group in self.param_groups]
+        except Exception as e:
+            #print(f"Exception is {e}")
+            return [{'lr': group['lr']} for group in self.param_groups]
+

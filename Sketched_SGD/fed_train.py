@@ -139,7 +139,7 @@ def run_fed_batches(model, opt, scheduler, criterion,
     else:
         for idx, batch in enumerate(loaders):
             inputs, targets = batch
-            outs = model(inputs, targets)
+            outs = model(inputs)
             batch_loss = criterion(outs, targets)
             losses.append(batch_loss.mean())
             batch_acc = accuracy(ray.get(outs), 
