@@ -25,17 +25,12 @@ class FedParamServer:
             torch.cuda.is_available() else "cpu")
 
     def sync(self, round_id):
+        return self.rounds[-1]
         stale_update = self.rounds[round_id]
         return stale_update
 
     def all_reduce_sketched(self, *grads):
         # compute update
-        """
-        grads = [grad.to(self.device) for grad in grads]
-        self._apply_update(torch.mean(torch.stack(grads), dim=0))
-        return
-        """
-        #self.cuda()
         self.sketch.zero()
         for grad in grads:
             self.sketch += grad[self.sketch_mask]
@@ -51,13 +46,27 @@ class FedParamServer:
             torch.stack(
                 [grad[~self.sketch_mask] for grad in grads]), dim=0)
         self._apply_update(weight_update)
-        #self.cpu()
-        #"""
 
     def _apply_update(self, update):
-    	curr_weights = self.rounds[-1]
-    	weight_update = curr_weights - update
-    	self.rounds.append(weight_update)
+        curr_weights = self.rounds[-1]
+        updated_weights = curr_weights - (update * self._getLRVec())
+        #import pdb; pdb.set_trace()
+        self.rounds.append(updated_weights)
+        self._sync_weights(updated_weights)
+
+    def _sync_weights(self, update):
+        """Set params"""
+        gradShapes, gradSizes = self._getGradShapes()
+        startPos = 0
+        i = 0
+        for group in self.param_groups:
+            for p in group["params"]:
+                shape = gradShapes[i]
+                size = gradSizes[i]
+                i += 1
+                assert(size == torch.numel(p))
+                p.data = update[startPos:startPos + size].reshape(shape)
+                startPos += size
         #self.sync(weightUpdate * self._getLRVec())
         # weight_update = update * self._getLRVec()
         # #import pdb; pdb.set_trace()
@@ -72,6 +81,15 @@ class FedParamServer:
         # self._setGradVec(weight_update)
         # self._updateParamsWithGradVec()
 
+    def param_group_setitem(self, index, name, value):
+        self.param_groups[index].__setitem__(name, value)
+        
+    def param_group_setattr(self, index, name, value):
+        self.param_groups[index].setattr(name, value)
+        
+    def param_group_setdefault(self, index, name, value):
+        self.param_groups[index].setdefault(name, value)
+        
     def _topk(self, vec, k):
         """ Return the largest k elements (by magnitude) of vec"""
         ret = torch.zeros_like(vec)
@@ -80,10 +98,10 @@ class FedParamServer:
         ret[topkIndices] = vec[topkIndices]
         return ret
 
-    def set_optimizer(self, opt):
+    def set_optimizer(self, opt_param_groups):
         assert self.model is not None, \
         "model must be already initialized"
-        p = opt.param_groups[0]
+        p = opt_param_groups[0]
         lr = p['lr']
         dampening = p['dampening']
         nesterov = p['nesterov']
@@ -99,7 +117,7 @@ class FedParamServer:
         self.param_groups = opt.param_groups
         self.grad_size = 0
         sketch_mask = []
-        weight_vec = torch.tensor([]).to(self.device)
+        weight_vec = []
         for group in self.param_groups:
             for p in group["params"]:
                 if p.requires_grad:
@@ -108,11 +126,11 @@ class FedParamServer:
                         sketch_mask.append(torch.ones(size))
                     else:
                         sketch_mask.append(torch.zeros(size))
-                    #weight_vec.append(p.data.view(-1).float())
+                    weight_vec.append(p.data.view(-1).float())
                     d = p.data.view(-1).float()
-                    weight_vec = torch.cat((weight_vec, d), dim=0) 
                     self.grad_size += size
         # del self.param_groups
+        weight_vec = torch.cat(weight_vec).float().to(self.device) 
         self.rounds.append(weight_vec)
         self.sketch_mask = torch.cat(sketch_mask).byte().to(self.device)
         self.sketch = CSVec(d=self.sketch_mask.sum().item(), 
@@ -136,9 +154,12 @@ class FedParamServer:
             if isinstance(m, torch.nn.Linear):
                 if m.bias is not None:
                     m.bias.do_sketching = sketch_biases
-        self.model = model.to(self.device)
+        self.model = model
 
     def model_call(self, *args):
+        args = [arg.to(self.device) for arg in args]
+        self.outs = self.model(*args)
+        return self.outs
         #self.cuda()
         outs = self.model(args[0].to(self.device))
         #print(f"Length of self.outs is {len(self.outs)}")
@@ -148,6 +169,9 @@ class FedParamServer:
         self.criterion = criterion.to(self.device)
 
     def loss_call(self, *args):
+        args = [arg.to(self.device) for arg in args[:2]]
+        self.loss = self.criterion(self.outs, args[1])
+        return self.loss
         loss = self.criterion(
             args[0].to(self.device), 
             args[1].to(self.device))
@@ -162,3 +186,40 @@ class FedParamServer:
             #print(f"Exception is {e}")
             return [{'lr': group['lr']} for group in self.param_groups]
 
+    def _getGradShapes(self):
+        """Return the shapes and sizes of the weight matrices"""
+        with torch.no_grad():
+            gradShapes = []
+            gradSizes = []
+            for group in self.param_groups:
+                for p in group["params"]:
+                    if p.grad is None:
+                        gradShapes.append(p.data.shape)
+                        gradSizes.append(torch.numel(p))
+                    else:
+                        gradShapes.append(p.grad.data.shape)
+                        gradSizes.append(torch.numel(p))
+            return gradShapes, gradSizes
+
+    def _getLRVec(self):
+        """Return a vector of each gradient element's learning rate
+        If all parameters have the same learning rate, this just
+        returns torch.ones(D) * learning_rate. In this case, this
+        function is memory-optimized by returning just a single
+        number.
+        """
+        if len(self.param_groups) == 1:
+            lr = self.param_groups[0]["lr"]
+#            print(f"Lr is {lr}")
+            return lr
+
+        lrVec = []
+        for group in self.param_groups:
+            lr = group["lr"]
+            for p in group["params"]:
+                if p.grad is None:
+                    lrVec.append(torch.zeros_like(p.data.view(-1)))
+                else:
+                    grad = p.grad.data.view(-1)
+                    lrVec.append(torch.ones_like(grad) * lr)
+        return torch.cat(lrVec)

@@ -32,20 +32,20 @@ from fed_sketched_classes import *
 from fed_param_server import *
 
 DATA_PATH = 'sample_data'
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,4,5"
 
 def train(model, opt, scheduler, criterion, 
     accuracy, train_loader, val_loader, 
-    params, loggers=(), timer=None, fed_params=None):
+    params, loggers=(), timer=None):
     timer = timer or Timer()
     batch_size = params["batch_size"]
     epochs = params["epochs"]
     for epoch in range(args.epochs):
         train_loss, train_acc = run_batches(model, opt, scheduler, 
-            criterion, accuracy, train_loader, True)
+            criterion, accuracy, train_loader, True, params)
         train_time = timer()
         val_loss, val_acc = run_batches(model, None, scheduler,
-            criterion, accuracy, val_loader, False)
+            criterion, accuracy, val_loader, False, params)
         val_time = timer()
         epoch_stats = {
             'train_time': train_time,
@@ -64,24 +64,30 @@ def train(model, opt, scheduler, criterion,
 
 def run_batches(model, opt, scheduler, criterion, 
     accuracy, loader, training, fed_params):
+    model.train(training)
     losses = []
     accs = []
+    scheduler.step()
     for idx, batch in enumerate(loader):
         inputs = batch["input"].to(device)
         targets = batch["target"].to(device)
         outs = model(inputs)
-        batch_loss = criterion(outs, targets)
         if training:
+            batch_loss = criterion(outs, targets)
+            #print(batch_loss.mean())
             opt.zero_grad()
             #batch_loss.sum().backward()
             batch_loss.backward()
             scheduler.step()
             opt.step()
-        #losses.append(batch_loss.detach().mean().cpu().numpy())
+            batch_acc = accuracy(torch.cat(ray.get(outs), dim=0), 
+                targets).float().mean().cpu().numpy()
+        else:
+            batch_loss = criterion(outs, targets, training)
+            batch_acc = accuracy(ray.get(outs),
+                targets).float().mean().cpu().numpy()
         losses.append(batch_loss.mean())
         #batch_acc = accuracy(outs, targets).float().mean().cpu().numpy()
-        batch_acc = accuracy(torch.cat(ray.get(outs), dim=0), 
-                targets).float().mean().cpu().numpy()
         accs.append(batch_acc)
     return np.mean(losses), np.mean(accs)
 
@@ -168,8 +174,8 @@ args = parser.parse_args()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 timer = Timer()
+from data_utils import *
 if args.fed:
-    from data_utils import *
     hp_default["participation_rate"] = args.rate
     hp_default["n_clients"] = args.clients
     DATA_LEN = 50000
@@ -203,6 +209,9 @@ else:
                             set_random_choices=True, drop_last=True)
     val_loader = Batches(test_set, args.batch_size, shuffle=False,
                            drop_last=False)
+    fed_params = hp_default
+    fed_params["batch_size"] = args.batch_size
+    fed_params["epochs"] = args.epochs
 
 print('Initializing everything')
 sketched_params = {
@@ -220,7 +229,7 @@ sketched_params = {
     "batch_size": args.batch_size,
     "epochs": args.epochs,
 }
-ray.init(num_gpus=7, redis_password="sketched_sgd")
+ray.init(num_gpus=4, redis_password="sketched_sgd")
 model_cls = Net
 model_config = {}
 if args.test:
@@ -235,7 +244,7 @@ else:
     }
 lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
 lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
-if args.fed:
+if not args.fed:
     workers = [FedSketchedWorker.remote(sketched_params) for _ in range(args.num_workers)]
     param_server = FedParamServer.remote(sketched_params)
     model = FedSketchedModel(model_cls, model_config, workers, param_server, fed_params)
@@ -276,5 +285,5 @@ if args.fed:
         loggers=(TableLogger(), TSVLogger()), timer=timer)
 else:
     train(model, opt, scheduler, criterion, accuracy, 
-        train_loader, val_loader, sketched_params,
+        train_loader, val_loader, fed_params,
         loggers=(TableLogger(), TSVLogger()), timer=timer)
