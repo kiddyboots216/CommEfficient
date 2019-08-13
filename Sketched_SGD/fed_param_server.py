@@ -24,7 +24,8 @@ class FedParamServer:
         self.device = torch.device("cuda" if 
             torch.cuda.is_available() else "cpu")
 
-    def sync(self, round_id):
+    # def sync(self, round_id):
+    def sync(self):
         return self.rounds[-1]
         stale_update = self.rounds[round_id]
         return stale_update
@@ -37,46 +38,38 @@ class FedParamServer:
         candidate_top_k = self.sketch.unSketch(k=self.p2*self.k)
         candidate_hh_coords = candidate_top_k.nonzero()
         hhs = [grad[candidate_hh_coords] for grad in grads]
-        candidate_top_k[candidate_hh_coords] = torch.sum(
-            torch.stack(hhs),dim=0)
+        candidate_top_k[candidate_hh_coords] = sum(hhs)
+        # candidate_top_k[candidate_hh_coords] = torch.sum(
+        #     torch.stack(hhs),dim=0)
         weights = self._topk(candidate_top_k, k=self.k)
         weight_update = torch.zeros(self.grad_size, device=self.device)
         weight_update[self.sketch_mask] = weights
-        weight_update[~self.sketch_mask] = torch.sum(
-            torch.stack(
-                [grad[~self.sketch_mask] for grad in grads]), dim=0)
+        weight_update[~self.sketch_mask] = sum(
+            [grad[~self.sketch_mask] for grad in grads])
+        # weight_update[~self.sketch_mask] = torch.sum(
+        #     torch.stack(
+        #         [grad[~self.sketch_mask] for grad in grads]), dim=0)
         self._apply_update(weight_update)
 
     def _apply_update(self, update):
         curr_weights = self.rounds[-1]
-        updated_weights = curr_weights - (update * self._getLRVec())
+        weight_update = update * self._getLRVec()
         #import pdb; pdb.set_trace()
-        self.rounds.append(updated_weights)
-        self._sync_weights(updated_weights)
+        self.rounds.append(weight_update.cpu())
+        self._sync_weights(weight_update)
 
     def _sync_weights(self, update):
         """Set params"""
-        gradShapes, gradSizes = self._getGradShapes()
-        startPos = 0
-        i = 0
-        for group in self.param_groups:
-            for p in group["params"]:
-                shape = gradShapes[i]
-                size = gradSizes[i]
-                i += 1
-                assert(size == torch.numel(p))
-                p.data = update[startPos:startPos + size].reshape(shape)
-                startPos += size
         #self.sync(weightUpdate * self._getLRVec())
         # weight_update = update * self._getLRVec()
         # #import pdb; pdb.set_trace()
-        # weight_update = weight_update.to(self.device)
-        # start = 0
-        # for param_group in self.param_groups:
-        #     for p in param_group['params']:
-        #         end = start + torch.numel(p)
-        #         p.data.add_(-weight_update[start:end].reshape(p.data.shape))
-        #         start = end
+        weight_update = update.to(self.device)
+        start = 0
+        for param_group in self.param_groups:
+            for p in param_group['params']:
+                end = start + torch.numel(p)
+                p.data.add_(-weight_update[start:end].reshape(p.data.shape))
+                start = end
         #import pdb; pdb.set_trace()
         # self._setGradVec(weight_update)
         # self._updateParamsWithGradVec()

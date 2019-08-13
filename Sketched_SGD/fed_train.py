@@ -39,6 +39,7 @@ def train(model, opt, scheduler, criterion,
     params, loggers=(), timer=None):
     timer = timer or Timer()
     batch_size = params["batch_size"]
+    # print(f"Length of loader: {len(train_loader)} with batch_size {batch_size}")
     epochs = params["epochs"]
     for epoch in range(args.epochs):
         train_loss, train_acc = run_batches(model, opt, scheduler, 
@@ -67,10 +68,10 @@ def run_batches(model, opt, scheduler, criterion,
     model.train(training)
     losses = []
     accs = []
-    scheduler.step()
+    # scheduler.step()
     for idx, batch in enumerate(loader):
-        inputs = batch["input"].to(device)
-        targets = batch["target"].to(device)
+        inputs = batch["input"]
+        targets = batch["target"]
         outs = model(inputs)
         if training:
             batch_loss = criterion(outs, targets)
@@ -80,12 +81,16 @@ def run_batches(model, opt, scheduler, criterion,
             batch_loss.backward()
             scheduler.step()
             opt.step()
-            batch_acc = accuracy(torch.cat(ray.get(outs), dim=0), 
-                targets).float().mean().cpu().numpy()
+            batch_acc = accuracy(
+                    torch.cat(ray.get(outs), dim=0),
+                    targets.to(device)
+                ).float().mean().cpu().numpy()
         else:
             batch_loss = criterion(outs, targets, training)
-            batch_acc = accuracy(ray.get(outs),
-                targets).float().mean().cpu().numpy()
+            batch_acc = accuracy(
+                    ray.get(outs),
+                    targets.to(device)
+                ).float().mean().cpu().numpy()
         losses.append(batch_loss.mean())
         #batch_acc = accuracy(outs, targets).float().mean().cpu().numpy()
         accs.append(batch_acc)
@@ -174,8 +179,8 @@ args = parser.parse_args()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 timer = Timer()
-from data_utils import *
 if args.fed:
+    from data_utils import *
     hp_default["participation_rate"] = args.rate
     hp_default["n_clients"] = args.clients
     DATA_LEN = 50000
@@ -209,9 +214,9 @@ else:
                             set_random_choices=True, drop_last=True)
     val_loader = Batches(test_set, args.batch_size, shuffle=False,
                            drop_last=False)
-    fed_params = hp_default
-    fed_params["batch_size"] = args.batch_size
-    fed_params["epochs"] = args.epochs
+    # fed_params = hp_default
+    # fed_params["batch_size"] = args.batch_size
+    # fed_params["epochs"] = args.epochs
 
 print('Initializing everything')
 sketched_params = {
@@ -263,8 +268,7 @@ else:
     criterion = SketchedLoss(criterion, workers)
     scheduler = optim.lr_scheduler.LambdaLR(opt, lr_lambda=[lambda_step])
     accuracy = Correct().to(device)
-#lambda_step = lambda t: np.interp([t/len(train_loader)], [0, 5, args.epochs], [0, 0.4, 0])[0]/args.batch_size
-#scheduler = optim.lr_scheduler.LambdaLR(sketched_opt, lr_lambda=[lambda_step])
+
 class FakeSched(object):
     def __init__(self):
         self.x = 0
@@ -272,12 +276,7 @@ class FakeSched(object):
         self.x += 1
     def get_lr(self):
         return [self.x]
-#scheduler = FakeSched()
-#train(sketched_model, sketched_opt, scheduler, sketched_criterion, accuracy,
-#    train_loader, val_loader, args.epochs, loggers=(TableLogger(), TSVLogger()), timer=timer)
-#model = model_cls(**model_config).to(device)
-#opt = optim.SGD(model.parameters(), lr=1)
-#scheduler = FakeSched()
+
 print('Finished in {:.2f} seconds'.format(timer()))
 if args.fed:
     train_fed(model, opt, scheduler, criterion, accuracy, 

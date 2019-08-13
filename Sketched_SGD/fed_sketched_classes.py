@@ -13,7 +13,7 @@ class FedSketchedModel:
     def __init__(self, model_cls, model_config, workers,
                 param_server, fed_params, 
                 sketch_biases=False, sketch_params_larger_than=0):
-        self.participation = fed_params["participation_rate"]
+        # self.participation = fed_params["participation_rate"]
         self.rounds = []
         self.workers = np.array(workers)
         self.param_server = param_server
@@ -51,7 +51,8 @@ class FedSketchedModel:
                 start = i * batch_size // num_workers
                 end = (i+1) * batch_size // num_workers
                 input_minibatches.append(args[0][start:end])
-            return [worker.model_call.remote(input_minibatches[worker_id]) for worker_id, worker in enumerate(self.workers)]
+            return [worker.model_call.remote(
+                input_minibatches[worker_id]) for worker_id, worker in enumerate(self.workers)]
         else:
             return self.param_server.model_call.remote(*args)
 
@@ -93,13 +94,15 @@ class FedSketchedOptimizer(optim.Optimizer):
         update_workers = self.param_server
         ray.wait([w.sync.remote(
             self.param_server.sync.remote(
-                w.get_last_round.remote()
+                # w.get_last_round.remote()
             )) for w in stale_workers])
         self.cur_round += 1
         self._step(stale_workers, update_workers)
 
     def zero_grad(self):
-        ray.wait([worker.optimizer_zero_grad.remote() for worker in self.workers])
+        # ray.wait(
+        [worker.optimizer_zero_grad.remote() for worker in self.workers]
+        # )
 
     def _step(self, train_workers, update_workers):
         grads = [worker.compute_grad.remote(self.cur_round) for worker in train_workers]
@@ -119,8 +122,8 @@ class FedSketchedOptimizer(optim.Optimizer):
             param_groups = ray.get(
                 self.param_server.get_param_groups.remote())
             #print(f"Param groups are {param_groups}")
-            return [SketchedParamGroup(param_group, [self.param_server], idx
-                ) for idx, param_group in enumerate(param_groups)]
+            # return [SketchedParamGroup(param_group, [self.param_server], idx
+            #     ) for idx, param_group in enumerate(param_groups)]
             return [SketchedParamGroup(
                     param_group, np.append(self.workers, self.param_server)
                     , idx) for idx, param_group in enumerate(param_groups)]
@@ -150,7 +153,8 @@ class FedSketchedLoss:
                 start = i * batch_size // num_workers
                 end = (i+1) * batch_size // num_workers
                 target_minibatches.append(args[1][start:end])
-            return self._loss(input_minibatches, target_minibatches, self.workers)
+            return self._loss(
+                input_minibatches, target_minibatches, self.workers)
 
         if len(args) == 2:
             results = ray.get(self.param_server.loss_call.remote(*args))
@@ -354,14 +358,18 @@ class FedSketchedWorker(object):
         candidate_top_k = self.sketch.unSketch(k=self.p2*self.k)
         candidate_hh_coords = candidate_top_k.nonzero()
         hhs = [grad[candidate_hh_coords] for grad in grads]
-        candidate_top_k[candidate_hh_coords] = torch.sum(
-            torch.stack(hhs),dim=0)
+        candidate_top_k[candidate_hh_coords] = sum(hhs)
+        # candidate_top_k[candidate_hh_coords] = torch.sum(
+        #     torch.stack(hhs),dim=0)
         weights = self._topk(candidate_top_k, k=self.k)
         weight_update = torch.zeros(self.grad_size, device=self.device)
         weight_update[self.sketch_mask] = weights
+        weight_update[~self.sketch_mask] = sum([grad[~self.sketch_mask] for grad in grads])
+        """
         weight_update[~self.sketch_mask] = torch.sum(
             torch.stack(
                 [grad[~self.sketch_mask] for grad in grads]), dim=0)
+        """
         self._apply_update(weight_update)
 
     def _apply_update(self, update):
@@ -469,35 +477,47 @@ class FedSketchedWorker(object):
 
     def _zero_grad(self):
         """Zero out param grads"""
-        gradShapes, gradSizes = self._getGradShapes()
-        startPos = 0
-        i = 0
         for group in self.param_groups:
             for p in group["params"]:
-                shape = gradShapes[i]
-                size = gradSizes[i]
-                i += 1
                 if p.grad is None:
                     continue
-                assert(size == torch.numel(p))
                 p.grad.data.zero_()
-                startPos += size
+        # gradShapes, gradSizes = self._getGradShapes()
+        # startPos = 0
+        # i = 0
+        # for group in self.param_groups:
+        #     for p in group["params"]:
+        #         shape = gradShapes[i]
+        #         size = gradSizes[i]
+        #         i += 1
+        #         if p.grad is None:
+        #             continue
+        #         assert(size == torch.numel(p))
+        #         p.grad.data.zero_()
+        #         startPos += size
 
     def sync(self, update):
         """Set params"""
         self.u[update.nonzero()] = 0
         self.v[update.nonzero()] = 0
         self.v[~self.sketch_mask] = 0
-        gradShapes, gradSizes = self._getGradShapes()
-        startPos = 0
-        i = 0
-        #import pdb; pdb.set_trace()
-        for group in self.param_groups:
-            for p in group["params"]:
-                shape = gradShapes[i]
-                size = gradSizes[i]
-                i += 1
-                assert(size == torch.numel(p))
-                p.data = update[startPos:startPos + size].reshape(shape)
-                startPos += size
-
+        updated_weights = update.to(self.device)
+        start = 0
+        for param_group in self.param_groups:
+            for p in param_group['params']:
+                end = start + torch.numel(p)
+                # we previously had diff_vec = copy - (copy - grad) = grad, so subtract here 
+                p.data = updated_weights[start:end].reshape(p.data.shape)
+                start = end
+        # gradShapes, gradSizes = self._getGradShapes()
+        # startPos = 0
+        # i = 0
+        # #import pdb; pdb.set_trace()
+        # for group in self.param_groups:
+        #     for p in group["params"]:
+        #         shape = gradShapes[i]
+        #         size = gradSizes[i]
+        #         i += 1
+        #         assert(size == torch.numel(p))
+        #         p.data = update[startPos:startPos + size].reshape(shape)
+        #         startPos += size
