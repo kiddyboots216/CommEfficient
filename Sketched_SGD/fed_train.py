@@ -41,6 +41,7 @@ def train(model, opt, scheduler, criterion,
     batch_size = params["batch_size"]
     # print(f"Length of loader: {len(train_loader)} with batch_size {batch_size}")
     epochs = params["epochs"]
+    scheduler.step()
     for epoch in range(args.epochs):
         train_loss, train_acc = run_batches(model, opt, scheduler, 
             criterion, accuracy, train_loader, True, params)
@@ -68,14 +69,13 @@ def run_batches(model, opt, scheduler, criterion,
     model.train(training)
     losses = []
     accs = []
-    # scheduler.step()
     for idx, batch in enumerate(loader):
         inputs = batch["input"]
         targets = batch["target"]
         outs = model(inputs)
         if training:
             batch_loss = criterion(outs, targets)
-            #print(batch_loss.mean())
+            print(batch_loss.mean())
             opt.zero_grad()
             #batch_loss.sum().backward()
             batch_loss.backward()
@@ -95,7 +95,20 @@ def run_batches(model, opt, scheduler, criterion,
         #batch_acc = accuracy(outs, targets).float().mean().cpu().numpy()
         accs.append(batch_acc)
     return np.mean(losses), np.mean(accs)
-
+"""
+weight_update = param_server.get_latest()
+    return self.rounds[-1]
+w._apply_update(weight_update)
+    zero out entries of u, v where weight_update is nonzero
+    p.data.add(-weight_update)
+grads = worker.compute_grad()
+param_server.all_reduce_sketched(grads)
+   compute weight_update
+   self._apply_update(weight_update)
+      weight_update *= self._getLRVec()
+      self.rounds.append(weight_update)
+      p.data.add(-weight_update)
+"""
 def train_fed(model, opt, scheduler, criterion, 
     accuracy, train_loader, val_loader, 
     params, loggers=(), timer=None, fed_params=None):
@@ -179,8 +192,8 @@ args = parser.parse_args()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 timer = Timer()
+from data_utils import *
 if args.fed:
-    from data_utils import *
     hp_default["participation_rate"] = args.rate
     hp_default["n_clients"] = args.clients
     DATA_LEN = 50000
@@ -214,9 +227,9 @@ else:
                             set_random_choices=True, drop_last=True)
     val_loader = Batches(test_set, args.batch_size, shuffle=False,
                            drop_last=False)
-    # fed_params = hp_default
-    # fed_params["batch_size"] = args.batch_size
-    # fed_params["epochs"] = args.epochs
+    fed_params = hp_default
+    fed_params["batch_size"] = args.batch_size
+    fed_params["epochs"] = args.epochs
 
 print('Initializing everything')
 sketched_params = {

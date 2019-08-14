@@ -25,10 +25,17 @@ class FedParamServer:
             torch.cuda.is_available() else "cpu")
 
     # def sync(self, round_id):
-    def sync(self):
-        return self.rounds[-1]
-        stale_update = self.rounds[round_id]
-        return stale_update
+    def get_latest(self, round_id):
+        update = self.rounds[-1]
+        #import pdb; pdb.set_trace()
+        return update
+        stale_weights = self.rounds[round_id - 1].to(self.device)
+        curr_weights = self.rounds[-1].to(self.device)
+        diff_vec = torch.sub(curr_weights, stale_weights)
+        #print(f"giving weights for round {round_id} with {diff_vec.mean()}")
+        import pdb; pdb.set_trace()
+        return diff_vec 
+        #return self.rounds[-1]
 
     def all_reduce_sketched(self, *grads):
         # compute update
@@ -39,40 +46,29 @@ class FedParamServer:
         candidate_hh_coords = candidate_top_k.nonzero()
         hhs = [grad[candidate_hh_coords] for grad in grads]
         candidate_top_k[candidate_hh_coords] = sum(hhs)
-        # candidate_top_k[candidate_hh_coords] = torch.sum(
-        #     torch.stack(hhs),dim=0)
         weights = self._topk(candidate_top_k, k=self.k)
         weight_update = torch.zeros(self.grad_size, device=self.device)
         weight_update[self.sketch_mask] = weights
         weight_update[~self.sketch_mask] = sum(
             [grad[~self.sketch_mask] for grad in grads])
-        # weight_update[~self.sketch_mask] = torch.sum(
-        #     torch.stack(
-        #         [grad[~self.sketch_mask] for grad in grads]), dim=0)
         self._apply_update(weight_update)
 
     def _apply_update(self, update):
-        curr_weights = self.rounds[-1]
+        #curr_weights = self.rounds[-1].to(self.device)
         weight_update = update * self._getLRVec()
+        #print(f"Applying weight_update with {weight_update.mean()}")
+        #updated_weights = curr_weights - weight_update
+        #print(f"Appending updated weights with {updated_weights.mean()}")
         #import pdb; pdb.set_trace()
+        #self.rounds.append(updated_weights.cpu())
         self.rounds.append(weight_update.cpu())
-        self._sync_weights(weight_update)
-
-    def _sync_weights(self, update):
-        """Set params"""
-        #self.sync(weightUpdate * self._getLRVec())
-        # weight_update = update * self._getLRVec()
-        # #import pdb; pdb.set_trace()
-        weight_update = update.to(self.device)
         start = 0
         for param_group in self.param_groups:
             for p in param_group['params']:
                 end = start + torch.numel(p)
+                #p.data = updated_weights[start:end].reshape(p.data.shape)
                 p.data.add_(-weight_update[start:end].reshape(p.data.shape))
                 start = end
-        #import pdb; pdb.set_trace()
-        # self._setGradVec(weight_update)
-        # self._updateParamsWithGradVec()
 
     def param_group_setitem(self, index, name, value):
         self.param_groups[index].__setitem__(name, value)

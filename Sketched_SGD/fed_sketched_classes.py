@@ -90,23 +90,26 @@ class FedSketchedOptimizer(optim.Optimizer):
 
     def step(self):
         #stale_workers, update_workers = self._get_workers()
-        stale_workers = self.workers
-        update_workers = self.param_server
-        ray.wait([w.sync.remote(
-            self.param_server.sync.remote(
-                # w.get_last_round.remote()
-            )) for w in stale_workers])
+        workers = self.workers
+        if self.cur_round > 0:
+            ray.wait([w._apply_update.remote(
+                self.param_server.get_latest.remote(
+                    w.get_last_round.remote()
+                )) for w in workers])
         self.cur_round += 1
-        self._step(stale_workers, update_workers)
+        self._step(workers, self.param_server)
 
     def zero_grad(self):
-        # ray.wait(
+        ray.wait(
         [worker.optimizer_zero_grad.remote() for worker in self.workers]
-        # )
+        )
 
-    def _step(self, train_workers, update_workers):
-        grads = [worker.compute_grad.remote(self.cur_round) for worker in train_workers]
-        ray.wait([update_workers.all_reduce_sketched.remote(*grads)])
+    def _step(self, train_workers, param_server):
+        grads = [worker.compute_grad.remote(self.cur_round
+            ) for worker in train_workers]
+        #ray.wait(
+        [param_server.all_reduce_sketched.remote(*grads)]
+        #)
         #ray.wait([worker.all_reduce_sketched.remote(
         #    *grads) for worker in update_workers]) 
     
@@ -125,8 +128,8 @@ class FedSketchedOptimizer(optim.Optimizer):
             # return [SketchedParamGroup(param_group, [self.param_server], idx
             #     ) for idx, param_group in enumerate(param_groups)]
             return [SketchedParamGroup(
-                    param_group, np.append(self.workers, self.param_server)
-                    , idx) for idx, param_group in enumerate(param_groups)]
+                    param_group, [self.param_server], idx
+                    ) for idx, param_group in enumerate(param_groups)]
 
 class FedSketchedLoss:
     def __init__(self, criterion, workers, param_server, fed_model):
@@ -225,7 +228,7 @@ class FedSketchedWorker(object):
             if isinstance(m, torch.nn.Linear):
                 if m.bias is not None:
                     m.bias.do_sketching = sketch_biases
-        self.model = model.to(self.device)
+        self.model = model
 
     def set_loss(self, criterion):
         self.criterion = criterion.to(self.device)
@@ -285,6 +288,7 @@ class FedSketchedWorker(object):
         #import pdb; pdb.set_trace()
         self.loss.sum().backward()
         del self.outs
+        del self.loss
 
     def set_optimizer(self, opt_param_groups):
         assert self.model is not None, \
@@ -359,36 +363,28 @@ class FedSketchedWorker(object):
         candidate_hh_coords = candidate_top_k.nonzero()
         hhs = [grad[candidate_hh_coords] for grad in grads]
         candidate_top_k[candidate_hh_coords] = sum(hhs)
-        # candidate_top_k[candidate_hh_coords] = torch.sum(
-        #     torch.stack(hhs),dim=0)
         weights = self._topk(candidate_top_k, k=self.k)
         weight_update = torch.zeros(self.grad_size, device=self.device)
         weight_update[self.sketch_mask] = weights
-        weight_update[~self.sketch_mask] = sum([grad[~self.sketch_mask] for grad in grads])
-        """
-        weight_update[~self.sketch_mask] = torch.sum(
-            torch.stack(
-                [grad[~self.sketch_mask] for grad in grads]), dim=0)
-        """
+        weight_update[~self.sketch_mask] = sum(
+                [grad[~self.sketch_mask] for grad in grads])
         self._apply_update(weight_update)
 
     def _apply_update(self, update):
         # set update
+        update = update.to(self.device)
         self.u[update.nonzero()] = 0
         self.v[update.nonzero()] = 0
         self.v[~self.sketch_mask] = 0
         #self.sync(weightUpdate * self._getLRVec())
         #import pdb; pdb.set_trace()
-        weight_update = update.to(self.device)
         start = 0
         for param_group in self.param_groups:
             for p in param_group['params']:
                 end = start + torch.numel(p)
-                p.data.add_(-weight_update[start:end].reshape(p.data.shape))
+                p.data.add_(-update[start:end].reshape(p.data.shape))
                 start = end
         #import pdb; pdb.set_trace()
-        # self._setGradVec(weight_update)
-        # self._updateParamsWithGradVec()
 
     def cpu(self):
         self.model = self.model.cpu()
@@ -498,6 +494,8 @@ class FedSketchedWorker(object):
 
     def sync(self, update):
         """Set params"""
+        self._apply_update(update)
+        return
         self.u[update.nonzero()] = 0
         self.v[update.nonzero()] = 0
         self.v[~self.sketch_mask] = 0
