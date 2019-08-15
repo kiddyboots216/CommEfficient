@@ -5,9 +5,9 @@ import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
 
-from minimal import CSVec
+from CommEfficient.minimal import CSVec
 
-from sketched_classes import SketchedLossResult, SketchedParamGroup
+from CommEfficient.sketched_classes import SketchedLossResult, SketchedParamGroup
 
 @ray.remote(num_gpus=1)
 class FedParamServer:
@@ -26,14 +26,14 @@ class FedParamServer:
 
     # def sync(self, round_id):
     def get_latest(self, round_id):
-        update = self.rounds[-1]
+        #update = self.rounds[-1]
         #import pdb; pdb.set_trace()
-        return update
-        stale_weights = self.rounds[round_id - 1].to(self.device)
+        #return update
+        stale_weights = self.rounds[round_id].to(self.device)
         curr_weights = self.rounds[-1].to(self.device)
         diff_vec = torch.sub(curr_weights, stale_weights)
         #print(f"giving weights for round {round_id} with {diff_vec.mean()}")
-        import pdb; pdb.set_trace()
+        #import pdb; pdb.set_trace()
         return diff_vec 
         #return self.rounds[-1]
 
@@ -42,11 +42,14 @@ class FedParamServer:
         self.sketch.zero()
         for grad in grads:
             self.sketch += grad[self.sketch_mask]
-        candidate_top_k = self.sketch.unSketch(k=self.p2*self.k)
-        candidate_hh_coords = candidate_top_k.nonzero()
-        hhs = [grad[candidate_hh_coords] for grad in grads]
-        candidate_top_k[candidate_hh_coords] = sum(hhs)
-        weights = self._topk(candidate_top_k, k=self.k)
+        if self.p2 > 0:
+            candidate_top_k = self.sketch.unSketch(k=self.p2*self.k)
+            candidate_hh_coords = candidate_top_k.nonzero()
+            hhs = [grad[candidate_hh_coords] for grad in grads]
+            candidate_top_k[candidate_hh_coords] = sum(hhs)
+            weights = self._topk(candidate_top_k, k=self.k)
+        else:
+            weights = self.sketch.unSketch(k=self.k)
         weight_update = torch.zeros(self.grad_size, device=self.device)
         weight_update[self.sketch_mask] = weights
         weight_update[~self.sketch_mask] = sum(
@@ -54,9 +57,9 @@ class FedParamServer:
         self._apply_update(weight_update)
 
     def _apply_update(self, update):
-        #curr_weights = self.rounds[-1].to(self.device)
+        curr_weights = self.rounds[-1].to(self.device)
         weight_update = update * self._getLRVec()
-        #print(f"Applying weight_update with {weight_update.mean()}")
+        #print(f"Applying weight_update with {weight_update} to {curr_weights}")
         #updated_weights = curr_weights - weight_update
         #print(f"Appending updated weights with {updated_weights.mean()}")
         #import pdb; pdb.set_trace()
@@ -69,6 +72,9 @@ class FedParamServer:
                 #p.data = updated_weights[start:end].reshape(p.data.shape)
                 p.data.add_(-weight_update[start:end].reshape(p.data.shape))
                 start = end
+
+    def model_getattr(self, name):
+        return getattr(self.model, name)
 
     def param_group_setitem(self, index, name, value):
         self.param_groups[index].__setitem__(name, value)
@@ -128,7 +134,7 @@ class FedParamServer:
             device=self.device,
             nChunks=1,
             numBlocks=self.num_blocks)
-        print(f"Total dimension is {self.grad_size} using k {self.k} and p2 {self.p2} with sketch_mask.sum(): {self.sketch_mask.sum()}")
+        #print(f"Total dimension is {self.grad_size} using k {self.k} and p2 {self.p2} with sketch_mask.sum(): {self.sketch_mask.sum()}")
 
     def set_model(self, model_cls, model_config, 
             sketch_biases, sketch_params_larger_than):
@@ -137,7 +143,9 @@ class FedParamServer:
         model = model_cls(**model_config).to(self.device)
         torch.random.set_rng_state(rand_state)
         for p in model.parameters():
-            p.do_sketching = p.numel() >= sketch_params_larger_than
+            size = p.numel()
+            p.do_sketching = size >= sketch_params_larger_than
+            p.data.zero_()
         # override bias terms with whatever sketchBiases is
         for m in model.modules():
             if isinstance(m, torch.nn.Linear):

@@ -5,15 +5,16 @@ import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
 
-from minimal import CSVec
+from CommEfficient.minimal import CSVec
 
-from sketched_classes import SketchedLossResult, SketchedParamGroup
+from CommEfficient.sketched_classes import SketchedLossResult, SketchedParamGroup
 
 class FedSketchedModel:
     def __init__(self, model_cls, model_config, workers,
                 param_server, fed_params, 
                 sketch_biases=False, sketch_params_larger_than=0):
         # self.participation = fed_params["participation_rate"]
+        self.cur_round = 0
         self.rounds = []
         self.workers = np.array(workers)
         self.param_server = param_server
@@ -43,6 +44,11 @@ class FedSketchedModel:
                 for client, loader in list(zip(
                 participating_clients, participating_client_loaders))])
         if self.training:
+            if self.cur_round > 0:
+                ray.wait([w._apply_update.remote(
+                    self.param_server.get_latest.remote(
+                        w.get_last_round.remote()
+                    ), self.cur_round) for w in self.workers])
             input_minibatches = []
             batch_size = len(args[0])
             num_workers = len(self.workers)
@@ -58,14 +64,15 @@ class FedSketchedModel:
 
     def __setattr__(self, name, value):
         if name in ["model", "workers", "participation", 
-                    "rounds", "param_server", "training"]:
+                    "rounds", "param_server", "training",
+                    "cur_round"]:
             self.__dict__[name] = value
         else:
             [worker.model_setattr.remote(
                 name, value) for worker in self.workers]
 
     def __getattr__(self, name):
-        return getattr(self.model, name)
+        return ray.get(self.param_server.model_getattr.remote(name))
 
 class FedSketchedOptimizer(optim.Optimizer):
     def __init__(self, optimizer, workers, param_server, fed_model):
@@ -91,12 +98,8 @@ class FedSketchedOptimizer(optim.Optimizer):
     def step(self):
         #stale_workers, update_workers = self._get_workers()
         workers = self.workers
-        if self.cur_round > 0:
-            ray.wait([w._apply_update.remote(
-                self.param_server.get_latest.remote(
-                    w.get_last_round.remote()
-                )) for w in workers])
         self.cur_round += 1
+        self.model.cur_round = self.cur_round
         self._step(workers, self.param_server)
 
     def zero_grad(self):
@@ -105,7 +108,7 @@ class FedSketchedOptimizer(optim.Optimizer):
         )
 
     def _step(self, train_workers, param_server):
-        grads = [worker.compute_grad.remote(self.cur_round
+        grads = [worker.compute_grad.remote(
             ) for worker in train_workers]
         #ray.wait(
         [param_server.all_reduce_sketched.remote(*grads)]
@@ -222,7 +225,9 @@ class FedSketchedWorker(object):
         model = model_cls(**model_config).to(self.device)
         torch.random.set_rng_state(rand_state)
         for p in model.parameters():
-            p.do_sketching = p.numel() >= sketch_params_larger_than
+            size = p.numel()
+            p.do_sketching = size >= sketch_params_larger_than
+            p.data.zero_()
         # override bias terms with whatever sketchBiases is
         for m in model.modules():
             if isinstance(m, torch.nn.Linear):
@@ -326,15 +331,14 @@ class FedSketchedWorker(object):
             nChunks=1,
             numBlocks=self.num_blocks)
         """
-        print(f"Total dimension is {self.grad_size} using k {self.k} and p2 {self.p2}  with sketch_mask.sum(): {self.sketch_mask.sum()}")
+        #print(f"Total dimension is {self.grad_size} using k {self.k} and p2 {self.p2}  with sketch_mask.sum(): {self.sketch_mask.sum()}")
         self.u = torch.zeros(self.grad_size, device=self.device)
         self.v = torch.zeros(self.grad_size, device=self.device)
 
     def optimizer_zero_grad(self):
         self._zero_grad()
 
-    def compute_grad(self, cur_round):
-        self.cur_round = cur_round
+    def compute_grad(self):
         #assert self._getLRVec() != 0.0, "invalid lr"
         # compute grad 
         #self.cuda()
@@ -370,7 +374,9 @@ class FedSketchedWorker(object):
                 [grad[~self.sketch_mask] for grad in grads])
         self._apply_update(weight_update)
 
-    def _apply_update(self, update):
+    def _apply_update(self, update, cur_round):
+        self.cur_round = cur_round
+        print(f"Applying update {update}")
         # set update
         update = update.to(self.device)
         self.u[update.nonzero()] = 0

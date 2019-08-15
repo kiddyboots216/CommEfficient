@@ -8,7 +8,7 @@ setup(name='CommEfficient',
       author='Ashwinee Panda',
       author_email='kiddyboots216@berkeley.edu',
       license='GNU GPL-3.0',
-      packages=['Sketched_SGD'],
+      packages=['CommEfficient'],
       # install_requires=[
       #     'csvec',
       # ],
