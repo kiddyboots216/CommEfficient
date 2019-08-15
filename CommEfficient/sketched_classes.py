@@ -5,7 +5,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
 
-from minimal import CSVec
+from CommEfficient.minimal import CSVec
 
 class SketchedModel:
     def __init__(self, model_cls, model_config, workers, 
