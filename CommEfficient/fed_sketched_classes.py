@@ -227,7 +227,7 @@ class FedSketchedWorker(object):
         for p in model.parameters():
             size = p.numel()
             p.do_sketching = size >= sketch_params_larger_than
-            p.data.zero_()
+            #p.data.zero_()
         # override bias terms with whatever sketchBiases is
         for m in model.modules():
             if isinstance(m, torch.nn.Linear):
@@ -376,7 +376,7 @@ class FedSketchedWorker(object):
 
     def _apply_update(self, update, cur_round):
         self.cur_round = cur_round
-        print(f"Applying update {update}")
+        #print(f"Applying update {update} for {cur_round}")
         # set update
         update = update.to(self.device)
         self.u[update.nonzero()] = 0
@@ -388,7 +388,7 @@ class FedSketchedWorker(object):
         for param_group in self.param_groups:
             for p in param_group['params']:
                 end = start + torch.numel(p)
-                p.data.add_(-update[start:end].reshape(p.data.shape))
+                p.data.add_(update[start:end].reshape(p.data.shape))
                 start = end
         #import pdb; pdb.set_trace()
 

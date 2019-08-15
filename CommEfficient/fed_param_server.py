@@ -60,17 +60,17 @@ class FedParamServer:
         curr_weights = self.rounds[-1].to(self.device)
         weight_update = update * self._getLRVec()
         #print(f"Applying weight_update with {weight_update} to {curr_weights}")
-        #updated_weights = curr_weights - weight_update
+        updated_weights = curr_weights - weight_update
         #print(f"Appending updated weights with {updated_weights.mean()}")
         #import pdb; pdb.set_trace()
-        #self.rounds.append(updated_weights.cpu())
-        self.rounds.append(weight_update.cpu())
+        self.rounds.append(updated_weights.cpu())
+        #self.rounds.append(weight_update.cpu())
         start = 0
         for param_group in self.param_groups:
             for p in param_group['params']:
                 end = start + torch.numel(p)
-                #p.data = updated_weights[start:end].reshape(p.data.shape)
-                p.data.add_(-weight_update[start:end].reshape(p.data.shape))
+                p.data = updated_weights[start:end].reshape(p.data.shape)
+                #p.data.add_(-weight_update[start:end].reshape(p.data.shape))
                 start = end
 
     def model_getattr(self, name):
@@ -145,7 +145,7 @@ class FedParamServer:
         for p in model.parameters():
             size = p.numel()
             p.do_sketching = size >= sketch_params_larger_than
-            p.data.zero_()
+            #p.data.zero_()
         # override bias terms with whatever sketchBiases is
         for m in model.modules():
             if isinstance(m, torch.nn.Linear):
