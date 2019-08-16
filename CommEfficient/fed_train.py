@@ -75,7 +75,7 @@ def run_batches(model, opt, scheduler, criterion,
         outs = model(inputs)
         if training:
             batch_loss = criterion(outs, targets)
-            print(batch_loss.mean())
+            #print(batch_loss.mean())
             opt.zero_grad()
             #batch_loss.sum().backward()
             batch_loss.backward()

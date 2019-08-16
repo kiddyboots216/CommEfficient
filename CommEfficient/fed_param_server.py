@@ -30,8 +30,84 @@ class FedParamServer:
         self.sketch.zero()
         self.sketch += diff_vec
 
+    def sync(self, round_id):
+        w_stale = self.rounds[round_id]
+        w_new = self.rounds[-1]
+        desired_diff = w_new - w_stale
+        # find a datum such that the gradient of the model evaluated
+        # on that datum using w_stale equals desired_diff
+        #raise RuntimeWarning("overriding your model's requires_grad " + \
+        #                     "due to extreme laziness")
+        def get_param_vec(model):
+            param_vec = []
+            start = 0
+            for p in model.parameters():
+                end = start + p.numel()
+                param_vec.append(p.data.view(-1))
+                start = end
+            return torch.cat(param_vec).to(self.device)
 
-    # def sync(self, round_id):
+        def set_param_vec(model, param_vec):
+            start = 0
+            for p in model.parameters():
+                end = start + p.numel()
+                p.data.zero_()
+                p.data.add_(param_vec[start:end].view(p.size()))
+                start = end
+
+        def get_grad_vec(model):
+            start = 0
+            grad_vec = []
+            for p in model.parameters():
+                end = start + p.numel()
+                if p.grad is None:
+                    grad_vec.append(torch.zeros(p.numel()))
+                else:
+                    grad_vec.append(p.grad.view(-1))
+                start = end
+            return torch.cat(grad_vec).to(self.device)
+
+        def set_grad_vec(model, grad_vec):
+            start = 0
+            for p in model.parameters():
+                end = start + p.numel()
+                p.grad.data.zero_()
+                p.data.add_(grad_vec[start:end].view(p.grad.size()))
+                start = end
+
+        orig_param_vec = get_param_vec(self.model)
+        set_param_vec(self.model, w_stale)
+
+        d = torch.randn(1, 3, 32, 32).to(self.device)
+        d.requires_grad = True
+
+        # all workers know to use class 0 as the target
+        fake_target = torch.tensor([0]).long().to(self.device)
+
+        # save the original gradient
+        orig_grad = get_grad_vec(self.model)
+
+        # minimize ||model_grad - desired_diff||_2^2 over d
+        opt = torch.optim.SGD((d,), lr=0.01, momentum=0.9)
+        for i in range(10):
+            opt.zero_grad()
+            self.model.zero_grad()
+            fake_loss = self.criterion(self.model(d), fake_target)
+            fake_loss.backward(create_graph=True)
+            model_grad = get_grad_vec(self.model)
+
+            loss = torch.sum((model_grad - desired_diff)**2)
+            data_grad = torch.autograd.grad(loss, d, only_inputs=True)[0]
+
+            opt.param_groups[0]["params"][0].grad = data_grad
+            opt.step()
+
+        # reset to original state
+        set_grad_vec(self.model, orig_grad)
+        set_param_vec(self.model, orig_param_vec)
+
+        return w_stale
+
     def get_latest(self, round_id):
         #update = self.rounds[-1]
         #import pdb; pdb.set_trace()
@@ -67,17 +143,17 @@ class FedParamServer:
         curr_weights = self.rounds[-1].to(self.device)
         weight_update = update * self._getLRVec()
         #print(f"Applying weight_update with {weight_update} to {curr_weights}")
-        #updated_weights = curr_weights - weight_update
+        updated_weights = curr_weights - weight_update
         #print(f"Appending updated weights with {updated_weights.mean()}")
         #import pdb; pdb.set_trace()
-        #self.rounds.append(updated_weights.cpu())
-        self.rounds.append(weight_update.cpu())
+        self.rounds.append(updated_weights.cpu())
+        #self.rounds.append(weight_update.cpu())
         start = 0
         for param_group in self.param_groups:
             for p in param_group['params']:
                 end = start + torch.numel(p)
-                #p.data = updated_weights[start:end].reshape(p.data.shape)
-                p.data.add_(-weight_update[start:end].reshape(p.data.shape))
+                p.data = updated_weights[start:end].reshape(p.data.shape)
+                #p.data.add_(-weight_update[start:end].reshape(p.data.shape))
                 start = end
 
     def model_getattr(self, name):
@@ -152,7 +228,7 @@ class FedParamServer:
         for p in model.parameters():
             size = p.numel()
             p.do_sketching = size >= sketch_params_larger_than
-            p.data.zero_()
+            #p.data.zero_()
         # override bias terms with whatever sketchBiases is
         for m in model.modules():
             if isinstance(m, torch.nn.Linear):

@@ -388,12 +388,10 @@ from inspect import signature
 from collections import namedtuple
 import time
 import numpy as np
-import pandas as pd
 from functools import singledispatch
 from collections import OrderedDict
 import torch
 import torch.nn as nn
-import track
 import torch.nn.functional as F
 # from single_trainer import SGD_Sketched
 #####################
@@ -1420,10 +1418,8 @@ from inspect import signature
 from collections import namedtuple
 import time
 import numpy as np
-import pandas as pd
 from functools import singledispatch
 from collections import OrderedDict
-import track
 import ray
 import torch
 import torch.nn as nn
