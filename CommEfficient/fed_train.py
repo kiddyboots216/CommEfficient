@@ -140,6 +140,9 @@ def train_fed(model, opt, scheduler, criterion,
 def run_fed_batches(model, opt, scheduler, criterion, 
     accuracy, loaders, training, fed_params):
     participation = fed_params['participation_rate']
+    DATA_LEN = fed_params['DATA_LEN']
+    n_clients = fed_params['n_clients']
+    batch_size = fed_params['batch_size']
     model.train(training)
     losses = []
     accs = []

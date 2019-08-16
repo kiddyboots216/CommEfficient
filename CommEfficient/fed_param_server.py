@@ -24,6 +24,13 @@ class FedParamServer:
         self.device = torch.device("cuda" if 
             torch.cuda.is_available() else "cpu")
 
+    def sketch_latest(self, round_id):
+        diff_vec = self.get_latest(round_id)
+        return diff_vec
+        self.sketch.zero()
+        self.sketch += diff_vec
+
+
     # def sync(self, round_id):
     def get_latest(self, round_id):
         #update = self.rounds[-1]

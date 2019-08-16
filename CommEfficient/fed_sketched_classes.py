@@ -45,7 +45,7 @@ class FedSketchedModel:
                 participating_clients, participating_client_loaders))])
         if self.training:
             if self.cur_round > 0:
-                ray.wait([w._apply_update.remote(
+                ray.wait([w.sketched_update.remote(
                     self.param_server.get_latest.remote(
                         w.get_last_round.remote()
                     ), self.cur_round) for w in self.workers])
@@ -358,6 +358,22 @@ class FedSketchedWorker(object):
             #self.v = gradVec
         # this is v
         return self.v
+
+    def sketched_update(self, *grad):
+        self.sketch.zero()
+        self.sketch += grad[self.sketch_mask]
+        if self.p2 > 0:
+            server_top_k = self.sketch.unSketch(k=self.p2*self.k)
+            server_hh_coords = server_top_k.nonzero()
+            hhs = grad[server_hh_coords]
+            server_top_k[server_hh_coords] = sum(hhs)
+            weights = self._topk(server_top_k, k=self.k)
+        else:
+            weights = self.sketch.unSketch(k=self.k)
+        weight_update = torch.zeros(self.grad_size, device=self.device)
+        weight_update[self.sketch_mask] = weights
+        weight_update[~self.sketch_mask] = grad[~self.sketch_mask]
+        self._apply_update(weight_update)
 
     def all_reduce_sketched(self, *grads):
         self.sketch.zero()
