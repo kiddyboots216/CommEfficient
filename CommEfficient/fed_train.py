@@ -41,7 +41,7 @@ def train(model, opt, scheduler, criterion,
     batch_size = params["batch_size"]
     # print(f"Length of loader: {len(train_loader)} with batch_size {batch_size}")
     epochs = params["epochs"]
-    scheduler.step()
+    #scheduler.step()
     for epoch in range(args.epochs):
         train_loss, train_acc = run_batches(model, opt, scheduler, 
             criterion, accuracy, train_loader, True, params)
@@ -75,7 +75,7 @@ def run_batches(model, opt, scheduler, criterion,
         outs = model(inputs)
         if training:
             batch_loss = criterion(outs, targets)
-            #print(batch_loss.mean())
+            print(batch_loss.mean())
             opt.zero_grad()
             #batch_loss.sum().backward()
             batch_loss.backward()

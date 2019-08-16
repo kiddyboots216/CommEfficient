@@ -45,8 +45,8 @@ class FedSketchedModel:
                 participating_clients, participating_client_loaders))])
         if self.training:
             if self.cur_round > 0:
-                ray.wait([w.sketched_update.remote(
-                    self.param_server.get_latest.remote(
+                ray.wait([w.d_star_update.remote(
+                    self.param_server.sync.remote(
                         w.get_last_round.remote()
                     ), self.cur_round) for w in self.workers])
             input_minibatches = []
@@ -323,14 +323,12 @@ class FedSketchedWorker(object):
                         sketch_mask.append(torch.zeros(size))
                     self.grad_size += size
         self.sketch_mask = torch.cat(sketch_mask).byte().to(self.device)
-        """
         self.sketch = CSVec(d=self.sketch_mask.sum().item(), 
             c=self.num_cols,
             r=self.num_rows,
             device=self.device,
             nChunks=1,
             numBlocks=self.num_blocks)
-        """
         #print(f"Total dimension is {self.grad_size} using k {self.k} and p2 {self.p2}  with sketch_mask.sum(): {self.sketch_mask.sum()}")
         self.u = torch.zeros(self.grad_size, device=self.device)
         self.v = torch.zeros(self.grad_size, device=self.device)
@@ -359,21 +357,36 @@ class FedSketchedWorker(object):
         # this is v
         return self.v
 
-    def sketched_update(self, *grad):
+    def d_star_update(self, desired_and_d, cur_round):
+        desired_diff, d = desired_and_d
+        self._zero_grad()
+        ins = d.to(self.device)
+        target = torch.zeros(1).long().to(self.device)
+        out = self.model(ins)
+        loss = self.criterion(out, target)
+        loss.backward()
+        weight_update = self._getGradVec()
+        import pdb; pdb.set_trace()
+        self._apply_update(weight_update, cur_round)
+
+    def sketched_update(self, grad, cur_round):
         self.sketch.zero()
+        #import pdb; pdb.set_trace()
+        grad = grad.to(self.device)
         self.sketch += grad[self.sketch_mask]
         if self.p2 > 0:
             server_top_k = self.sketch.unSketch(k=self.p2*self.k)
             server_hh_coords = server_top_k.nonzero()
             hhs = grad[server_hh_coords]
-            server_top_k[server_hh_coords] = sum(hhs)
+            #server_top_k[server_hh_coords] = sum(hhs)
+            server_top_k[server_hh_coords] = hhs
             weights = self._topk(server_top_k, k=self.k)
         else:
             weights = self.sketch.unSketch(k=self.k)
         weight_update = torch.zeros(self.grad_size, device=self.device)
         weight_update[self.sketch_mask] = weights
         weight_update[~self.sketch_mask] = grad[~self.sketch_mask]
-        self._apply_update(weight_update)
+        self._apply_update(weight_update, cur_round)
 
     def all_reduce_sketched(self, *grads):
         self.sketch.zero()

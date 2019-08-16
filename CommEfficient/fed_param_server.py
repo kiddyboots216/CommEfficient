@@ -31,8 +31,8 @@ class FedParamServer:
         self.sketch += diff_vec
 
     def sync(self, round_id):
-        w_stale = self.rounds[round_id]
-        w_new = self.rounds[-1]
+        w_stale = self.rounds[round_id].to(self.device)
+        w_new = self.rounds[-1].to(self.device)
         desired_diff = w_new - w_stale
         # find a datum such that the gradient of the model evaluated
         # on that datum using w_stale equals desired_diff
@@ -77,8 +77,11 @@ class FedParamServer:
 
         orig_param_vec = get_param_vec(self.model)
         set_param_vec(self.model, w_stale)
+        rand_state = torch.random.get_rng_state()
+        torch.random.manual_seed(42)
 
         d = torch.randn(1, 3, 32, 32).to(self.device)
+        torch.random.set_rng_state(rand_state)
         d.requires_grad = True
 
         # all workers know to use class 0 as the target
@@ -89,7 +92,7 @@ class FedParamServer:
 
         # minimize ||model_grad - desired_diff||_2^2 over d
         opt = torch.optim.SGD((d,), lr=0.01, momentum=0.9)
-        for i in range(10):
+        for i in range(100):
             opt.zero_grad()
             self.model.zero_grad()
             fake_loss = self.criterion(self.model(d), fake_target)
@@ -105,7 +108,8 @@ class FedParamServer:
         # reset to original state
         set_grad_vec(self.model, orig_grad)
         set_param_vec(self.model, orig_param_vec)
-
+        #import pdb; pdb.set_trace()
+        return desired_diff, d
         return w_stale
 
     def get_latest(self, round_id):
@@ -122,6 +126,7 @@ class FedParamServer:
 
     def all_reduce_sketched(self, *grads):
         # compute update
+        grads = [grad.to(self.device) for grad in grads]
         self.sketch.zero()
         for grad in grads:
             self.sketch += grad[self.sketch_mask]
@@ -209,7 +214,7 @@ class FedParamServer:
                     self.grad_size += size
         # del self.param_groups
         weight_vec = torch.cat(weight_vec).float().to(self.device) 
-        self.rounds.append(weight_vec)
+        self.rounds.append(weight_vec.cpu())
         self.sketch_mask = torch.cat(sketch_mask).byte().to(self.device)
         self.sketch = CSVec(d=self.sketch_mask.sum().item(), 
             c=self.num_cols,
