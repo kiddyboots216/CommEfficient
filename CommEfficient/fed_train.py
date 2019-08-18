@@ -142,20 +142,28 @@ def run_fed_batches(model, opt, scheduler, criterion,
     participation = fed_params['participation_rate']
     DATA_LEN = fed_params['DATA_LEN']
     n_clients = fed_params['n_clients']
+    clients = np.arange(n_clients)
     batch_size = fed_params['batch_size']
+    c = (DATA_LEN/n_clients)/batch_size
+    n_clients_to_select = int(n_clients * participation)
     model.train(training)
+    loaders = np.array([iter(loader) for loader in loaders])
     losses = []
     accs = []
     if training:
-        for _ in range(int(1/participation)):
-            outs = model(loaders)
-            batch_loss = criterion(outs)
+        for _ in range(int(1/participation) * c):
+            idx = np.random.choice(clients, 
+                n_clients_to_select, replace=False)
+            client_loaders = loaders[idx]
+            batches = [next(l) for l in client_loaders]
+            outs = model.forward(batches, idx)
+            batch_loss = criterion(outs, idx)
             print(f"Loss: {batch_loss.mean()}")
-            opt.zero_grad()
+            # opt.zero_grad(idx)
             #batch_loss.sum().backward()
-            batch_loss.backward()
+            # batch_loss.backward()
             scheduler.step()
-            opt.step()
+            opt.step(idx)
             #losses.append(batch_loss.detach().mean().cpu().numpy())
             losses.append(batch_loss.mean())
             # TODO: Fix train acc calculation
