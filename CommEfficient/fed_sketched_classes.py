@@ -291,6 +291,7 @@ class FedSketchedWorker(object):
 
     def loss_backward(self):
         #import pdb; pdb.set_trace()
+        self._zero_grad()
         self.loss.sum().backward()
         del self.outs
         del self.loss
