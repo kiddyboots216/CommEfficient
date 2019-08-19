@@ -153,7 +153,8 @@ def run_fed_batches(model, opt, scheduler, criterion,
     accs = []
 
     if training:
-        for _ in range(int(1/participation * c)):
+        #for _ in range(int(1/participation * c)):
+        for _ in range(2):
             idx = np.random.choice(clients, 
                 n_clients_to_select, replace=False)
             client_loaders = loaders[idx]

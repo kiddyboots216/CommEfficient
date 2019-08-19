@@ -1,4 +1,5 @@
 import ray
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -63,9 +64,10 @@ class FedSketchedModel:
             return self.param_server.model_call.remote(*args)
     """
 
-    def __call__(self, batches, idx): 
-        workers = self.workers[idx]
+    def __call__(self, *args): 
         if self.training:
+            batches, idx = args
+            workers = self.workers[idx]
             if self.cur_round > 0:
                 ray.wait([w._apply_update.remote(
                     self.param_server.get_latest.remote(
@@ -409,7 +411,7 @@ class FedSketchedWorker(object):
 
     def _apply_update(self, update, cur_round):
         self.cur_round = cur_round
-        print(f"Applying update {update.mean()} for {cur_round}")
+        #print(f"Applying update {update.mean()} for {cur_round}")
         update = update.to(self.device)
         self.u[update.nonzero()] = 0
         self.v[update.nonzero()] = 0

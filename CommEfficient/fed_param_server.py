@@ -119,7 +119,7 @@ class FedParamServer:
         stale_weights = self.rounds[round_id].to(self.device)
         curr_weights = self.rounds[-1].to(self.device)
         diff_vec = torch.sub(curr_weights, stale_weights)
-        print(f"giving weights for round {round_id} with {diff_vec.mean()}")
+        #print(f"giving weights for round {round_id} with {diff_vec.mean()}")
         #import pdb; pdb.set_trace()
         return diff_vec 
         #return self.rounds[-1]
@@ -150,7 +150,7 @@ class FedParamServer:
         weight_update = update * self._getLRVec()
         #print(f"Applying weight_update with {weight_update} to {curr_weights}")
         updated_weights = curr_weights - weight_update
-        print(f"Appending updated weights with {updated_weights.mean()}")
+        #print(f"Appending updated weights with {updated_weights.mean()}")
         #import pdb; pdb.set_trace()
         self.rounds.append(updated_weights.cpu())
         #self.rounds.append(weight_update.cpu())
@@ -244,6 +244,7 @@ class FedParamServer:
 
     def model_call(self, *args):
         args = [arg.to(self.device) for arg in args]
+        #import pdb; pdb.set_trace()
         self.outs = self.model(*args)
         return self.outs
         #self.cuda()
@@ -296,7 +297,7 @@ class FedParamServer:
         """
         if len(self.param_groups) == 1:
             lr = self.param_groups[0]["lr"]
-            print(f"Lr is {lr}")
+            #print(f"Lr is {lr}")
             return lr
 
         lrVec = []
