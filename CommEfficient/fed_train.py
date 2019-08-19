@@ -115,6 +115,7 @@ def train_fed(model, opt, scheduler, criterion,
     timer = timer or Timer()
     batch_size = params["batch_size"]
     epochs = params["epochs"]
+    
     for epoch in range(args.epochs):
         train_loss, train_acc = run_fed_batches(model, opt, scheduler, 
             criterion, accuracy, train_loader, True, params)
@@ -150,27 +151,30 @@ def run_fed_batches(model, opt, scheduler, criterion,
     loaders = np.array([iter(loader) for loader in loaders])
     losses = []
     accs = []
+
     if training:
-        for _ in range(int(1/participation) * c):
+        for _ in range(int(1/participation * c)):
             idx = np.random.choice(clients, 
                 n_clients_to_select, replace=False)
             client_loaders = loaders[idx]
             batches = [next(l) for l in client_loaders]
-            outs = model.forward(batches, idx)
-            batch_loss = criterion(outs, idx)
+            ins, targets = list(zip(*batches))
+            outs = model(ins, idx)
+            batch_loss = criterion(outs, targets, idx)
             print(f"Loss: {batch_loss.mean()}")
-            # opt.zero_grad(idx)
+            opt.zero_grad(idx)
             #batch_loss.sum().backward()
-            # batch_loss.backward()
+            batch_loss.backward()
             scheduler.step()
             opt.step(idx)
             #losses.append(batch_loss.detach().mean().cpu().numpy())
             losses.append(batch_loss.mean())
             # TODO: Fix train acc calculation
             #batch_acc = accuracy(outs, targets).float().mean().cpu().numpy()
-            #batch_acc = accuracy(torch.cat(ray.get(outs), dim=0), 
-            #        targets).float().mean().cpu().numpy()
-            #accs.append(batch_acc)
+            batch_acc = accuracy(torch.cat(ray.get(outs), dim=0), 
+                    torch.cat(targets).to(device)).float().mean().cpu().numpy()
+            accs.append(batch_acc)
+
     else:
         for idx, batch in enumerate(loaders):
             inputs, targets = batch
@@ -201,28 +205,27 @@ parser.add_argument("-rate", type=float, default=1.0)
 
 args = parser.parse_args()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 timer = Timer()
 from data_utils import *
+
 if args.fed:
     hp_default["participation_rate"] = args.rate
     hp_default["n_clients"] = args.clients
     DATA_LEN = 50000
     #hp_default["batch_size"] = int(DATA_LEN/hp_default["n_clients"])
-    #hp_default["batch_size"] = args.batch_size
-    hp_default["batch_size"] = int(args.batch_size/(args.rate * args.clients))
+    hp_default["batch_size"] = args.batch_size
+    #hp_default["batch_size"] = int(args.batch_size/(args.rate * args.clients))
     train_loader, central_train_loader, val_loader, stats = get_data_loaders(hp_default, verbose=True)
     fed_params = hp_default
-    fed_params["batch_size"] = args.batch_size
     fed_params["epochs"] = args.epochs
+    fed_params["DATA_LEN"] = DATA_LEN
+
 else:
     print('Downloading datasets')
     DATA_DIR = "sample_data"
     dataset = cifar10(DATA_DIR)
-
     train_transforms = [Crop(32, 32), FlipLR(), Cutout(8, 8)]
     print('Starting timer')
-
     print('Preprocessing training data')
     train_set = list(zip(
             transpose(normalise(pad(dataset['train']['data'], 4))),
@@ -232,7 +235,6 @@ else:
     test_set = list(zip(transpose(normalise(dataset['test']['data'])),
                         dataset['test']['labels']))
     print('Finished in {:.2f} seconds'.format(timer()))
-
     train_loader = Batches(Transform(train_set, train_transforms),
                             args.batch_size, shuffle=True,
                             set_random_choices=True, drop_last=True)
@@ -243,6 +245,27 @@ else:
     fed_params["epochs"] = args.epochs
 
 print('Initializing everything')
+ray.init(num_gpus=5, redis_password="sketched_sgd")
+model_cls = Net
+model_config = {}
+
+if args.test:
+    model_config = {
+        'channels': {'prep': 1, 'layer1': 1, 
+        'layer2': 1, 'layer3': 1},
+    }
+    args.num_cols = 10
+    args.num_rows = 1
+    args.k = 10
+    args.p2 = 1 
+    args.batch_size = 1
+
+else:
+    model_config = {
+            'channels': {'prep': 64, 'layer1': 128, 
+            'layer2': 256, 'layer3': 512},
+    }
+
 sketched_params = {
     "k": args.k,
     "p2": args.p2,
@@ -258,22 +281,10 @@ sketched_params = {
     "batch_size": args.batch_size,
     "epochs": args.epochs,
 }
-ray.init(num_gpus=4, redis_password="sketched_sgd")
-model_cls = Net
-model_config = {}
-if args.test:
-    model_config = {
-        'channels': {'prep': 1, 'layer1': 1, 
-        'layer2': 1, 'layer3': 1},
-    }
-else:
-    model_config = {
-            'channels': {'prep': 64, 'layer1': 128, 
-            'layer2': 256, 'layer3': 512},
-    }
+
 lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
-lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
-if not args.fed:
+if args.fed:
+    lambda_step = lambda step: lr_schedule(step/len(central_train_loader))/args.batch_size
     workers = [FedSketchedWorker.remote(sketched_params) for _ in range(args.num_workers)]
     param_server = FedParamServer.remote(sketched_params)
     model = FedSketchedModel(model_cls, model_config, workers, param_server, fed_params)
@@ -283,7 +294,9 @@ if not args.fed:
     criterion = FedSketchedLoss(criterion, workers, param_server, model)
     scheduler = optim.lr_scheduler.LambdaLR(opt, lr_lambda=[lambda_step])
     accuracy = Correct().to(device)
+
 else:
+    lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
     workers = [SketchedWorker.remote(sketched_params) for _ in range(args.num_workers)]
     model = SketchedModel(model_cls, model_config, workers)
     opt = optim.SGD(model.parameters(), lr=1)
@@ -292,14 +305,6 @@ else:
     criterion = SketchedLoss(criterion, workers)
     scheduler = optim.lr_scheduler.LambdaLR(opt, lr_lambda=[lambda_step])
     accuracy = Correct().to(device)
-
-class FakeSched(object):
-    def __init__(self):
-        self.x = 0
-    def step(self):
-        self.x += 1
-    def get_lr(self):
-        return [self.x]
 
 print('Finished in {:.2f} seconds'.format(timer()))
 if args.fed:
