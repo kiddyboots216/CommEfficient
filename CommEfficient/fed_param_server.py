@@ -9,7 +9,7 @@ from CommEfficient.minimal import CSVec
 
 from CommEfficient.sketched_classes import SketchedLossResult, SketchedParamGroup
 
-@ray.remote(num_gpus=0.8)
+@ray.remote(num_gpus=0.5)
 class FedParamServer:
     def __init__(self, args,
     	sketch_params_larger_than=0, sketch_biases=False):
@@ -18,11 +18,15 @@ class FedParamServer:
         self.num_cols = args['num_cols']
         self.num_rows = args['num_rows']
         self.num_blocks = args['num_blocks']
+        self.momentum = args['momentum']
+        self.nesterov = args['nesterov']
+        self.n_clients_per_round = args['n_clients_per_round']
         self.rounds = []
         self.sketch_params_larger_than = sketch_params_larger_than
         self.sketch_biases = sketch_biases
         self.device = torch.device("cuda" if 
             torch.cuda.is_available() else "cpu")
+        print(f"Creating param server")
 
     def sketch_latest(self, round_id):
         diff_vec = self.get_latest(round_id)
@@ -124,9 +128,19 @@ class FedParamServer:
         return diff_vec 
         #return self.rounds[-1]
 
+    def virtual_momentum(self, *grads):
+        if self.nesterov:
+            [u.add_(grad).mul_(self.momentum) for u, grad in zip(self.us, grads)]
+            [v.add_(u).add_(grad) for v,u,grad in zip(self.vs, self.us, grads)]
+        else:
+            [u.mul_(self.momentum).add_(grad) for u,grad in zip(self.us, grads)]
+            [v.add_(u) for v,u in zip(self.vs, self.us)]
+        return self.vs
+
     def all_reduce_sketched(self, *grads):
         # compute update
         grads = [grad.to(self.device) for grad in grads]
+        grads = self.virtual_momentum(*grads)
         self.sketch.zero()
         for grad in grads:
             self.sketch += grad[self.sketch_mask]
@@ -142,8 +156,31 @@ class FedParamServer:
         weight_update[self.sketch_mask] = weights
         weight_update[~self.sketch_mask] = sum(
             [grad[~self.sketch_mask] for grad in grads])
-        #import pdb; pdb.set_trace()
         self._apply_update(weight_update)
+        self._update_vecs(weight_update)
+        
+    def _update_vecs(self, grad):
+        self.sketch.zero()
+        #import pdb; pdb.set_trace()
+        grad = grad.to(self.device)
+        self.sketch += grad[self.sketch_mask]
+        if self.p2 > 0:
+            server_top_k = self.sketch.unSketch(k=self.p2*self.k)
+            server_hh_coords = server_top_k.nonzero()
+            hhs = grad[server_hh_coords]
+            server_top_k[server_hh_coords] = hhs
+            weights = self._topk(server_top_k, k=self.k)
+        else:
+            weights = self.sketch.unSketch(k=self.k)
+        weight_update = torch.zeros(self.grad_size, device=self.device)
+        weight_update[self.sketch_mask] = weights
+        weight_update[~self.sketch_mask] = grad[~self.sketch_mask]
+        for u in self.us:
+            u[weight_update.nonzero()] = 0
+        for v in self.vs:
+            v[weight_update.nonzero()] = 0
+            v[~self.sketch_mask] = 0
+        #import pdb; pdb.set_trace()
 
     def _apply_update(self, update):
         curr_weights = self.rounds[-1].to(self.device)
@@ -238,6 +275,8 @@ class FedParamServer:
             nChunks=1,
             numBlocks=self.num_blocks)
         #print(f"Total dimension is {self.grad_size} using k {self.k} and p2 {self.p2} with sketch_mask.sum(): {self.sketch_mask.sum()}")
+        self.us = [torch.zeros(self.grad_size, device=self.device) for _ in range(self.n_clients_per_round)]
+        self.vs = [torch.zeros(self.grad_size, device=self.device) for _ in range(self.n_clients_per_round)]
 
     def set_model(self, model_cls, model_config, 
             sketch_biases, sketch_params_larger_than):
@@ -260,7 +299,7 @@ class FedParamServer:
         args = [arg.to(self.device) for arg in args]
         #import pdb; pdb.set_trace()
         self.outs = self.model(*args)
-        return self.outs
+        return self.outs.cpu()
         #self.cuda()
         outs = self.model(args[0].to(self.device))
         #print(f"Length of self.outs is {len(self.outs)}")
@@ -272,7 +311,7 @@ class FedParamServer:
     def loss_call(self, *args):
         args = [arg.to(self.device) for arg in args[:2]]
         self.loss = self.criterion(self.outs, args[1])
-        return self.loss
+        return self.loss.detach().cpu().numpy()
         loss = self.criterion(
             args[0].to(self.device), 
             args[1].to(self.device))

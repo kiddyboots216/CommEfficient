@@ -1,12 +1,13 @@
 import os
-import collections
-import logging
-import glob
-import re
-from functools import singledispatch
-from collections import OrderedDict
-from collections import namedtuple
-from inspect import signature
+import math
+#import collections
+#import logging
+#import glob
+#import re
+#from functools import singledispatch
+#from collections import OrderedDict
+#from collections import namedtuple
+#from inspect import signature
 
 import torch, torchvision
 import numpy as np
@@ -17,23 +18,26 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
-
 from torch.utils.data.dataset import Dataset
 
-import itertools as it
-import copy
+#import itertools as it
+#import copy
 
 from minimal import Net, cifar10, Correct, union, PiecewiseLinear, \
         Timer, TableLogger, normalise, pad, transpose, \
         Crop, FlipLR, Cutout, Transform, Batches, TSVLogger
 
-from sketched_classes import *
-from fed_sketched_classes import *
-from fed_param_server import *
+from sketched_classes import SketchedModel, SketchedLoss, SketchedWorker, \
+        SketchedOptimizer
+from fed_sketched_classes import FedSketchedModel, FedSketchedLoss, \
+        FedSketchedOptimizer, FedSketchedWorker
+from fed_param_server import FedParamServer
 
 DATA_PATH = 'sample_data'
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,4"
-
+# TODO: don't do this it's a bad idea
+#os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,4"
+GPUS_PER_WORKER = 0.8
+GPUS_PER_PARAM_SERVER = 0.8
 def train(model, opt, scheduler, criterion, 
     accuracy, train_loader, val_loader, 
     params, loggers=(), timer=None):
@@ -117,7 +121,7 @@ param_server.all_reduce_sketched(grads)
 
 def train_fed(model, opt, scheduler, criterion, 
     accuracy, train_loader, val_loader, 
-    params, loggers=(), timer=None, fed_params=None):
+    params, loggers=(), timer=None):
     timer = timer or Timer()
     batch_size = params["batch_size"]
     epochs = params["epochs"]
@@ -154,21 +158,33 @@ def run_fed_batches(model, opt, scheduler, criterion,
     c = (DATA_LEN/n_clients)/batch_size
     n_clients_to_select = int(n_clients * participation)
     model.train(training)
-    loaders = np.array([iter(loader) for loader in loaders])
+    #loaders = np.array([iter(loader) for loader in loaders])
     losses = []
     accs = []
 
     if training:
-        for _ in range(int(1/participation * c)):
+        for idx, batch in enumerate(loaders):
+            inputs = batch["input"]
+            targets = batch["target"]
+        #for _ in range(int(1/participation * c)):
         #for _ in range(1):
             idx = np.random.choice(clients, 
                 n_clients_to_select, replace=False)
-            client_loaders = loaders[idx]
-            batches = [next(l) for l in client_loaders]
-            ins, targets = list(zip(*batches))
-            outs = model(ins, idx)
-            batch_loss = criterion(outs, targets, idx)
-            print(f"Loss: {batch_loss.mean()}")
+            input_minibatches = []
+            target_minibatches = []
+            for i, _ in enumerate(idx):
+                start = i * batch_size // n_clients_to_select
+                end = (i+1) * batch_size // n_clients_to_select
+                input_minibatches.append(inputs[start:end])
+                target_minibatches.append(targets[start:end])
+            #client_loaders = loaders[idx]
+            #batches = [next(l) for l in client_loaders]
+            #ins, targets = list(zip(*batches))
+            #outs = model(ins, idx)
+            outs = model(input_minibatches, idx)
+            #batch_loss = criterion(outs, targets, idx)
+            batch_loss = criterion(outs, target_minibatches, idx)
+            #print(f"Loss: {batch_loss.mean()}")
             opt.zero_grad(idx)
             #batch_loss.sum().backward()
             batch_loss.backward()
@@ -177,29 +193,31 @@ def run_fed_batches(model, opt, scheduler, criterion,
             #losses.append(batch_loss.detach().mean().cpu().numpy())
             losses.append(batch_loss.mean())
             # TODO: Fix train acc calculation
-            #batch_acc = accuracy(outs, targets).float().mean().cpu().numpy()
-            batch_acc = accuracy(torch.cat(ray.get(outs), dim=0), 
-                    torch.cat(targets).to(device)).float().mean().cpu().numpy()
+            o = torch.cat(ray.get(outs), dim=0)
+            batch_acc = accuracy(o, 
+                    torch.cat(target_minibatches).to(device)).float().mean().cpu().numpy()
+            #batch_acc = 0
             accs.append(batch_acc)
 
     else:
         for idx, batch in enumerate(loaders):
-            inputs, targets = batch
+            #inputs, targets = batch
+            inputs, targets = batch["input"], batch["target"]
             outs = model(inputs)
             batch_loss = criterion(outs, targets)
             losses.append(batch_loss.mean())
             batch_acc = accuracy(ray.get(outs), 
-                    targets.cuda()).float().mean().cpu().numpy()
+                    targets.to(device)).float().mean().cpu().numpy()
+            #batch_acc = 0
             accs.append(batch_acc)
     return np.mean(losses), np.mean(accs)
 
 import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("-k", type=int, default=50000)
-parser.add_argument("-p2", type=int, default=1)
+parser.add_argument("-p2", type=int, default=4)
 parser.add_argument("-cols", type=int, default=500000)
 parser.add_argument("-rows", type=int, default=5)
-parser.add_argument("-num_workers", type=int, default=1)
 parser.add_argument("-num_blocks", type=int, default=1)
 parser.add_argument("-batch_size", type=int, default=512)
 parser.add_argument("-nesterov", action="store_true")
@@ -211,21 +229,21 @@ parser.add_argument("-clients", type=int, default=1)
 parser.add_argument("-rate", type=float, default=1.0)
 
 args = parser.parse_args()
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")
+#device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 timer = Timer()
 from data_utils import *
-
+hp_default["participation_rate"] = args.rate
+hp_default["n_clients"] = args.clients
+DATA_LEN = 50000
+#hp_default["batch_size"] = int(DATA_LEN/hp_default["n_clients"])
+hp_default["batch_size"] = args.batch_size
+fed_params = hp_default
+fed_params["epochs"] = args.epochs
+fed_params["DATA_LEN"] = DATA_LEN
 if args.fed:
-    hp_default["participation_rate"] = args.rate
-    hp_default["n_clients"] = args.clients
-    DATA_LEN = 50000
-    #hp_default["batch_size"] = int(DATA_LEN/hp_default["n_clients"])
-    hp_default["batch_size"] = args.batch_size
     #hp_default["batch_size"] = int(args.batch_size/(args.rate * args.clients))
     train_loader, central_train_loader, val_loader, stats = get_data_loaders(hp_default, verbose=True)
-    fed_params = hp_default
-    fed_params["epochs"] = args.epochs
-    fed_params["DATA_LEN"] = DATA_LEN
 
 else:
     print('Downloading datasets')
@@ -252,10 +270,13 @@ else:
     fed_params["epochs"] = args.epochs
 
 print('Initializing everything')
-ray.init(num_gpus=4, redis_password="sketched_sgd")
+num_gpus_to_claim = math.ceil(GPUS_PER_WORKER * args.clients + GPUS_PER_PARAM_SERVER) 
+num_gpus_to_claim = 8
+ray.init(
+        #num_gpus=num_gpus_to_claim, 
+        redis_password="sketched_sgd")
 model_cls = Net
 model_config = {}
-
 if args.test:
     model_config = {
         'channels': {'prep': 1, 'layer1': 1, 
@@ -266,7 +287,6 @@ if args.test:
     args.k = 10
     args.p2 = 1 
     args.batch_size = 1
-
 else:
     model_config = {
             'channels': {'prep': 64, 'layer1': 128, 
@@ -280,7 +300,8 @@ sketched_params = {
     "num_rows": args.rows,
     "num_blocks": args.num_blocks,
     "lr": 1,
-    "num_workers": args.num_workers,
+    "num_workers": args.clients,
+    "n_clients_per_round": int(args.clients * args.rate),
     "momentum": args.momentum,
     "weight_decay": 5e-4*args.batch_size,
     "nesterov": args.nesterov,
@@ -294,7 +315,7 @@ lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
 if True:
     # CHANGE THIS WHEN SWITCHING
     lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
-    workers = [FedSketchedWorker.remote(sketched_params) for _ in range(args.num_workers)]
+    workers = [FedSketchedWorker.remote(sketched_params) for _ in range(args.clients)]
     param_server = FedParamServer.remote(sketched_params)
     model = FedSketchedModel(model_cls, model_config, workers, param_server, fed_params)
     opt = optim.SGD(model.parameters(), lr=1)
@@ -306,7 +327,7 @@ if True:
 
 else:
     lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
-    workers = [SketchedWorker.remote(sketched_params) for _ in range(args.num_workers)]
+    workers = [SketchedWorker.remote(sketched_params) for _ in range(args.clients)]
     model = SketchedModel(model_cls, model_config, workers)
     opt = optim.SGD(model.parameters(), lr=1)
     opt = SketchedOptimizer(opt, workers)
@@ -316,9 +337,9 @@ else:
     accuracy = Correct().to(device)
 
 print('Finished in {:.2f} seconds'.format(timer()))
-if args.fed:
+if not args.fed:
     train_fed(model, opt, scheduler, criterion, accuracy, 
-        train_loader, train_loader[0], fed_params,
+        train_loader, val_loader, fed_params,
         loggers=(TableLogger(), TSVLogger()), timer=timer)
 else:
     train(model, opt, scheduler, criterion, accuracy, 

@@ -19,9 +19,15 @@ class FedSketchedModel:
         self.param_server = param_server
         to_set_model = np.append(self.workers, self.param_server)
         self.model = model_cls(**model_config)
+        for worker in to_set_model:
+            ray.wait([worker.set_model.remote(
+                model_cls, model_config, sketch_biases,
+                sketch_params_larger_than)])
+        """
         ray.wait([worker.set_model.remote(model_cls, model_config, 
             sketch_biases, sketch_params_larger_than
             ) for worker in to_set_model])
+        """
         self.workers_last_updated = {i:0 for i in range(len(workers))}
 
     def train(self, training):
@@ -69,7 +75,7 @@ class FedSketchedModel:
             batches, idx = args
             workers = self.workers[idx]
             if self.cur_round > 0:
-                ray.wait([w._apply_update.remote(
+                ray.wait([w.sketched_update.remote(
                     self.param_server.get_latest.remote(
                        self.workers_last_updated[idx[w_id]] 
                     ), self.cur_round) for w_id, w in enumerate(workers)])
@@ -106,8 +112,13 @@ class FedSketchedOptimizer(optim.Optimizer):
                     'weight_decay': p['weight_decay']
                     }
         ]
+        for worker in to_set_optimize:
+            ray.wait([worker.set_optimizer.remote(
+                optimizer_param_groups)])
+        """
         ray.wait([worker.set_optimizer.remote(
             optimizer_param_groups) for worker in to_set_optimize])
+        """
 
     def step_no_sync(self):
         train_workers, update_workers = self._get_workers()
@@ -159,14 +170,18 @@ class FedSketchedLoss:
         self.workers = np.array(workers)
         self.param_server = param_server
         to_set_loss = np.append(self.workers, self.param_server)
-        [worker.set_loss.remote(criterion) for worker in to_set_loss]
+        for worker in to_set_loss:
+            ray.wait([worker.set_loss.remote(criterion)])
+        #[worker.set_loss.remote(criterion) for worker in to_set_loss]
 
     def __call__(self, *args, **kwargs):
         if len(kwargs) > 0:
             print("Kwargs aren't supported by Ray")
             return
         if len(args) == 2:
-            results = ray.get(self.param_server.loss_call.remote(*args))
+            outs = self.param_server.loss_call.remote(*args)
+            results = ray.get(outs)
+            #results = outs
             result = SketchedLossResult(results, [])
             return result
         else:
@@ -200,13 +215,13 @@ class FedSketchedLoss:
             return result
 
     def _loss(self, input_minibatches, target_minibatches, workers):
-        results = torch.stack(
-             ray.get(
-                 [worker.loss_call.remote(
-                    input_minibatches[worker_id], target_minibatches[worker_id])
-                 for worker_id, worker in enumerate(workers)]
-             ), 
-             dim=0)
+        assert torch.cuda.is_available(), "Why isn't CUDA available?"
+        outs = [worker.loss_call.remote(input_minibatches[w_id],
+                                        target_minibatches[w_id])
+                for w_id, worker in enumerate(workers)]
+        #results = torch.stack(ray.get(outs), dim=0)
+        results = np.stack(ray.get(outs), axis=0)
+        #results = outs
         result = SketchedLossResult(results, workers)
         return result
 
@@ -218,7 +233,7 @@ class FedSketchedLoss:
 
 # note: when using FedSketchedWorker, 
 #many more GPUs than are actually available must be specified
-@ray.remote(num_gpus=0.8)
+@ray.remote(num_gpus=0.5)
 class FedSketchedWorker(object):
     def __init__(self, args,
                 sketch_params_larger_than=0, sketch_biases=False):
@@ -238,6 +253,7 @@ class FedSketchedWorker(object):
         self.device = torch.device("cuda" if 
             torch.cuda.is_available() else "cpu")
         self.cur_round = 0
+        print(f"Creating worker")
 
     def set_model(self, model_cls, model_config, 
             sketch_biases, sketch_params_larger_than):
@@ -266,7 +282,7 @@ class FedSketchedWorker(object):
         #self.cuda()
         args = [arg.to(self.device) for arg in args]
         self.outs = self.model(*args)
-        return self.outs
+        return self.outs.detach().cpu()
         args = args[0]
         args = [arg.to(self.device) for arg in args]
         self.outs = self.model(args[0])
@@ -277,7 +293,9 @@ class FedSketchedWorker(object):
     def loss_call(self, *args):
         args = [arg.to(self.device) for arg in args]
         self.loss = self.criterion(self.outs, args[1])
-        return self.loss
+        #import pdb; pdb.set_trace()
+        #return 'hello'
+        return self.loss.detach().cpu().numpy()
         #import pdb; pdb.set_trace()
         self.loss = self.criterion(self.outs, self.targets)
         del self.targets
@@ -363,7 +381,7 @@ class FedSketchedWorker(object):
         # compute grad 
         #self.cuda()
         gradVec = self._getGradVec().to(self.device)
-        #return gradVec
+        return gradVec
         # weight decay
         if self.weight_decay != 0:
             gradVec.add_(self.weight_decay/self.num_workers, 

@@ -67,7 +67,9 @@ class SketchedLoss(object):
     
 class SketchedLossResult(object):
     def __init__(self, tensor, workers):
-        self._tensor = tensor.detach().cpu().numpy()
+        #self._tensor = tensor.detach().cpu().numpy()
+        #import pdb; pdb.set_trace()
+        self._tensor = tensor
         self.workers = workers
 
     def backward(self):
@@ -78,6 +80,8 @@ class SketchedLossResult(object):
         return self._tensor.__repr__()
 
     def __getattr__(self, name):
+        #if name=="mean":
+        #    return lambda: 1
         return getattr(self._tensor, name)
 
 class SketchedOptimizer(optim.Optimizer):
