@@ -218,7 +218,7 @@ class FedSketchedLoss:
 
 # note: when using FedSketchedWorker, 
 #many more GPUs than are actually available must be specified
-@ray.remote(num_gpus=1.0)
+@ray.remote(num_gpus=0.8)
 class FedSketchedWorker(object):
     def __init__(self, args,
                 sketch_params_larger_than=0, sketch_biases=False):
@@ -422,6 +422,7 @@ class FedSketchedWorker(object):
             for p in param_group['params']:
                 end = start + torch.numel(p)
                 p.data.add_(update[start:end].reshape(p.data.shape))
+                #p.data.zero_()
                 start = end
         #import pdb; pdb.set_trace()
 

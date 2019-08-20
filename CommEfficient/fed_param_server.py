@@ -9,7 +9,7 @@ from CommEfficient.minimal import CSVec
 
 from CommEfficient.sketched_classes import SketchedLossResult, SketchedParamGroup
 
-@ray.remote(num_gpus=1)
+@ray.remote(num_gpus=0.8)
 class FedParamServer:
     def __init__(self, args,
     	sketch_params_larger_than=0, sketch_biases=False):
@@ -159,8 +159,23 @@ class FedParamServer:
             for p in param_group['params']:
                 end = start + torch.numel(p)
                 p.data = updated_weights[start:end].reshape(p.data.shape)
+                #p.data.zero_()
                 #p.data.add_(-weight_update[start:end].reshape(p.data.shape))
                 start = end
+        def get_param_vec(model):
+            param_vec = []
+            start = 0
+            for p in model.parameters():
+                end = start + p.numel()
+                param_vec.append(p.data.view(-1))
+                start = end
+            return torch.cat(param_vec).to(self.device)
+        def get_diffs():
+            params = get_param_vec(self.model)
+            diff_old = curr_weights - params
+            diff_new = updated_weights - params
+            return diff_old.mean(), diff_new.mean()
+        #import pdb; pdb.set_trace()
 
     def model_getattr(self, name):
         return getattr(self.model, name)
@@ -211,7 +226,6 @@ class FedParamServer:
                     else:
                         sketch_mask.append(torch.zeros(size))
                     weight_vec.append(p.data.view(-1).float())
-                    d = p.data.view(-1).float()
                     self.grad_size += size
         # del self.param_groups
         weight_vec = torch.cat(weight_vec).float().to(self.device) 
