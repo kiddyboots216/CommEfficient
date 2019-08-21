@@ -19,6 +19,7 @@ class FedSketchedModel:
         self.param_server = param_server
         to_set_model = np.append(self.workers, self.param_server)
         self.model = model_cls(**model_config)
+        """
         for worker in to_set_model:
             ray.wait([worker.set_model.remote(
                 model_cls, model_config, sketch_biases,
@@ -27,7 +28,6 @@ class FedSketchedModel:
         ray.wait([worker.set_model.remote(model_cls, model_config, 
             sketch_biases, sketch_params_larger_than
             ) for worker in to_set_model])
-        """
         self.workers_last_updated = {i:0 for i in range(len(workers))}
 
     def train(self, training):
@@ -112,13 +112,13 @@ class FedSketchedOptimizer(optim.Optimizer):
                     'weight_decay': p['weight_decay']
                     }
         ]
+        """
         for worker in to_set_optimize:
             ray.wait([worker.set_optimizer.remote(
                 optimizer_param_groups)])
         """
         ray.wait([worker.set_optimizer.remote(
             optimizer_param_groups) for worker in to_set_optimize])
-        """
 
     def step_no_sync(self):
         train_workers, update_workers = self._get_workers()
@@ -141,7 +141,7 @@ class FedSketchedOptimizer(optim.Optimizer):
         grads = [worker.compute_grad.remote(
             ) for worker in train_workers]
         ray.wait(
-        [param_server.all_reduce_sketched.remote(*grads)]
+        [param_server.server_update.remote(*grads)]
         )
         #ray.wait([worker.all_reduce_sketched.remote(
         #    *grads) for worker in update_workers]) 
@@ -170,9 +170,11 @@ class FedSketchedLoss:
         self.workers = np.array(workers)
         self.param_server = param_server
         to_set_loss = np.append(self.workers, self.param_server)
+        """
         for worker in to_set_loss:
             ray.wait([worker.set_loss.remote(criterion)])
-        #[worker.set_loss.remote(criterion) for worker in to_set_loss]
+        """
+        ray.wait([worker.set_loss.remote(criterion) for worker in to_set_loss])
 
     def __call__(self, *args, **kwargs):
         if len(kwargs) > 0:
@@ -381,38 +383,27 @@ class FedSketchedWorker(object):
         # compute grad 
         #self.cuda()
         gradVec = self._getGradVec().to(self.device)
-        return gradVec
+        #return gradVec
         # weight decay
         if self.weight_decay != 0:
             gradVec.add_(self.weight_decay/self.num_workers, 
                         self._getParamVec())
+        self.v.add_(gradVec)
+        return self.v
         if self.nesterov:
-            #import pdb; pdb.set_trace()
             self.u.add_(gradVec).mul_(self.momentum)
             self.v.add_(self.u).add_(gradVec)
         else:
             self.u.mul_(self.momentum).add_(gradVec)
             self.v += (self.u)
-            #self.v = gradVec
-        # this is v
         return self.v
-
-    def d_star_update(self, desired_and_d, cur_round):
-        desired_diff, d = desired_and_d
-        self._zero_grad()
-        ins = d.to(self.device)
-        target = torch.zeros(1).long().to(self.device)
-        out = self.model(ins)
-        loss = self.criterion(out, target)
-        loss.backward()
-        weight_update = self._getGradVec()
-        #import pdb; pdb.set_trace()
-        self._apply_update(weight_update, cur_round)
 
     def sketched_update(self, grad, cur_round):
         self.sketch.zero()
         #import pdb; pdb.set_trace()
         grad = grad.to(self.device)
+        #self.v_param.add_(grad)
+        #grad = self.v_param
         self.sketch += grad[self.sketch_mask]
         if self.p2 > 0:
             server_top_k = self.sketch.unSketch(k=self.p2*self.k)
@@ -443,6 +434,18 @@ class FedSketchedWorker(object):
                 #p.data.zero_()
                 start = end
         #import pdb; pdb.set_trace()
+
+    def d_star_update(self, desired_and_d, cur_round):
+        desired_diff, d = desired_and_d
+        self._zero_grad()
+        ins = d.to(self.device)
+        target = torch.zeros(1).long().to(self.device)
+        out = self.model(ins)
+        loss = self.criterion(out, target)
+        loss.backward()
+        weight_update = self._getGradVec()
+        #import pdb; pdb.set_trace()
+        self._apply_update(weight_update, cur_round)
 
     def all_reduce_sketched(self, *grads):
         self.sketch.zero()

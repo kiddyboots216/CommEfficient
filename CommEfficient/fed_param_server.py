@@ -118,7 +118,6 @@ class FedParamServer:
 
     def get_latest(self, round_id):
         #update = self.rounds[-1]
-        #import pdb; pdb.set_trace()
         #return update
         stale_weights = self.rounds[round_id].to(self.device)
         curr_weights = self.rounds[-1].to(self.device)
@@ -128,24 +127,32 @@ class FedParamServer:
         return diff_vec 
         #return self.rounds[-1]
 
-    def virtual_momentum(self, *grads):
+    def _virtual_momentum(self, gradVec):
+        #self.v.add_(gradVec)
+        #return self.v
+        return gradVec
         if self.nesterov:
-            [u.add_(grad).mul_(self.momentum) for u, grad in zip(self.us, grads)]
-            [v.add_(u).add_(grad) for v,u,grad in zip(self.vs, self.us, grads)]
+            self.u.add_(gradVec).mul_(self.momentum)
+            self.v.add_(self.u).add_(gradVec)
         else:
-            [u.mul_(self.momentum).add_(grad) for u,grad in zip(self.us, grads)]
-            [v.add_(u) for v,u in zip(self.vs, self.us)]
-        return self.vs
+            self.u.mul_(self.momentum).add_(gradVec)
+            #self.v += (self.u)
+        return self.u
 
-    def all_reduce_sketched(self, *grads):
-        # compute update
+    def server_update(self, *grads):
         grads = [grad.to(self.device) for grad in grads]
-        grads = self.virtual_momentum(*grads)
+        update = self._all_reduce_sketched(*grads)
+        weight_update = self._virtual_momentum(update)
+        self._apply_update(weight_update)
+        #self._update_vecs(weight_update)
+
+    def _all_reduce_sketched(self, *grads):
         self.sketch.zero()
         for grad in grads:
             self.sketch += grad[self.sketch_mask]
         if self.p2 > 0:
-            candidate_top_k = self.sketch.unSketch(k=self.p2*self.k)
+            candidate_top_k = self.sketch.unSketch(
+                    k=self.p2*self.k)
             candidate_hh_coords = candidate_top_k.nonzero()
             hhs = [grad[candidate_hh_coords] for grad in grads]
             candidate_top_k[candidate_hh_coords] = sum(hhs)
@@ -156,31 +163,12 @@ class FedParamServer:
         weight_update[self.sketch_mask] = weights
         weight_update[~self.sketch_mask] = sum(
             [grad[~self.sketch_mask] for grad in grads])
-        self._apply_update(weight_update)
-        self._update_vecs(weight_update)
-        
-    def _update_vecs(self, grad):
-        self.sketch.zero()
-        #import pdb; pdb.set_trace()
-        grad = grad.to(self.device)
-        self.sketch += grad[self.sketch_mask]
-        if self.p2 > 0:
-            server_top_k = self.sketch.unSketch(k=self.p2*self.k)
-            server_hh_coords = server_top_k.nonzero()
-            hhs = grad[server_hh_coords]
-            server_top_k[server_hh_coords] = hhs
-            weights = self._topk(server_top_k, k=self.k)
-        else:
-            weights = self.sketch.unSketch(k=self.k)
-        weight_update = torch.zeros(self.grad_size, device=self.device)
-        weight_update[self.sketch_mask] = weights
-        weight_update[~self.sketch_mask] = grad[~self.sketch_mask]
-        for u in self.us:
-            u[weight_update.nonzero()] = 0
-        for v in self.vs:
-            v[weight_update.nonzero()] = 0
-            v[~self.sketch_mask] = 0
-        #import pdb; pdb.set_trace()
+        return weight_update
+
+    def _update_vecs(self, weight_update):
+        self.u[weight_update.nonzero()] = 0
+        self.v[weight_update.nonzero()] = 0
+        self.v[~self.sketch_mask] = 0
 
     def _apply_update(self, update):
         curr_weights = self.rounds[-1].to(self.device)
@@ -188,7 +176,6 @@ class FedParamServer:
         #print(f"Applying weight_update with {weight_update} to {curr_weights}")
         updated_weights = curr_weights - weight_update
         #print(f"Appending updated weights with {updated_weights.mean()}")
-        #import pdb; pdb.set_trace()
         self.rounds.append(updated_weights.cpu())
         #self.rounds.append(weight_update.cpu())
         start = 0
@@ -199,20 +186,6 @@ class FedParamServer:
                 #p.data.zero_()
                 #p.data.add_(-weight_update[start:end].reshape(p.data.shape))
                 start = end
-        def get_param_vec(model):
-            param_vec = []
-            start = 0
-            for p in model.parameters():
-                end = start + p.numel()
-                param_vec.append(p.data.view(-1))
-                start = end
-            return torch.cat(param_vec).to(self.device)
-        def get_diffs():
-            params = get_param_vec(self.model)
-            diff_old = curr_weights - params
-            diff_new = updated_weights - params
-            return diff_old.mean(), diff_new.mean()
-        #import pdb; pdb.set_trace()
 
     def model_getattr(self, name):
         return getattr(self.model, name)
@@ -275,8 +248,8 @@ class FedParamServer:
             nChunks=1,
             numBlocks=self.num_blocks)
         #print(f"Total dimension is {self.grad_size} using k {self.k} and p2 {self.p2} with sketch_mask.sum(): {self.sketch_mask.sum()}")
-        self.us = [torch.zeros(self.grad_size, device=self.device) for _ in range(self.n_clients_per_round)]
-        self.vs = [torch.zeros(self.grad_size, device=self.device) for _ in range(self.n_clients_per_round)]
+        self.u = torch.zeros(self.grad_size, device=self.device) 
+        self.v = torch.zeros(self.grad_size, device=self.device)
 
     def set_model(self, model_cls, model_config, 
             sketch_biases, sketch_params_larger_than):
