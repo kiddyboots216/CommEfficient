@@ -269,9 +269,8 @@ class FedSketchedWorker(object):
             #p.data.zero_()
         # override bias terms with whatever sketchBiases is
         for m in model.modules():
-            if isinstance(m, torch.nn.Linear):
-                if m.bias is not None:
-                    m.bias.do_sketching = sketch_biases
+            if hasattr(m, 'bias') and m.bias is not None:
+                m.bias.do_sketching = sketch_biases
         self.model = model
 
     def set_loss(self, criterion):

@@ -35,7 +35,7 @@ from fed_param_server import FedParamServer
 
 DATA_PATH = 'sample_data'
 # TODO: don't do this it's a bad idea
-#os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,4"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,4"
 GPUS_PER_WORKER = 0.8
 GPUS_PER_PARAM_SERVER = 0.8
 def train(model, opt, scheduler, criterion, 
