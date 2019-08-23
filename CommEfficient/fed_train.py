@@ -34,8 +34,7 @@ from fed_sketched_classes import FedSketchedModel, FedSketchedLoss, \
 from fed_param_server import FedParamServer
 
 DATA_PATH = 'sample_data'
-# TODO: don't do this it's a bad idea
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,4"
+
 GPUS_PER_WORKER = 0.8
 GPUS_PER_PARAM_SERVER = 0.8
 def train(model, opt, scheduler, criterion, 
@@ -86,8 +85,8 @@ def run_batches(model, opt, scheduler, criterion,
             opt.zero_grad(w_idx)
             #batch_loss.sum().backward()
             batch_loss.backward()
-            scheduler.step()
             opt.step(w_idx)
+            scheduler.step()
             batch_acc = accuracy(
                     torch.cat(ray.get(outs), dim=0),
                     targets[0].to(device)
@@ -188,8 +187,8 @@ def run_fed_batches(model, opt, scheduler, criterion,
             opt.zero_grad(idx)
             #batch_loss.sum().backward()
             batch_loss.backward()
-            scheduler.step()
             opt.step(idx)
+            scheduler.step()
             #losses.append(batch_loss.detach().mean().cpu().numpy())
             losses.append(batch_loss.mean())
             # TODO: Fix train acc calculation
