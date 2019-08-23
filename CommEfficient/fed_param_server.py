@@ -240,7 +240,7 @@ class FedParamServer:
         # del self.param_groups
         weight_vec = torch.cat(weight_vec).float().to(self.device) 
         self.rounds.append(weight_vec.cpu())
-        self.sketch_mask = torch.cat(sketch_mask).byte().to(self.device)
+        self.sketch_mask = torch.cat(sketch_mask).bool().to(self.device)
         self.sketch = CSVec(d=self.sketch_mask.sum().item(), 
             c=self.num_cols,
             r=self.num_rows,

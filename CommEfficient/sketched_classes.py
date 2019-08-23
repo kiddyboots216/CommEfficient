@@ -239,7 +239,7 @@ class SketchedWorker(object):
                     grad_size += size
         self.grad_size = grad_size
         print(f"Total dimension is {self.grad_size} using k {self.k} and p2 {self.p2}")
-        self.sketch_mask = torch.cat(sketch_mask).byte().to(self.device)
+        self.sketch_mask = torch.cat(sketch_mask).bool().to(self.device)
         print(f"sketch_mask.sum(): {self.sketch_mask.sum()}")
         self.sketch = CSVec(d=self.sketch_mask.sum().item(), 
             c=self.num_cols,

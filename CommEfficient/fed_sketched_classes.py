@@ -363,7 +363,7 @@ class FedSketchedWorker(object):
                     else:
                         sketch_mask.append(torch.zeros(size))
                     self.grad_size += size
-        self.sketch_mask = torch.cat(sketch_mask).byte().to(self.device)
+        self.sketch_mask = torch.cat(sketch_mask).bool().to(self.device)
         self.sketch = CSVec(d=self.sketch_mask.sum().item(), 
             c=self.num_cols,
             r=self.num_rows,
