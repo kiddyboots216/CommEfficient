@@ -5,8 +5,10 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
-from CommEfficient.minimal import CSVec
+from csvec import CSVec
+
 GPUS_ALLOCATED = 0.5
+
 class FedCommEffModel:
     def __init__(self, input_model, params):
         global client_states
@@ -31,7 +33,7 @@ class FedCommEffModel:
             global sketch
             sketch = CSVec(d=grad_size, c=params['num_cols'],
                 r=params['num_rows'], device=torch.device("cuda"),
-                nChunks=1, numBlocks=1)
+                numBlocks=1)
         self.params = params
 
     def train(self, training):
@@ -123,7 +125,7 @@ def server_update(grads, indices, client_states, param_server_states, params):
         global sketch
         sketch.zero()
         for grad in grads:
-            sketch += grad
+            sketch.accumulateVec(grad)
         if p2 > 0:
             candidate_top_k = sketch.unSketch(k=p2*k)
             candidate_hh_coords = candidate_top_k.nonzero()
@@ -156,7 +158,7 @@ def update_client(round_last_updated, client_state, param_server_states,
         k = params['k']
         global sketch
         sketch.zero()
-        sketch += diff_vec
+        sketch.accumulateVec(diff_vec)
         if p2 > 0:
             server_top_k = sketch.unSketch(k=p2*k)
             server_hh_coords = server_top_k.nonzero()

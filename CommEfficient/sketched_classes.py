@@ -5,7 +5,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
 
-from CommEfficient.minimal import CSVec
+from csvec import CSVec
 
 class SketchedModel:
     def __init__(self, model_cls, model_config, workers, 
@@ -245,7 +245,6 @@ class SketchedWorker(object):
             c=self.num_cols,
             r=self.num_rows,
             device=self.device,
-            nChunks=1,
             numBlocks=self.num_blocks)
         self.u = torch.zeros(self.grad_size, device=self.device)
         self.v = torch.zeros(self.grad_size, device=self.device)
@@ -273,7 +272,7 @@ class SketchedWorker(object):
         return self.v * self._getLRVec()
         candidateSketch = self.v[self.sketchMask]
         self.sketch.zero()
-        self.sketch += candidateSketch
+        self.sketch.accumulateVec(candidateSketch)
         del candidateSketch
         # COMMUNICATE ONLY THE TABLE
         return self.sketch.table
@@ -287,7 +286,7 @@ class SketchedWorker(object):
         """
         self.sketch.zero()
         for grad in grads:
-            self.sketch += grad[self.sketch_mask]
+            self.sketch.accumulateVec(grad[self.sketch_mask])
         candidate_top_k = self.sketch.unSketch(k=self.p2*self.k)
         candidate_hh_coords = candidate_top_k.nonzero()
         hhs = [grad[candidate_hh_coords] for grad in grads]

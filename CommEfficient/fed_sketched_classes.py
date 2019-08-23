@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
-from CommEfficient.minimal import CSVec
+from csvec import CSVec
 from CommEfficient.sketched_classes import SketchedLossResult, SketchedParamGroup
 
 class FedSketchedModel:
@@ -368,7 +368,6 @@ class FedSketchedWorker(object):
             c=self.num_cols,
             r=self.num_rows,
             device=self.device,
-            nChunks=1,
             numBlocks=self.num_blocks)
         print(f"Total dimension is {self.grad_size} using k {self.k} and p2 {self.p2}  with sketch_mask.sum(): {self.sketch_mask.sum()}")
         self.u = torch.zeros(self.grad_size, device=self.device)
@@ -403,7 +402,7 @@ class FedSketchedWorker(object):
         grad = grad.to(self.device)
         #self.v_param.add_(grad)
         #grad = self.v_param
-        self.sketch += grad[self.sketch_mask]
+        self.sketch.accumulateVec(grad[self.sketch_mask])
         if self.p2 > 0:
             server_top_k = self.sketch.unSketch(k=self.p2*self.k)
             server_hh_coords = server_top_k.nonzero()
@@ -449,7 +448,7 @@ class FedSketchedWorker(object):
     def all_reduce_sketched(self, *grads):
         self.sketch.zero()
         for grad in grads:
-            self.sketch += grad[self.sketch_mask]
+            self.sketch.accumulateVec(grad[self.sketch_mask])
         candidate_top_k = self.sketch.unSketch(k=self.p2*self.k)
         candidate_hh_coords = candidate_top_k.nonzero()
         hhs = [grad[candidate_hh_coords] for grad in grads]

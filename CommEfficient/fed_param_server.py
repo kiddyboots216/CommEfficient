@@ -5,7 +5,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
 
-from CommEfficient.minimal import CSVec
+from csvec import CSVec
 
 from CommEfficient.sketched_classes import SketchedLossResult, SketchedParamGroup
 
@@ -32,7 +32,7 @@ class FedParamServer:
         diff_vec = self.get_latest(round_id)
         return diff_vec
         self.sketch.zero()
-        self.sketch += diff_vec
+        self.sketch.accumulateVec(diff_vec)
 
     def sync(self, round_id):
         w_stale = self.rounds[round_id].to(self.device)
@@ -149,7 +149,7 @@ class FedParamServer:
     def _all_reduce_sketched(self, *grads):
         self.sketch.zero()
         for grad in grads:
-            self.sketch += grad[self.sketch_mask]
+            self.sketch.accumulateVec(grad[self.sketch_mask])
         if self.p2 > 0:
             candidate_top_k = self.sketch.unSketch(
                     k=self.p2*self.k)
@@ -245,7 +245,6 @@ class FedParamServer:
             c=self.num_cols,
             r=self.num_rows,
             device=self.device,
-            nChunks=1,
             numBlocks=self.num_blocks)
         #print(f"Total dimension is {self.grad_size} using k {self.k} and p2 {self.p2} with sketch_mask.sum(): {self.sketch_mask.sum()}")
         self.u = torch.zeros(self.grad_size, device=self.device) 
