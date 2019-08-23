@@ -6,7 +6,8 @@ import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
 from CommEfficient.minimal import CSVec
-GPUS_ALLOCATED = 0.5
+#GPUS_ALLOCATED = 0.5
+GPUS_ALLOCATED = .0
 class FedCommEffModel:
     def __init__(self, input_model, params):
         global client_states
@@ -45,7 +46,6 @@ class FedCommEffModel:
         if self.training:
             # update client state dicts
             # update rounds last updated
-            #batches = [(x.cpu(), y.cpu()) for x,y in batches]
             if cur_round > 0:
                 # update selected clients from param server
                 updated_states = {
@@ -60,7 +60,6 @@ class FedCommEffModel:
             return grads
         else:
             # param server does validation
-            #batch = [batches[0].cpu(), batches[1].cpu()]
             outs = forward.remote(self.model, param_server_states[-1], 
                     client_states[0][-1], *batches)
             return outs 
@@ -112,7 +111,7 @@ class FedCommEffLoss:
         global criterion
         criterion = input_criterion
 
-@ray.remote(num_gpus=GPUS_ALLOCATED)
+@ray.remote(num_gpus=1.0)
 def server_update(grads, indices, client_states, param_server_states, params):
     sketched = params['sketch']
     grads = [ray.get(grad).cuda() for grad in grads]
@@ -140,7 +139,7 @@ def server_update(grads, indices, client_states, param_server_states, params):
     updated_weights = curr_weights - weight_update
     return updated_weights
 
-@ray.remote(num_gpus=GPUS_ALLOCATED)
+@ray.remote(num_gpus=1.0)
 def update_client(round_last_updated, client_state, param_server_states,
         cur_round, params, optimizer_param_groups): 
     #import pdb; pdb.set_trace()
@@ -169,7 +168,6 @@ def update_client(round_last_updated, client_state, param_server_states,
     else:
         weight_update = diff_vec
     updated_vec = client_weights + weight_update 
-    updated_vec = updated_vec.cpu()
     updated_state = vec_to_state_dict(updated_vec, client_state)
     return updated_state
 
@@ -202,7 +200,7 @@ def vec_to_state_dict(vec, state_dict):
         start = end
     return od
 
-@ray.remote(num_gpus=GPUS_ALLOCATED)
+@ray.remote(num_gpus=1.0)
 def forward(model, weights, base_dict, ins, targets):
     #device = torch.device("cuda")
     #ins = ins.to(device)
@@ -212,7 +210,7 @@ def forward(model, weights, base_dict, ins, targets):
     out = model(ins)
     return out.cpu()
 
-@ray.remote(num_gpus=GPUS_ALLOCATED)
+@ray.remote(num_gpus=1.0)
 def fwd_backward(model, _, state_dict, ins, targets):
     global criterion
     model.load_state_dict(state_dict)
