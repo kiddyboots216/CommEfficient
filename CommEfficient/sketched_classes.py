@@ -67,8 +67,6 @@ class SketchedLoss(object):
     
 class SketchedLossResult(object):
     def __init__(self, tensor, workers):
-        #self._tensor = tensor.detach().cpu().numpy()
-        #import pdb; pdb.set_trace()
         self._tensor = tensor
         self.workers = workers
 
@@ -92,7 +90,6 @@ class SketchedOptimizer(optim.Optimizer):
         """
         self.workers = np.array(workers)
         self.head_worker = self.workers[0]
-        # self.param_groups = optimizer.param_groups
         ray.wait([worker.set_optimizer.remote(optimizer) for worker in self.workers])
     
     def zero_grad(self):
@@ -111,7 +108,6 @@ class SketchedOptimizer(optim.Optimizer):
     def __getattr__(self, name):
         if name=="param_groups":
             param_groups = ray.get(self.head_worker.get_param_groups.remote())
-            #print(f"Param groups are {param_groups}")
             return [SketchedParamGroup(param_group, self.workers, idx
                 ) for idx, param_group in enumerate(param_groups)]
 
@@ -171,7 +167,6 @@ class SketchedWorker(object):
         self.criterion = criterion.to(self.device)
 
     def model_call(self, *args):
-        #import pdb; pdb.set_trace()
         args = [arg.to(self.device) for arg in args]
         self.outs = self.model(*args)
         return self.outs
@@ -207,9 +202,7 @@ class SketchedWorker(object):
         return self.loss
 
     def loss_backward(self):
-        #import pdb; pdb.set_trace()
         self.loss.sum().backward()
-        #del self.outs
 
     def set_optimizer(self, opt):
         assert self.model is not None, "model must be already initialized"
@@ -253,10 +246,8 @@ class SketchedWorker(object):
         self._zero_grad()
 
     def compute_grad(self):
-        #assert self._getLRVec() != 0.0, "invalid lr"
         # compute grad 
         gradVec = self._getGradVec()
-        #return gradVec
         # weight decay
         if self.weight_decay != 0:
             gradVec.add_(self.weight_decay/self.num_workers, self._getParamVec())
@@ -267,8 +258,6 @@ class SketchedWorker(object):
         else:
             self.u.mul_(self.momentum).add_(gradVec)
             self.v += (self.u)
-            #self.v = gradVec
-        # this is v
         return self.v * self._getLRVec()
         candidateSketch = self.v[self.sketchMask]
         self.sketch.zero()
@@ -279,11 +268,6 @@ class SketchedWorker(object):
 
     def all_reduce_sketched(self, *grads):
         # compute update
-        """
-        grads = [grad.to(self.device) for grad in grads]
-        self._apply_update(torch.mean(torch.stack(grads), dim=0))
-        return
-        """
         self.sketch.zero()
         for grad in grads:
             self.sketch.accumulateVec(grad[self.sketch_mask])
@@ -299,7 +283,6 @@ class SketchedWorker(object):
             torch.stack(
                 [grad[~self.sketch_mask] for grad in grads]), dim=0)
         self._apply_update(weight_update)
-        #"""
 
     def _topk(self, vec, k):
         """ Return the largest k elements (by magnitude) of vec"""
@@ -314,21 +297,14 @@ class SketchedWorker(object):
         self.u[update.nonzero()] = 0
         self.v[update.nonzero()] = 0
         self.v[~self.sketch_mask] = 0
-        #self.sync(weightUpdate * self._getLRVec())
         weight_update = update
-        # weight_update = update * self._getLRVec()
-        #import pdb; pdb.set_trace()
         weight_update = weight_update.to(self.device)
         start = 0
         for param_group in self.param_groups:
             for p in param_group['params']:
                 end = start + torch.numel(p)
-                # we previously had diff_vec = copy - (copy - grad) = grad, so subtract here 
                 p.data.add_(-weight_update[start:end].reshape(p.data.shape))
                 start = end
-        #import pdb; pdb.set_trace()
-        # self._setGradVec(weight_update)
-        # self._updateParamsWithGradVec()
 
     def _getLRVec(self):
         """Return a vector of each gradient element's learning rate
@@ -339,7 +315,6 @@ class SketchedWorker(object):
         """
         if len(self.param_groups) == 1:
             lr = self.param_groups[0]["lr"]
-#            print(f"Lr is {lr}")
             return lr
 
         lrVec = []
@@ -443,7 +418,6 @@ class SketchedWorker(object):
 
     def _updateParamsWithGradVec(self):
         """Update parameters with the gradient"""
-        #import pdb; pdb.set_trace()
         for group in self.param_groups:
             for p in group["params"]:
                 if p.grad is None:

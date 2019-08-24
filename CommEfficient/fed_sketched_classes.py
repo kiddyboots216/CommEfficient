@@ -1,9 +1,7 @@
 import ray
 
 import torch
-import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
 import numpy as np
 from csvec import CSVec
 from CommEfficient.sketched_classes import SketchedLossResult, SketchedParamGroup
@@ -12,19 +10,12 @@ class FedSketchedModel:
     def __init__(self, model_cls, model_config, workers,
                 param_server, fed_params, 
                 sketch_biases=False, sketch_params_larger_than=0):
-        # self.participation = fed_params["participation_rate"]
         self.cur_round = 0
         self.rounds = []
         self.workers = np.array(workers)
         self.param_server = param_server
         to_set_model = np.append(self.workers, self.param_server)
         self.model = model_cls(**model_config)
-        """
-        for worker in to_set_model:
-            ray.wait([worker.set_model.remote(
-                model_cls, model_config, sketch_biases,
-                sketch_params_larger_than)])
-        """
         ray.wait([worker.set_model.remote(model_cls, model_config, 
             sketch_biases, sketch_params_larger_than
             ) for worker in to_set_model])
@@ -32,43 +23,6 @@ class FedSketchedModel:
 
     def train(self, training):
         self.training = training
-
-    """
-    def __call__(self, *args, **kwargs):
-        if False:
-            num_workers = len(self.workers)
-            idx = np.random.choice(np.arange(num_workers), 
-                int(num_workers * self.participation), replace=False)
-            #print(f"Idx: {idx}")
-            participating_clients = self.workers[idx]
-            client_loaders = args[0]
-            participating_client_loaders = np.array(client_loaders)[idx]
-            self.rounds.append(idx)
-            # pass both inputs and targets to the worker; 
-            # worker will save targets temporarily
-            return ray.get([
-                client.model_call.remote(next(iter(loader))) 
-                for client, loader in list(zip(
-                participating_clients, participating_client_loaders))])
-        if self.training:
-            if self.cur_round > 0:
-                ray.wait([w.d_star_update.remote(
-                    self.param_server.sync.remote(
-                        w.get_last_round.remote()
-                    ), self.cur_round) for w in self.workers])
-            input_minibatches = []
-            batch_size = len(args[0])
-            num_workers = len(self.workers)
-            self.rounds.append(np.arange(num_workers))
-            for i, _ in enumerate(self.workers):
-                start = i * batch_size // num_workers
-                end = (i+1) * batch_size // num_workers
-                input_minibatches.append(args[0][start:end])
-            return [worker.model_call.remote(
-                input_minibatches[worker_id]) for worker_id, worker in enumerate(self.workers)]
-        else:
-            return self.param_server.model_call.remote(*args)
-    """
 
     def __call__(self, *args): 
         if self.training:
@@ -112,11 +66,6 @@ class FedSketchedOptimizer(optim.Optimizer):
                     'weight_decay': p['weight_decay']
                     }
         ]
-        """
-        for worker in to_set_optimize:
-            ray.wait([worker.set_optimizer.remote(
-                optimizer_param_groups)])
-        """
         ray.wait([worker.set_optimizer.remote(
             optimizer_param_groups) for worker in to_set_optimize])
 
@@ -125,7 +74,6 @@ class FedSketchedOptimizer(optim.Optimizer):
         self._step(train_workers, train_workers)
 
     def step(self, idx): 
-        #stale_workers, update_workers = self._get_workers()
         workers = self.workers[idx]
         self.cur_round += 1
         self.model.cur_round = self.cur_round
@@ -143,23 +91,16 @@ class FedSketchedOptimizer(optim.Optimizer):
         ray.wait(
         [param_server.server_update.remote(*grads)]
         )
-        #ray.wait([worker.all_reduce_sketched.remote(
-        #    *grads) for worker in update_workers]) 
     
     def _get_workers(self):
         cur_round = self.model.rounds[-1]
         participating_clients = self.workers[cur_round]
-        #return participating_clients, np.append(
-        #    participating_clients, self.param_server)
         return participating_clients, [self.param_server]
     
     def __getattr__(self, name):
         if name=="param_groups":
             param_groups = ray.get(
                 self.param_server.get_param_groups.remote())
-            #print(f"Param groups are {param_groups}")
-            # return [SketchedParamGroup(param_group, [self.param_server], idx
-            #     ) for idx, param_group in enumerate(param_groups)]
             return [SketchedParamGroup(
                     param_group, [self.param_server], idx
                     ) for idx, param_group in enumerate(param_groups)]
@@ -170,10 +111,6 @@ class FedSketchedLoss:
         self.workers = np.array(workers)
         self.param_server = param_server
         to_set_loss = np.append(self.workers, self.param_server)
-        """
-        for worker in to_set_loss:
-            ray.wait([worker.set_loss.remote(criterion)])
-        """
         ray.wait([worker.set_loss.remote(criterion) for worker in to_set_loss])
 
     def __call__(self, *args, **kwargs):
@@ -234,7 +171,7 @@ class FedSketchedLoss:
         return participating_clients
 
 # note: when using FedSketchedWorker, 
-#many more GPUs than are actually available must be specified
+# many more GPUs than are actually available must be specified
 @ray.remote(num_gpus=0.5)
 class FedSketchedWorker(object):
     def __init__(self, args,
@@ -377,11 +314,9 @@ class FedSketchedWorker(object):
         self._zero_grad()
 
     def compute_grad(self):
-        #assert self._getLRVec() != 0.0, "invalid lr"
         # compute grad 
-        #self.cuda()
         gradVec = self._getGradVec().to(self.device)
-        #return gradVec
+
         # weight decay
         if self.weight_decay != 0:
             gradVec.add_(self.weight_decay/self.num_workers, 
@@ -398,10 +333,7 @@ class FedSketchedWorker(object):
 
     def sketched_update(self, grad, cur_round):
         self.sketch.zero()
-        #import pdb; pdb.set_trace()
         grad = grad.to(self.device)
-        #self.v_param.add_(grad)
-        #grad = self.v_param
         self.sketch.accumulateVec(grad[self.sketch_mask])
         if self.p2 > 0:
             server_top_k = self.sketch.unSketch(k=self.p2*self.k)
@@ -418,20 +350,16 @@ class FedSketchedWorker(object):
 
     def _apply_update(self, update, cur_round):
         self.cur_round = cur_round
-        #print(f"Applying update {update.mean()} for {cur_round}")
         update = update.to(self.device)
         self.u[update.nonzero()] = 0
         self.v[update.nonzero()] = 0
         self.v[~self.sketch_mask] = 0
-        #import pdb; pdb.set_trace()
         start = 0
         for param_group in self.param_groups:
             for p in param_group['params']:
                 end = start + torch.numel(p)
                 p.data.add_(update[start:end].reshape(p.data.shape))
-                #p.data.zero_()
                 start = end
-        #import pdb; pdb.set_trace()
 
     def d_star_update(self, desired_and_d, cur_round):
         desired_diff, d = desired_and_d
@@ -442,7 +370,6 @@ class FedSketchedWorker(object):
         loss = self.criterion(out, target)
         loss.backward()
         weight_update = self._getGradVec()
-        #import pdb; pdb.set_trace()
         self._apply_update(weight_update, cur_round)
 
     def all_reduce_sketched(self, *grads):
@@ -460,23 +387,22 @@ class FedSketchedWorker(object):
                 [grad[~self.sketch_mask] for grad in grads])
         self._apply_update(weight_update)
 
-    def cpu(self):
+    def cpu_(self):
         self.model = self.model.cpu()
         self.u = self.u.cpu()
         self.v = self.v.cpu()
-        self.sketch.cpu()
+        self.sketch.cpu_()
         self.sketch_mask = self.sketch_mask.cpu()
 
-    def cuda(self):
-        #import pdb; pdb.set_trace()
+    def cuda_(self):
         self.model = self.model.cuda()
         self.u = self.u.cuda()
         self.v = self.v.cuda()
-        self.sketch.cuda()
+        self.sketch.cuda_()
         self.sketch_mask = self.sketch_mask.cuda()
 
     def _topk(self, vec, k):
-        """ Return the largest k elements (by magnitude) of vec"""
+        """ Return the largest k elements (by magnitude) of vec """
         ret = torch.zeros_like(vec)
         # on a gpu, sorting is faster than pytorch's topk method
         topkIndices = torch.sort(vec**2)[1][-k:]
@@ -484,7 +410,7 @@ class FedSketchedWorker(object):
         return ret
 
     def _getLRVec(self):
-        """Return a vector of each gradient element's learning rate
+        """ Return a vector of each gradient element's learning rate
         If all parameters have the same learning rate, this just
         returns torch.ones(D) * learning_rate. In this case, this
         function is memory-optimized by returning just a single
@@ -492,7 +418,6 @@ class FedSketchedWorker(object):
         """
         if len(self.param_groups) == 1:
             lr = self.param_groups[0]["lr"]
-#            print(f"Lr is {lr}")
             return lr
 
         lrVec = []
@@ -552,19 +477,6 @@ class FedSketchedWorker(object):
                 if p.grad is None:
                     continue
                 p.grad.data.zero_()
-        # gradShapes, gradSizes = self._getGradShapes()
-        # startPos = 0
-        # i = 0
-        # for group in self.param_groups:
-        #     for p in group["params"]:
-        #         shape = gradShapes[i]
-        #         size = gradSizes[i]
-        #         i += 1
-        #         if p.grad is None:
-        #             continue
-        #         assert(size == torch.numel(p))
-        #         p.grad.data.zero_()
-        #         startPos += size
 
     def sync(self, update):
         """Set params"""
@@ -578,18 +490,5 @@ class FedSketchedWorker(object):
         for param_group in self.param_groups:
             for p in param_group['params']:
                 end = start + torch.numel(p)
-                # we previously had diff_vec = copy - (copy - grad) = grad, so subtract here 
                 p.data = updated_weights[start:end].reshape(p.data.shape)
                 start = end
-        # gradShapes, gradSizes = self._getGradShapes()
-        # startPos = 0
-        # i = 0
-        # #import pdb; pdb.set_trace()
-        # for group in self.param_groups:
-        #     for p in group["params"]:
-        #         shape = gradShapes[i]
-        #         size = gradSizes[i]
-        #         i += 1
-        #         assert(size == torch.numel(p))
-        #         p.data = update[startPos:startPos + size].reshape(shape)
-        #         startPos += size
