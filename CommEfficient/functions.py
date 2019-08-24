@@ -60,6 +60,7 @@ class FedCommEffModel:
                         *client_states[idx], param_server_states, cur_round,
                         self.params, optimizer_param_groups, self.sketch)) 
                     for idx in indices}
+                client_states.update(updated_states)
             # forward pass
             grads = [fwd_backward.remote(self.model, *client_states[idx], 
                 *batches[i], criterion) for i, idx in enumerate(indices)]
@@ -81,7 +82,7 @@ class FedCommEffModel:
         if name == "parameters":
             global param_server_states
             global client_states
-            curr_state = vec_to_state_dict(ray.get(param_server_states[-1]), ray.get(client_states[0][-1]))
+            curr_state = vec_to_state_dict(ray.get(param_server_states[-1]), self.model.state_dict())
             self.model.load_state_dict(curr_state)
             return getattr(self.model, name)
 
@@ -149,6 +150,7 @@ def server_update(grads, indices, client_states, param_server_states, params, sk
     curr_weights = ray.get(param_server_states[-1])
     weight_update = update * lr
     updated_weights = curr_weights - weight_update
+    print(f"{updated_weights} = {curr_weights} - {weight_update}")
     return updated_weights
 
 @ray.remote(num_gpus=1.0)
@@ -179,6 +181,7 @@ def update_client(round_last_updated, client_state, param_server_states,
     else:
         weight_update = diff_vec
     updated_vec = client_weights + weight_update 
+    print(f"{updated_vec} = {client_weights} + {weight_update}")
     updated_state = vec_to_state_dict(updated_vec, client_state)
     return updated_state
 
