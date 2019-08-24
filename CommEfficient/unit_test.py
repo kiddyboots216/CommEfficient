@@ -12,7 +12,7 @@ def makeSketchers(nWeights, nWorkers, k, r, c, p2, device):
     sketched_params = {'k': k, 'p2': p2, 'num_cols': c,
             'num_rows': r, 'num_blocks': 1, 'momentum': 0.0, 'weight_decay': 0.0,
         'nesterov': False, 'dampening': 0, 'n_clients': nWorkers, 'lr': lr,
-        'sketch': True, 'sketch_down': False} 
+        'sketch': True, 'sketch_down': False, 'device': device} 
     fed_model = FedCommEffModel(model, sketched_params)
     fed_opt = FedCommEffOptimizer(opt, sketched_params)
     return fed_model, fed_opt
