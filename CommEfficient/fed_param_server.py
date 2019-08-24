@@ -112,24 +112,15 @@ class FedParamServer:
         # reset to original state
         set_grad_vec(self.model, orig_grad)
         set_param_vec(self.model, orig_param_vec)
-        #import pdb; pdb.set_trace()
         return desired_diff, d
-        return w_stale
 
     def get_latest(self, round_id):
-        #update = self.rounds[-1]
-        #return update
         stale_weights = self.rounds[round_id].to(self.device)
         curr_weights = self.rounds[-1].to(self.device)
         diff_vec = torch.sub(curr_weights, stale_weights)
-        #print(f"giving weights for round {round_id} with {diff_vec.mean()}")
-        #import pdb; pdb.set_trace()
         return diff_vec 
-        #return self.rounds[-1]
 
     def _virtual_momentum(self, gradVec):
-        #self.v.add_(gradVec)
-        #return self.v
         return gradVec
         if self.nesterov:
             self.u.add_(gradVec).mul_(self.momentum)
@@ -144,7 +135,6 @@ class FedParamServer:
         update = self._all_reduce_sketched(*grads)
         weight_update = self._virtual_momentum(update)
         self._apply_update(weight_update)
-        #self._update_vecs(weight_update)
 
     def _all_reduce_sketched(self, *grads):
         self.sketch.zero()
@@ -173,18 +163,13 @@ class FedParamServer:
     def _apply_update(self, update):
         curr_weights = self.rounds[-1].to(self.device)
         weight_update = update * self._getLRVec()
-        #print(f"Applying weight_update with {weight_update} to {curr_weights}")
         updated_weights = curr_weights - weight_update
-        #print(f"Appending updated weights with {updated_weights.mean()}")
         self.rounds.append(updated_weights.cpu())
-        #self.rounds.append(weight_update.cpu())
         start = 0
         for param_group in self.param_groups:
             for p in param_group['params']:
                 end = start + torch.numel(p)
                 p.data = updated_weights[start:end].reshape(p.data.shape)
-                #p.data.zero_()
-                #p.data.add_(-weight_update[start:end].reshape(p.data.shape))
                 start = end
 
     def model_getattr(self, name):
@@ -222,7 +207,6 @@ class FedParamServer:
             nesterov=nesterov, 
             weight_decay=weight_decay, 
             momentum=momentum)
-        # del self.model
         self.param_groups = opt.param_groups
         self.grad_size = 0
         sketch_mask = []
@@ -237,7 +221,6 @@ class FedParamServer:
                         sketch_mask.append(torch.zeros(size))
                     weight_vec.append(p.data.view(-1).float())
                     self.grad_size += size
-        # del self.param_groups
         weight_vec = torch.cat(weight_vec).float().to(self.device) 
         self.rounds.append(weight_vec.cpu())
         self.sketch_mask = torch.cat(sketch_mask).bool().to(self.device)
@@ -259,7 +242,6 @@ class FedParamServer:
         for p in model.parameters():
             size = p.numel()
             p.do_sketching = size >= sketch_params_larger_than
-            #p.data.zero_()
         # override bias terms with whatever sketchBiases is
         for m in model.modules():
             if isinstance(m, torch.nn.Linear):
@@ -272,10 +254,6 @@ class FedParamServer:
         #import pdb; pdb.set_trace()
         self.outs = self.model(*args)
         return self.outs.cpu()
-        #self.cuda()
-        outs = self.model(args[0].to(self.device))
-        #print(f"Length of self.outs is {len(self.outs)}")
-        return outs
 
     def set_loss(self, criterion):
         self.criterion = criterion.to(self.device)
@@ -287,7 +265,6 @@ class FedParamServer:
         loss = self.criterion(
             args[0].to(self.device), 
             args[1].to(self.device))
-        #self.cpu()
         return loss
 
     def get_param_groups(self):
@@ -322,7 +299,6 @@ class FedParamServer:
         """
         if len(self.param_groups) == 1:
             lr = self.param_groups[0]["lr"]
-            #print(f"Lr is {lr}")
             return lr
 
         lrVec = []

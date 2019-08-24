@@ -1,27 +1,13 @@
 import os
 import math
-#import collections
-#import logging
-#import glob
-#import re
-#from functools import singledispatch
-#from collections import OrderedDict
-#from collections import namedtuple
-#from inspect import signature
 
-import torch, torchvision
+import torch
+import torchvision
 import numpy as np
 import ray
 
 import torch.optim as optim
 import torch.nn as nn
-import torch.nn.functional as F
-import torchvision.datasets as datasets
-import torchvision.transforms as transforms
-from torch.utils.data.dataset import Dataset
-
-#import itertools as it
-#import copy
 
 from minimal import Net, cifar10, Correct, union, PiecewiseLinear, \
         Timer, TableLogger, normalise, pad, transpose, \
@@ -33,18 +19,20 @@ from fed_sketched_classes import FedSketchedModel, FedSketchedLoss, \
         FedSketchedOptimizer, FedSketchedWorker
 from fed_param_server import FedParamServer
 
+from data_utils import get_data_loaders, hp_default
+
 DATA_PATH = 'sample_data'
 
 GPUS_PER_WORKER = 0.8
 GPUS_PER_PARAM_SERVER = 0.8
+
 def train(model, opt, scheduler, criterion, 
     accuracy, train_loader, val_loader, 
     params, loggers=(), timer=None):
     timer = timer or Timer()
     batch_size = params["batch_size"]
-    # print(f"Length of loader: {len(train_loader)} with batch_size {batch_size}")
     epochs = params["epochs"]
-    #scheduler.step()
+
     for epoch in range(args.epochs):
         train_loss, train_acc = run_batches(model, opt, scheduler, 
             criterion, accuracy, train_loader, True, params)
@@ -81,42 +69,25 @@ def run_batches(model, opt, scheduler, criterion,
             targets = [targets]
             outs = model(inputs, w_idx)
             batch_loss = criterion(outs, targets, w_idx)
-            print(batch_loss.mean())
+            print("batch_loss.mean()", batch_loss.mean())
             opt.zero_grad(w_idx)
-            #batch_loss.sum().backward()
             batch_loss.backward()
             opt.step(w_idx)
             scheduler.step()
             batch_acc = accuracy(
                     torch.cat(ray.get(outs), dim=0),
-                    targets[0].to(device)
+                    targets[0].to(args.device)
                 ).float().mean().cpu().numpy()
         else:
             outs = model(inputs)
             batch_loss = criterion(outs, targets)
             batch_acc = accuracy(
                     ray.get(outs),
-                    targets.to(device)
+                    targets.to(args.device)
                 ).float().mean().cpu().numpy()
         losses.append(batch_loss.mean())
-        #batch_acc = accuracy(outs, targets).float().mean().cpu().numpy()
         accs.append(batch_acc)
     return np.mean(losses), np.mean(accs)
-
-"""
-weight_update = param_server.get_latest()
-    return self.rounds[-1]
-w._apply_update(weight_update)
-    zero out entries of u, v where weight_update is nonzero
-    p.data.add(-weight_update)
-grads = worker.compute_grad()
-param_server.all_reduce_sketched(grads)
-   compute weight_update
-   self._apply_update(weight_update)
-      weight_update *= self._getLRVec()
-      self.rounds.append(weight_update)
-      p.data.add(-weight_update)
-"""
 
 def train_fed(model, opt, scheduler, criterion, 
     accuracy, train_loader, val_loader, 
@@ -157,7 +128,6 @@ def run_fed_batches(model, opt, scheduler, criterion,
     c = (DATA_LEN/n_clients)/batch_size
     n_clients_to_select = int(n_clients * participation)
     model.train(training)
-    #loaders = np.array([iter(loader) for loader in loaders])
     losses = []
     accs = []
 
@@ -165,8 +135,6 @@ def run_fed_batches(model, opt, scheduler, criterion,
         for idx, batch in enumerate(loaders):
             inputs = batch["input"]
             targets = batch["target"]
-        #for _ in range(int(1/participation * c)):
-        #for _ in range(1):
             idx = np.random.choice(clients, 
                 n_clients_to_select, replace=False)
             input_minibatches = []
@@ -176,38 +144,28 @@ def run_fed_batches(model, opt, scheduler, criterion,
                 end = (i+1) * batch_size // n_clients_to_select
                 input_minibatches.append(inputs[start:end])
                 target_minibatches.append(targets[start:end])
-            #client_loaders = loaders[idx]
-            #batches = [next(l) for l in client_loaders]
-            #ins, targets = list(zip(*batches))
-            #outs = model(ins, idx)
             outs = model(input_minibatches, idx)
-            #batch_loss = criterion(outs, targets, idx)
             batch_loss = criterion(outs, target_minibatches, idx)
-            #print(f"Loss: {batch_loss.mean()}")
             opt.zero_grad(idx)
-            #batch_loss.sum().backward()
             batch_loss.backward()
             opt.step(idx)
             scheduler.step()
-            #losses.append(batch_loss.detach().mean().cpu().numpy())
             losses.append(batch_loss.mean())
             # TODO: Fix train acc calculation
             o = torch.cat(ray.get(outs), dim=0)
             batch_acc = accuracy(o, 
-                    torch.cat(target_minibatches).to(device)).float().mean().cpu().numpy()
-            #batch_acc = 0
+                                 torch.cat(target_minibatches).to(args.device)
+                                ).float().mean().cpu().numpy()
             accs.append(batch_acc)
 
     else:
         for idx, batch in enumerate(loaders):
-            #inputs, targets = batch
             inputs, targets = batch["input"], batch["target"]
             outs = model(inputs)
             batch_loss = criterion(outs, targets)
             losses.append(batch_loss.mean())
             batch_acc = accuracy(ray.get(outs), 
-                    targets.to(device)).float().mean().cpu().numpy()
-            #batch_acc = 0
+                    targets.to(args.device)).float().mean().cpu().numpy()
             accs.append(batch_acc)
     return np.mean(losses), np.mean(accs)
 
@@ -226,22 +184,18 @@ parser.add_argument("-test", action="store_true")
 parser.add_argument("-fed", action="store_true")
 parser.add_argument("-clients", type=int, default=1)
 parser.add_argument("-rate", type=float, default=1.0)
-
+parser.add_argument("-device", choices=["cpu", "cuda"], default="cuda")
 args = parser.parse_args()
-device = torch.device("cpu")
-#device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 timer = Timer()
-from data_utils import *
 hp_default["participation_rate"] = args.rate
 hp_default["n_clients"] = args.clients
 DATA_LEN = 50000
-#hp_default["batch_size"] = int(DATA_LEN/hp_default["n_clients"])
 hp_default["batch_size"] = args.batch_size
 fed_params = hp_default
 fed_params["epochs"] = args.epochs
 fed_params["DATA_LEN"] = DATA_LEN
 if args.fed:
-    #hp_default["batch_size"] = int(args.batch_size/(args.rate * args.clients))
     train_loader, central_train_loader, val_loader, stats = get_data_loaders(hp_default, verbose=True)
 
 else:
@@ -269,11 +223,7 @@ else:
     fed_params["epochs"] = args.epochs
 
 print('Initializing everything')
-num_gpus_to_claim = math.ceil(GPUS_PER_WORKER * args.clients + GPUS_PER_PARAM_SERVER) 
-num_gpus_to_claim = 8
-ray.init(
-        #num_gpus=num_gpus_to_claim, 
-        redis_password="sketched_sgd")
+ray.init(redis_password="sketched_sgd")
 model_cls = Net
 model_config = {}
 if args.test:
@@ -310,32 +260,20 @@ sketched_params = {
 }
 
 lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
-#if args.fed:
-if True:
-    # CHANGE THIS WHEN SWITCHING
-    lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
-    workers = [FedSketchedWorker.remote(sketched_params) for _ in range(args.clients)]
-    param_server = FedParamServer.remote(sketched_params)
-    model = FedSketchedModel(model_cls, model_config, workers, param_server, fed_params)
-    opt = optim.SGD(model.parameters(), lr=1)
-    opt = FedSketchedOptimizer(opt, workers, param_server, model)
-    criterion = torch.nn.CrossEntropyLoss(reduction='none')
-    criterion = FedSketchedLoss(criterion, workers, param_server, model)
-    scheduler = optim.lr_scheduler.LambdaLR(opt, lr_lambda=[lambda_step])
-    accuracy = Correct().to(device)
+# CHANGE THIS WHEN SWITCHING
+lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
+workers = [FedSketchedWorker.remote(sketched_params) for _ in range(args.clients)]
+param_server = FedParamServer.remote(sketched_params)
+model = FedSketchedModel(model_cls, model_config, workers, param_server, fed_params)
+opt = optim.SGD(model.parameters(), lr=1)
+opt = FedSketchedOptimizer(opt, workers, param_server, model)
+criterion = torch.nn.CrossEntropyLoss(reduction='none')
+criterion = FedSketchedLoss(criterion, workers, param_server, model)
+scheduler = optim.lr_scheduler.LambdaLR(opt, lr_lambda=[lambda_step])
+accuracy = Correct().to(args.device)
 
-else:
-    lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
-    workers = [SketchedWorker.remote(sketched_params) for _ in range(args.clients)]
-    model = SketchedModel(model_cls, model_config, workers)
-    opt = optim.SGD(model.parameters(), lr=1)
-    opt = SketchedOptimizer(opt, workers)
-    criterion = torch.nn.CrossEntropyLoss(reduction='none')
-    criterion = SketchedLoss(criterion, workers)
-    scheduler = optim.lr_scheduler.LambdaLR(opt, lr_lambda=[lambda_step])
-    accuracy = Correct().to(device)
+print('Finished initializing in {:.2f} seconds'.format(timer()))
 
-print('Finished in {:.2f} seconds'.format(timer()))
 if not args.fed:
     train_fed(model, opt, scheduler, criterion, accuracy, 
         train_loader, val_loader, fed_params,
