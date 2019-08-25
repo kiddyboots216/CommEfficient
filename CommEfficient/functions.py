@@ -16,26 +16,31 @@ class FedCommEffModel:
         global cur_round
         global grad_size
         n_clients = params['n_clients']
-        self.model = input_model
-        state_dict = self.model.state_dict()
+        device = params['device']
+        cpu = torch.device("cpu")
+        self.model = input_model.to(device)
+        state_dict = input_model.state_dict()
+        param_vec = get_param_vec(input_model, cpu)
         state_dict_id = ray.put(state_dict)
+        param_vec_id = ray.put(param_vec)
         cur_round = 0
-        """
         client_states = \
             {i:
                 (cur_round, state_dict_id)
             for i in range(n_clients)}
-        """
-        client_states = {0: (cur_round, state_dict_id)}
-        device = torch.device(params["device"])
-        param_server_states = [ray.put(state_dict_to_vec(state_dict, device))]
-        grad_size = 0
+        client_params = \
+                {i:
+                        (cur_round, param_vec_id)
+                        for i in range(n_clients)}
+        #client_states = {0: (cur_round, state_dict_id)}
+        param_server_states = [param_vec_id]
+        self.grad_size = 0
         for p in self.model.parameters():
             if p.requires_grad:
-                grad_size += torch.numel(p)
+                self.grad_size += torch.numel(p)
         if params['sketch'] or params['sketch_down']:
-            self.sketch = CSVec(d=grad_size, c=params['num_cols'],
-                r=params['num_rows'], device=device,
+            self.sketch = CSVec(d=self.grad_size, c=params['num_cols'],
+                r=params['num_rows'], device=cpu,
                 numBlocks=1)
         self.params = params
 
@@ -58,7 +63,8 @@ class FedCommEffModel:
                 updated_states = {
                     idx: (cur_round, update_client.remote(
                         *client_states[idx], param_server_states, cur_round,
-                        self.params, optimizer_param_groups, self.sketch)) 
+                        self.params, optimizer_param_groups, self.sketch
+                        )) 
                     for idx in indices}
                 client_states.update(updated_states)
             # forward pass
@@ -82,7 +88,8 @@ class FedCommEffModel:
         if name == "parameters":
             global param_server_states
             global client_states
-            curr_state = vec_to_state_dict(ray.get(param_server_states[-1]), self.model.state_dict())
+            gpu = torch.device(self.params['gpu'])
+            curr_state = vec_to_state_dict(ray.get(param_server_states[-1]), self.model.state_dict(), gpu)
             self.model.load_state_dict(curr_state)
             return getattr(self.model, name)
 
@@ -111,7 +118,8 @@ class FedCommEffOptimizer(optim.Optimizer):
         global param_server_states
         global cur_round
         new_state = server_update.remote(grads, indices, client_states, 
-                param_server_states, self.params, self.sketch, self.param_groups)
+                param_server_states, self.params, self.sketch, 
+                self.param_groups)
         param_server_states.append(new_state)
         cur_round += 1
 
@@ -128,7 +136,6 @@ def server_update(grads, indices, client_states, param_server_states, params, sk
     sketched = params['sketch']
     device = torch.device(params['device'])
     grads = [ray.get(grad).to(device) for grad in grads]
-    #grad = ray.get(grads).to(device)
     lr = get_lr(optimizer_param_groups)
     if sketched:
         p2 = params['p2']
@@ -150,12 +157,13 @@ def server_update(grads, indices, client_states, param_server_states, params, sk
     curr_weights = ray.get(param_server_states[-1])
     weight_update = update * lr
     updated_weights = curr_weights - weight_update
-    print(f"{updated_weights} = {curr_weights} - {weight_update}")
+   # print(f"{updated_weights} = {curr_weights} - {weight_update}")
     return updated_weights
 
 @ray.remote(num_gpus=1.0)
 def update_client(round_last_updated, client_state, param_server_states,
-        cur_round, params, optimizer_param_groups, sketch): 
+        cur_round, params, optimizer_param_groups, sketch
+        ): 
     #import pdb; pdb.set_trace()
     device = torch.device(params['device'])
     client_weights = state_dict_to_vec(client_state, device)
@@ -167,6 +175,7 @@ def update_client(round_last_updated, client_state, param_server_states,
     if sketch_down:
         p2 = params['p2']
         k = params['k']
+        sketch.cuda_()
         sketch.zero()
         sketch.accumulateVec(diff_vec)
         if p2 > 0:
@@ -181,14 +190,14 @@ def update_client(round_last_updated, client_state, param_server_states,
     else:
         weight_update = diff_vec
     updated_vec = client_weights + weight_update 
-    print(f"{updated_vec} = {client_weights} + {weight_update}")
+    #print(f"{updated_vec} = {client_weights} + {weight_update}")
     updated_state = vec_to_state_dict(updated_vec, client_state)
-    return updated_state
+    return updated_state.cpu()
 
 def get_lr(optimizer_param_groups):
     if len(optimizer_param_groups) == 1:
         lr = optimizer_param_groups[0]["lr"]
-        #print(f"Lr is {lr}")
+        print(f"Lr is {lr}")
         return lr
 
 def _topk(vec, k):
@@ -204,7 +213,8 @@ def state_dict_to_vec(state_dict, device):
         [t.reshape(-1) for t in state_dict.values()]
         ).to(device)
 
-def vec_to_state_dict(vec, state_dict):
+def vec_to_state_dict(vec, state_dict, device):
+    vec = vec.to(device)
     od = OrderedDict()
     start = 0
     for key, val in state_dict.items():
@@ -229,7 +239,6 @@ def fwd_backward(model, _, state_dict, ins, targets, criterion):
     model.load_state_dict(state_dict)
     outs = model(ins)
     loss = criterion(outs, targets)
-    print(loss)
     loss.backward()
     grad_vec = []
     with torch.no_grad():
@@ -292,11 +301,10 @@ if __name__ == "__main__":
         #'device': 'cpu',
         'device': 'cuda',
     }
-    device = torch.device(params['device'])
-    model = FCNet(**model_config).to(device)
+    model = FCNet(**model_config)
     optimizer = optim.SGD(model.parameters(), lr=1)
-    xs = torch.randn(batch_size, D_in, device=device)
-    ys = torch.randn(batch_size, D_out, device=device)
+    xs = torch.randn(batch_size, D_in)
+    ys = torch.randn(batch_size, D_out)
     batch = [xs, ys]
     batches = [batch for _ in range(n_clients)]
     idx = [i for i in range(n_clients)]
