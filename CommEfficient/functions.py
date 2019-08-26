@@ -10,37 +10,35 @@ from csvec import CSVec
 GPUS_ALLOCATED = 0.5
 
 class FedCommEffModel:
-    def __init__(self, input_model, params):
+    def __init__(self, input_model, model_cls, model_config, params):
         global client_states
+        global client_params
         global param_server_states
         global cur_round
         global grad_size
         n_clients = params['n_clients']
         device = params['device']
-        cpu = torch.device("cpu")
+        cpu = "cpu"
+        self.model_cls = model_cls
+        self.model_config = model_config
+        self.cpu_model = input_model.to(cpu)
         self.model = input_model.to(device)
-        state_dict = input_model.state_dict()
-        param_vec = get_param_vec(input_model, cpu)
-        state_dict_id = ray.put(state_dict)
+        param_vec = get_param_vec(self.cpu_model, cpu)
         param_vec_id = ray.put(param_vec)
         cur_round = 0
-        client_states = \
-            {i:
-                (cur_round, state_dict_id)
-            for i in range(n_clients)}
         client_params = \
                 {i:
                         (cur_round, param_vec_id)
                         for i in range(n_clients)}
-        #client_states = {0: (cur_round, state_dict_id)}
         param_server_states = [param_vec_id]
-        self.grad_size = 0
+        grad_size = 0
         for p in self.model.parameters():
             if p.requires_grad:
-                self.grad_size += torch.numel(p)
+                grad_size += torch.numel(p)
         if params['sketch'] or params['sketch_down']:
-            self.sketch = CSVec(d=self.grad_size, c=params['num_cols'],
-                r=params['num_rows'], device=cpu,
+            global sketch
+            sketch = CSVec(d=grad_size, c=params['num_cols'],
+                r=params['num_rows'], device=device,
                 numBlocks=1)
         self.params = params
 
@@ -49,37 +47,36 @@ class FedCommEffModel:
 
     def __call__(self, batches, indices):
         global param_server_states
-        global client_states
+        #global client_states
         global cur_round
-        global optimizer_param_groups
         global criterion
+        global client_params
         if self.training:
             #batches = [(x.cpu(), y.cpu()) for x,y in batches]
-            #batches = [batches[0].cpu(), batches[1].cpu()]
             # update client state dicts
             # update rounds last updated
             if cur_round > 0:
                 # update selected clients from param server
-                updated_states = {
-                    idx: (cur_round, update_client.remote(
-                        *client_states[idx], param_server_states, cur_round,
-                        self.params, optimizer_param_groups, self.sketch
-                        )) 
-                    for idx in indices}
-                client_states.update(updated_states)
+                updated_params = {
+                        idx: (cur_round, client_update.remote(
+                            *client_params[idx], param_server_states, cur_round,
+                            self.params))
+                        for idx in indices}
+                client_params.update(updated_params)
             # forward pass
-            grads = [fwd_backward.remote(self.model, *client_states[idx], 
-                *batches[i], criterion) for i, idx in enumerate(indices)]
+            grads = [forward_backward.remote(self.model_cls, self.model_config,
+                *client_params[idx], *batches[i], criterion, self.params) 
+                for i, idx in enumerate(indices)]
             return grads
         else:
             # param server does validation
             #batches = [batches[0].cpu(), batches[1].cpu()]
-            outs = forward.remote(self.model, param_server_states[-1], 
-                    client_states[0][-1], *batches, self.params)
+            outs = forward.remote(self.model_cls, self.model_config,
+                    param_server_states[-1], *batches, self.params)
             return outs 
 
     def __setattr__(self, name, value):
-        if name in ["training", "params", "model", "sketch"]:
+        if name in ["training", "params", "model", "sketch", "cpu_model", "model_cls", "model_config"]:
             self.__dict__[name] = value
         else:
             self.model.setattr(name, value)
@@ -87,39 +84,28 @@ class FedCommEffModel:
     def __getattr__(self, name):
         if name == "parameters":
             global param_server_states
-            global client_states
-            gpu = torch.device(self.params['gpu'])
-            curr_state = vec_to_state_dict(ray.get(param_server_states[-1]), self.model.state_dict(), gpu)
-            self.model.load_state_dict(curr_state)
-            return getattr(self.model, name)
+            #global client_states
+            #curr_state = vec_to_state_dict(ray.get(param_server_states[-1]), self.model.state_dict(), gpu)
+            #self.model.load_state_dict(curr_state)
+            curr_weights = ray.get(param_server_states[-1])
+            set_param_vec(self.cpu_model, curr_weights)
+            return getattr(self.cpu_model, name)
 
 class FedCommEffOptimizer(optim.Optimizer):
     def __init__(self, optimizer, params):
-        global optimizer_param_groups
         # extract all params from the optimizer
         self.params = params
-        optimizer_params = [
-                {'lr': p['lr'],
-                'dampening': p['dampening'],
-                'nesterov': p['nesterov'],
-                'momentum': p['momentum'],
-                'weight_decay': p['weight_decay']
-                } for p in optimizer.param_groups
-        ]
         self.param_groups = optimizer.param_groups
-        optimizer_param_groups = self.param_groups
-        if params['sketch'] or params['sketch_down']:
-            self.sketch = CSVec(d=grad_size, c=params['num_cols'],
-                r=params['num_rows'], device=params['device'],
-                numBlocks=1)
 
     def step(self, grads, indices):
-        global client_states
+        #global client_states
+        global client_params
         global param_server_states
         global cur_round
-        new_state = server_update.remote(grads, indices, client_states, 
-                param_server_states, self.params, self.sketch, 
-                self.param_groups)
+        global sketch
+        lr = get_lr(self.param_groups)
+        new_state = server_update.remote(indices, 
+                param_server_states, self.params, lr, *grads)
         param_server_states.append(new_state)
         cur_round += 1
 
@@ -131,15 +117,42 @@ class FedCommEffLoss:
         global criterion
         criterion = input_criterion
 
+@ray.remote(num_gpus=1.0)
+def forward(model_cls, model_config, weights, ins, targets, params):
+    device = params['device']
+    model = model_cls(**model_config).to(device)
+    weights = weights.to(device)
+    ins = ins.to(device)
+    set_param_vec(model, weights)
+    outs = model(ins)
+    return outs.cpu()
+
+@ray.remote(num_gpus=1.0)
+def forward_backward(model_cls, model_config, _, weights, ins, 
+        targets, criterion, params):
+    device = params['device']
+    model = model_cls(**model_config).to(device)
+    weights = weights.to(device)
+    set_param_vec(model, weights)
+    ins = ins.to(device)
+    targets = targets.to(device)
+    criterion = criterion.to(device)
+    return compute_grad(model, ins, targets, criterion, params)
+
 @ray.remote(num_gpus=GPUS_ALLOCATED)
-def server_update(grads, indices, client_states, param_server_states, params, sketch, optimizer_param_groups):
+def server_update(indices, param_server_states, 
+        params, lr, *grads):
     sketched = params['sketch']
     device = torch.device(params['device'])
-    grads = [ray.get(grad).to(device) for grad in grads]
-    lr = get_lr(optimizer_param_groups)
+    grads = [grad.to(device) for grad in grads]
+    curr_weights = ray.get(param_server_states[-1]).to(device)
     if sketched:
         p2 = params['p2']
         k = params['k']
+        global grad_size
+        sketch = CSVec(d=grad_size, c=params['num_cols'],
+            r=params['num_rows'], device=device,
+            numBlocks=1)
         sketch.zero()
         for grad in grads:
             sketch.accumulateVec(grad)
@@ -153,29 +166,28 @@ def server_update(grads, indices, client_states, param_server_states, params, sk
             weights = sketch.unSketch(k=k)
         update = weights 
     else:
-        update = torch.mean(torch.stack(grads), dim=0), ray.get(client_states[0][-1])
-    curr_weights = ray.get(param_server_states[-1])
+        update = torch.mean(torch.stack(grads), dim=0)
     weight_update = update * lr
     updated_weights = curr_weights - weight_update
-   # print(f"{updated_weights} = {curr_weights} - {weight_update}")
-    return updated_weights
+    #print(f"{updated_weights} = {curr_weights} - {update} * {lr} from {grads}")
+    return updated_weights.cpu()
 
 @ray.remote(num_gpus=1.0)
-def update_client(round_last_updated, client_state, param_server_states,
-        cur_round, params, optimizer_param_groups, sketch
-        ): 
-    #import pdb; pdb.set_trace()
-    device = torch.device(params['device'])
-    client_weights = state_dict_to_vec(client_state, device)
-    #print(f"{round_last_updated} < {cur_round} < {len(param_server_states)}")
+def client_update(round_last_updated, client_weights, param_server_states,
+        cur_round, params):
+    device = params['device']
     stale_weights = ray.get(param_server_states[round_last_updated]).to(device)
     curr_weights = ray.get(param_server_states[-1]).to(device)
+    client_weights = client_weights.to(device)
     sketch_down = params['sketch_down']
     diff_vec = curr_weights - stale_weights
     if sketch_down:
         p2 = params['p2']
         k = params['k']
-        sketch.cuda_()
+        global grad_size
+        sketch = CSVec(d=grad_size, c=params['num_cols'],
+            r=params['num_rows'], device=device,
+            numBlocks=1)
         sketch.zero()
         sketch.accumulateVec(diff_vec)
         if p2 > 0:
@@ -190,14 +202,12 @@ def update_client(round_last_updated, client_state, param_server_states,
     else:
         weight_update = diff_vec
     updated_vec = client_weights + weight_update 
-    #print(f"{updated_vec} = {client_weights} + {weight_update}")
-    updated_state = vec_to_state_dict(updated_vec, client_state)
-    return updated_state.cpu()
+    return updated_vec.cpu()
 
 def get_lr(optimizer_param_groups):
     if len(optimizer_param_groups) == 1:
         lr = optimizer_param_groups[0]["lr"]
-        print(f"Lr is {lr}")
+        #print(f"Lr is {lr}")
         return lr
 
 def _topk(vec, k):
@@ -224,22 +234,14 @@ def vec_to_state_dict(vec, state_dict, device):
         start = end
     return od
 
-@ray.remote(num_gpus=1.0)
-def forward(model, weights, base_dict, ins, targets, params):
-    device = torch.device(params['device'])
-    #ins = ins.to(device)
-    state_dict = vec_to_state_dict(weights, base_dict)
-    model.load_state_dict(state_dict)
-    #model = model.cuda()
-    out = model(ins)
-    return out
-
-@ray.remote(num_gpus=1.0)
-def fwd_backward(model, _, state_dict, ins, targets, criterion):
-    model.load_state_dict(state_dict)
+def compute_grad(model, ins, targets, criterion, params):
     outs = model(ins)
     loss = criterion(outs, targets)
     loss.backward()
+    grad_vec = get_grad_vec(model)
+    return grad_vec.cpu()
+
+def get_grad_vec(model):
     grad_vec = []
     with torch.no_grad():
         # flatten
@@ -266,11 +268,63 @@ def set_param_vec(model, param_vec):
         p.data.add_(param_vec[start:end].view(p.size()))
         start = end
 
+@ray.remote(num_gpus=1.0)
+def update_client(round_last_updated, client_state, param_server_states,
+        cur_round, params): 
+    #import pdb; pdb.set_trace()
+    device = torch.device(params['device'])
+    client_weights = state_dict_to_vec(client_state, device)
+    #print(f"{round_last_updated} < {cur_round} < {len(param_server_states)}")
+    stale_weights = ray.get(param_server_states[round_last_updated]).to(device)
+    curr_weights = ray.get(param_server_states[-1]).to(device)
+    sketch_down = params['sketch_down']
+    diff_vec = curr_weights - stale_weights
+    if sketch_down:
+        p2 = params['p2']
+        k = params['k']
+        global grad_size
+        sketch = CSVec(d=grad_size, c=params['num_cols'],
+            r=params['num_rows'], device=device,
+            numBlocks=1)
+        sketch.zero()
+        sketch.accumulateVec(diff_vec)
+        if p2 > 0:
+            server_top_k = sketch.unSketch(k=p2*k)
+            server_hh_coords = server_top_k.nonzero()
+            hhs = diff_vec[server_hh_coords]
+            server_top_k[server_hh_coords] = hhs
+            weights = _topk(server_top_k, k=k)
+        else:
+            weights = sketch.unSketch(k=k)
+        weight_update = weights
+    else:
+        weight_update = diff_vec
+    updated_vec = client_weights + weight_update 
+    #print(f"{updated_vec} = {client_weights} + {weight_update}")
+    updated_state = vec_to_state_dict(updated_vec, client_state)
+    return updated_state.cpu()
+
+@ray.remote(num_gpus=1.0)
+def fwd_backward(model, _, state_dict, ins, targets, criterion, params):
+    model.load_state_dict(state_dict)
+    return compute_grad(model, ins, targets, criterion, params)
+
+@ray.remote(num_gpus=1.0)
+def fwd(model_cls, model_config, weights, base_dict, ins, targets, params):
+    device = torch.device(params['device'])
+    #ins = ins.to(device)
+    state_dict = vec_to_state_dict(weights, base_dict)
+    model = model_cls(**model_config).to(device)
+    model.load_state_dict(state_dict)
+    #model = model.cuda()
+    out = model(ins)
+    return out.cpu()
+
 if __name__ == "__main__":
     ray.init(redis_password='functional')
     D_in, D_out, H_sizes = 2, 4, [2,4]
     n_clients = 1
-    epochs, batch_size = 10, 1
+    epochs, batch_size = 4, 1
     class FCNet(nn.Module):
         def __init__(self, in_size, out_size, hidden_sizes):
             super(FCNet, self).__init__()
@@ -302,22 +356,23 @@ if __name__ == "__main__":
         'device': 'cuda',
     }
     model = FCNet(**model_config)
+    model_cls = FCNet
     optimizer = optim.SGD(model.parameters(), lr=1)
     xs = torch.randn(batch_size, D_in)
     ys = torch.randn(batch_size, D_out)
     batch = [xs, ys]
     batches = [batch for _ in range(n_clients)]
     idx = [i for i in range(n_clients)]
-    comm_model = FedCommEffModel(model, params)
-    optimizer = FedCommEffOptimizer(optimizer, params)
-    criterion = nn.MSELoss().to(device)
+    comm_model = FedCommEffModel(model, model_cls, model_config, params)
+    comm_optimizer = FedCommEffOptimizer(optimizer, params)
+    criterion = nn.MSELoss()
     comm_criterion = FedCommEffLoss(criterion, params)
-    scheduler = optim.lr_scheduler.LambdaLR(optimizer, 
+    scheduler = optim.lr_scheduler.LambdaLR(comm_optimizer, 
             lambda x: x)
     for _ in range(epochs):
         comm_model.train(True)
         grads = comm_model(batches, idx)
-        optimizer.step(grads, idx)
+        comm_optimizer.step(grads, idx)
         scheduler.step()
         comm_model.train(False)
         outs = comm_model(batch, idx)

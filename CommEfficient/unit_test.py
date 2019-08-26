@@ -13,7 +13,9 @@ def makeSketchers(nWeights, nWorkers, k, r, c, p2, device):
             'num_rows': r, 'num_blocks': 1, 'momentum': 0.0, 'weight_decay': 0.0,
         'nesterov': False, 'dampening': 0, 'n_clients': nWorkers, 'lr': lr,
         'sketch': True, 'sketch_down': False, 'device': device} 
-    fed_model = FedCommEffModel(model, sketched_params)
+    model_cls = torch.nn.Linear
+    model_config = {'in_features': nWeights, 'out_features': 1, 'bias': False}
+    fed_model = FedCommEffModel(model, model_cls, model_config, sketched_params)
     fed_opt = FedCommEffOptimizer(opt, sketched_params)
     return fed_model, fed_opt
 
@@ -183,7 +185,7 @@ def testAll():
     import ray
     ray.init(num_gpus=3)
     doSlowSketching = False
-    for device in ["cuda"]:
+    for device in ["cpu"]:
         for N, d, W, k, r, c, p2, w1s, w2s in testParams:
             w1s = tuple(torch.tensor(w) for w in w1s)
             if w2s is not None:
