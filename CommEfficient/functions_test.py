@@ -36,15 +36,14 @@ if __name__ == "__main__":
         #'device': 'cpu',
         'device': 'cuda',
     }
-    model = FCNet(**model_config)
     model_cls = FCNet
-    optimizer = torch.optim.SGD(model.parameters(), lr=1)
     xs = torch.randn(batch_size, D_in)
     ys = torch.randn(batch_size, D_out)
     batch = [xs, ys]
     batches = [batch for _ in range(n_clients)]
     idx = [i for i in range(n_clients)]
-    comm_model = FedCommEffModel(model, model_cls, model_config, params)
+    comm_model = FedCommEffModel(model_cls, model_config, params)
+    optimizer = torch.optim.SGD(comm_model.parameters(), lr=1)
     comm_optimizer = FedCommEffOptimizer(optimizer, params)
     criterion = torch.nn.MSELoss()
     comm_criterion = FedCommEffLoss(criterion, params)

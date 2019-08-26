@@ -5,17 +5,17 @@ from CommEfficient.fed_param_server import FedParamServer
 from CommEfficient.functions import FedCommEffModel, FedCommEffOptimizer, FedCommEffLoss
 def makeSketchers(nWeights, nWorkers, k, r, c, p2, device):
     lr = 0.005
-    model = torch.nn.Linear(nWeights, 1, bias=False).to(device)
-    list(model.parameters())[0].data.zero_()
-    opt = torch.optim.SGD(model.parameters(), lr=lr)
+    #model = torch.nn.Linear(nWeights, 1, bias=False).to(device)
+    #list(model.parameters())[0].data.zero_()
     # initialize weights to zero
     sketched_params = {'k': k, 'p2': p2, 'num_cols': c,
             'num_rows': r, 'num_blocks': 1, 'momentum': 0.0, 'weight_decay': 0.0,
         'nesterov': False, 'dampening': 0, 'n_clients': nWorkers, 'lr': lr,
-        'sketch': True, 'sketch_down': False, 'device': device} 
+        'sketch': True, 'sketch_down': False, 'device': device, 'unit_test': True} 
     model_cls = torch.nn.Linear
     model_config = {'in_features': nWeights, 'out_features': 1, 'bias': False}
-    fed_model = FedCommEffModel(model, model_cls, model_config, sketched_params)
+    fed_model = FedCommEffModel(model_cls, model_config, sketched_params)
+    opt = torch.optim.SGD(fed_model.parameters(), lr=lr)
     fed_opt = FedCommEffOptimizer(opt, sketched_params)
     return fed_model, fed_opt
 

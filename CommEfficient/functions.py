@@ -4,7 +4,7 @@ from csvec import CSVec
 GPUS_ALLOCATED = 1.0
 
 class FedCommEffModel:
-    def __init__(self, input_model, model_cls, model_config, params):
+    def __init__(self, model_cls, model_config, params):
         global client_states
         global client_params
         global param_server_states
@@ -15,9 +15,12 @@ class FedCommEffModel:
         cpu = "cpu"
         self.model_cls = model_cls
         self.model_config = model_config
-        self.cpu_model = input_model.to(cpu)
+        input_model = model_cls(**model_config)
+        # uncomment below line for unit_test
+        if params.get('unit_test', False):
+            list(input_model.parameters())[0].data.zero_()
         self.model = input_model.to(device)
-        param_vec = get_param_vec(self.cpu_model, cpu)
+        param_vec = get_param_vec(self.model, cpu)
         param_vec_id = ray.put(param_vec)
         cur_round = 0
 
@@ -73,9 +76,9 @@ class FedCommEffModel:
     def __getattr__(self, name):
         if name == "parameters":
             global param_server_states
-            curr_weights = ray.get(param_server_states[-1])
-            set_param_vec(self.cpu_model, curr_weights)
-            return getattr(self.cpu_model, name)
+            curr_weights = ray.get(param_server_states[-1]).to(self.params['device'])
+            set_param_vec(self.model, curr_weights)
+            return getattr(self.model, name)
 
 class FedCommEffOptimizer(torch.optim.Optimizer):
     def __init__(self, optimizer, params):
@@ -100,6 +103,11 @@ class FedCommEffLoss:
     def __init__(self, input_criterion, params):
         global criterion
         criterion = input_criterion
+
+    def __call__(self, *args):
+        global criterion
+        out = criterion(*args)
+        return out
 
 @ray.remote(num_gpus=GPUS_ALLOCATED)
 def forward(model_cls, model_config, weights, ins, targets, params):
