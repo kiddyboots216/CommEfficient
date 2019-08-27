@@ -2,7 +2,8 @@ import torch
 import nose
 from CommEfficient.fed_sketched_classes import FedSketchedModel, FedSketchedLoss, FedSketchedOptimizer, FedSketchedWorker
 from CommEfficient.fed_param_server import FedParamServer
-from CommEfficient.functions import FedCommEffModel, FedCommEffOptimizer, FedCommEffLoss
+from CommEfficient.functions import FedCommEffModel, FedCommEffOptimizer, \
+        FedCommEffCriterion, FedCommEffAccuracy
 def makeSketchers(nWeights, nWorkers, k, r, c, p2, device):
     lr = 0.005
     #model = torch.nn.Linear(nWeights, 1, bias=False).to(device)
@@ -37,7 +38,7 @@ def checkW(model, expectedWs):
 def runTest(nData, nWeights, nWorkers, k, r, c, p2,
             expectedW1s, expectedW2s, device, doSlowSketching):
 
-    fed_model, fed_opt= makeSketchers(nWeights, nWorkers, k, r, c, p2,
+    model, opt = makeSketchers(nWeights, nWorkers, k, r, c, p2,
                                        device)
 
     # setting this flag to True uses a faster sketching calculation
@@ -45,24 +46,25 @@ def runTest(nData, nWeights, nWorkers, k, r, c, p2,
     #summer._doSlowSketching = doSlowSketching
 
     X, y = makeData(nData, nWeights, device)
-    batch = [X,y]
+    minibatch = [X,y]
     idx = [i for i in range(nWorkers)]
-    batches = [batch for _ in range(nWorkers)]
+    minibatches = [minibatch for _ in range(nWorkers)]
     criterion = torch.nn.MSELoss(reduction='sum')
-    fed_criterion = FedCommEffLoss(criterion, {})
+    fed_criterion = FedCommEffCriterion(criterion, {})
+    fake_criterion = FedCommEffAccuracy(criterion, {})
+    model.train(True)
+    outs, loss, acc, grads = model(minibatches, idx)
+    opt.step(grads, idx)
     #loss = summer((y - model(X))**2)
-    fed_model.train(True)
-    grads = fed_model(batches, idx)
-    fed_opt.step(grads, idx)
 
-    yield checkW, fed_model, expectedW1s
+    yield checkW, model, expectedW1s
 
-    fed_opt.zero_grad()
-    grads = fed_model(batches, idx)
-    fed_opt.step(grads, idx)
+    opt.zero_grad()
+    outs, loss, acc, grads = model(minibatches, idx)
+    opt.step(grads, idx)
 
     if expectedW2s is not None:
-        yield checkW, fed_model, expectedW2s
+        yield checkW, model, expectedW2s
 
 """
 Learning Rate: 0.005

@@ -1,4 +1,4 @@
-from functions import FedCommEffModel, FedCommEffOptimizer, FedCommEffLoss
+from functions import FedCommEffModel, FedCommEffOptimizer, FedCommEffCriterion, FedCommEffAccuracy
 import torch
 import ray
 
@@ -6,7 +6,7 @@ if __name__ == "__main__":
     ray.init(redis_password='functional')
     D_in, D_out, H_sizes = 2, 4, [2,4]
     n_clients = 1
-    epochs, batch_size = 4, 1
+    epochs, batch_size = 1, 1
     class FCNet(torch.nn.Module):
         def __init__(self, in_size, out_size, hidden_sizes):
             super(FCNet, self).__init__()
@@ -30,7 +30,11 @@ if __name__ == "__main__":
         'p2': 1,
         'k': 1,
         'sketch_down': False,
-        'sketch': True,
+        'sketch': False,
+        'virtual_momentum': True,
+        'momentum': 0.9,
+        'weight_decay': 1.0,
+        'n_clients_per_round': 1,
         'num_cols': 1,
         'num_rows': 1,
         #'device': 'cpu',
@@ -39,21 +43,31 @@ if __name__ == "__main__":
     model_cls = FCNet
     xs = torch.randn(batch_size, D_in)
     ys = torch.randn(batch_size, D_out)
-    batch = [xs, ys]
-    batches = [batch for _ in range(n_clients)]
+    minibatch = [xs, ys]
+    minibatches = [minibatch for _ in range(n_clients)]
     idx = [i for i in range(n_clients)]
-    comm_model = FedCommEffModel(model_cls, model_config, params)
-    optimizer = torch.optim.SGD(comm_model.parameters(), lr=1)
-    comm_optimizer = FedCommEffOptimizer(optimizer, params)
+    model = FedCommEffModel(model_cls, model_config, params)
+    optimizer = torch.optim.SGD(model.parameters(), lr=1)
+    opt = FedCommEffOptimizer(optimizer, params)
     criterion = torch.nn.MSELoss()
-    comm_criterion = FedCommEffLoss(criterion, params)
-    scheduler = torch.optim.lr_scheduler.LambdaLR(comm_optimizer, 
+    comm_criterion = FedCommEffCriterion(criterion, params)
+    fake_acc = FedCommEffAccuracy(criterion, params)
+    scheduler = torch.optim.lr_scheduler.LambdaLR(opt, 
             lambda x: x)
     for _ in range(epochs):
-        comm_model.train(True)
-        grads = comm_model(batches, idx)
-        comm_optimizer.step(grads, idx)
+        model.train(True)
+        outs, loss, acc, grads = model(minibatches, idx)
+        opt.step(grads, idx)
         scheduler.step()
-        comm_model.train(False)
-        outs = comm_model(batch, idx)
-        print(ray.get(outs))
+        # TODO: Fix train acc calculation
+        batch_loss = ray.get(loss)
+        batch_acc = ray.get(acc)
+        print(batch_loss)
+        print(batch_acc)
+        model.train(False)
+        outs, loss, acc = model(minibatch, idx)
+        batch_loss = ray.get(loss)
+        batch_acc = ray.get(acc)
+        print(batch_loss)
+        print(batch_acc)
+

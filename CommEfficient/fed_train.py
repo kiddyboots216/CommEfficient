@@ -14,7 +14,8 @@ from sketched_classes import SketchedModel, SketchedLoss, SketchedWorker, \
 from fed_sketched_classes import FedSketchedModel, FedSketchedLoss, \
         FedSketchedOptimizer, FedSketchedWorker
 from fed_param_server import FedParamServer
-from functions import FedCommEffModel, FedCommEffOptimizer, FedCommEffLoss
+from functions import FedCommEffModel, FedCommEffOptimizer, \
+        FedCommEffCriterion, FedCommEffAccuracy
 from data_utils import get_data_loaders, hp_default
 DATA_PATH = 'sample_data'
 GPUS_PER_WORKER = 0.8
@@ -113,32 +114,26 @@ def run_batches_functional(model, opt, scheduler, criterion,
                 target_batch = targets[start:end]
                 minibatch = [in_batch, target_batch]
                 minibatches.append(minibatch)
-            grads = model(minibatches, idx)
+            outs, loss, acc, grads = model(minibatches, idx)
             opt.step(grads, idx)
             scheduler.step()
             # TODO: Fix train acc calculation
-            """
-            losses.append(batch_loss.mean())
-            o = torch.cat(ray.get(outs), dim=0).to(device)
-            batch_acc = accuracy(o, 
-                                 torch.cat(target_minibatches).to(device)
-                                ).float().mean().cpu().numpy()
+            batch_loss = ray.get(loss)
+            batch_acc = ray.get(acc)
+            losses.append(batch_loss)
             accs.append(batch_acc)
-            """
             if params['test']:
                 break
+
     else:
         for batch_idx, batch in enumerate(loaders):
             inputs, targets = batch["input"], batch["target"]
             minibatch = [inputs, targets]
             idx = [0]
-            outs = model(minibatch, idx)
-            outs = ray.get(outs).to(device)
-            targets = targets.to(device)
-            batch_loss = criterion(outs, targets)
-            losses.append(batch_loss.mean().cpu().detach().numpy())
-            batch_acc = accuracy(outs,
-                    targets).float().mean().cpu().numpy()
+            outs, loss, acc = model(minibatch, idx)
+            batch_loss = ray.get(loss)
+            batch_acc = ray.get(acc)
+            losses.append(batch_loss)
             accs.append(batch_acc)
             if params['test']:
                 break
@@ -212,6 +207,8 @@ if __name__ == "__main__":
     parser.add_argument("-sketch", action="store_true")
     parser.add_argument("-sketch_down", action="store_true")
     parser.add_argument("-functional", action="store_true")
+    parser.add_argument("-virtual_momentum", action="store_true")
+    parser.add_argument("-momentum_sketch", action="store_true")
     parser.add_argument("-clients", type=int, default=1)
     parser.add_argument("-participation", type=float, default=1.0)
     parser.add_argument("-device", choices=["cpu", "cuda"], default="cuda")
@@ -295,8 +292,9 @@ if __name__ == "__main__":
         opt = torch.optim.SGD(model.parameters(), lr=1)
         opt = FedCommEffOptimizer(opt, params)
         criterion = torch.nn.CrossEntropyLoss(reduction='none')
-        criterion = FedCommEffLoss(criterion, params)
-
+        criterion = FedCommEffCriterion(criterion, params)
+        accuracy = Correct()
+        accuracy = FedCommEffAccuracy(accuracy, params)
     else:
         workers = [FedSketchedWorker.remote(params
             ) for _ in range(args.clients)]
@@ -306,8 +304,8 @@ if __name__ == "__main__":
         opt = optim.SGD(model.parameters(), lr=1)
         opt = FedSketchedOptimizer(opt, workers, param_server, model)
         criterion = FedSketchedLoss(criterion, workers, param_server, model)
+        accuracy = Correct().to(args.device)
     scheduler = optim.lr_scheduler.LambdaLR(opt, lr_lambda=[lambda_step])
-    accuracy = Correct().to(args.device)
 
     print('Finished initializing in {:.2f} seconds'.format(timer()))
     train(model, opt, scheduler, criterion, accuracy, 
