@@ -64,6 +64,7 @@ class FedCommEffModel:
                 client_params.update(updated_params)
 
             # forward pass
+            import pdb; pdb.set_trace()
             outs, loss, acc, grads = list(zip(*[forward_grad.remote(
                 self.model_cls, self.model_config, 
                 get_weights(client_params, idx),

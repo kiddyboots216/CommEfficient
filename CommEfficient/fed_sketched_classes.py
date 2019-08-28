@@ -129,10 +129,10 @@ class FedSketchedLoss:
             return self._loss(inputs, targets, workers)
             target_minibatches = []
             batch_size = len(targets)
-            num_workers = len(self.workers)
+            n_clients = len(self.workers)
             for i, _ in enumerate(self.workers):
-                start = i * batch_size // num_workers
-                end = (i+1) * batch_size // num_workers
+                start = i * batch_size // n_clients
+                end = (i+1) * batch_size // n_clients
                 target_minibatches.append(targets[start:end])
             return self._loss(
                 inputs, target_minibatches, workers)
@@ -176,7 +176,7 @@ class FedSketchedLoss:
 class FedSketchedWorker(object):
     def __init__(self, args,
                 sketch_params_larger_than=0, sketch_biases=False):
-        self.num_workers = args['num_workers']
+        self.n_clients = args['n_clients']
         self.k = args['k']
         self.p2 = args['p2']
         self.num_cols = args['num_cols']
@@ -319,7 +319,7 @@ class FedSketchedWorker(object):
 
         # weight decay
         if self.weight_decay != 0:
-            gradVec.add_(self.weight_decay/self.num_workers, 
+            gradVec.add_(self.weight_decay/self.n_clients, 
                         self._getParamVec())
         self.v.add_(gradVec)
         return self.v

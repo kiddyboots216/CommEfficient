@@ -234,52 +234,59 @@ if __name__ == "__main__":
         }
 
     params = {
+        "device": args.device,
+        "test": args.test,
+        # sketching params
         "k": args.k,
         "p2": args.p2,
         "num_cols": args.cols,
         "num_rows": args.rows,
         "num_blocks": args.num_blocks,
-        "participation": args.participation, 
-        "lr": 1,
-        "num_workers": args.clients,
+        # federation params
         "n_clients": args.clients,
-        "sketch": args.sketch,
-        "sketch_down": args.sketch_down,
-        "device": args.device,
+        "participation": args.participation, 
         "n_clients_per_round": int(args.clients * args.participation),
+        # optimizer params
+        "lr": 1, #assumes scheduler accounts for this lr
         "momentum": args.momentum,
         "weight_decay": 5e-4*args.batch_size,
         "nesterov": args.nesterov,
         "dampening": 0,
-        "batch_size": args.batch_size,
         "epochs": args.epochs,
-        "DATA_LEN": 50000,
+        "batch_size": args.batch_size,
+        "DATA_LEN": 50000, # specific to CIFAR10
+        # algorithmic params
+        "sketch": args.sketch,
+        "sketch_down": args.sketch_down,
         "functional": args.functional,
-        "test": args.test,
+        "virtual_momentum": args.virtual_momentum,
+        "momentum_sketch": args.momentum_sketch,
     }
+    """
     if args.fed:
         train_loader, central_train_loader, val_loader, stats = get_data_loaders(params, verbose=True)
 
     else:
-        print('Downloading datasets')
-        DATA_DIR = "sample_data"
-        dataset = cifar10(DATA_DIR)
-        train_transforms = [Crop(32, 32), FlipLR(), Cutout(8, 8)]
-        print('Starting timer')
-        print('Preprocessing training data')
-        train_set = list(zip(
-                transpose(normalise(pad(dataset['train']['data'], 4))),
-                dataset['train']['labels']))
-        print('Finished in {:.2f} seconds'.format(timer()))
-        print('Preprocessing test data')
-        test_set = list(zip(transpose(normalise(dataset['test']['data'])),
-                            dataset['test']['labels']))
-        print('Finished in {:.2f} seconds'.format(timer()))
-        train_loader = Batches(Transform(train_set, train_transforms),
-                                args.batch_size, shuffle=True,
-                                set_random_choices=True, drop_last=True)
-        val_loader = Batches(test_set, args.batch_size, shuffle=False,
-                               drop_last=False)
+    """
+    print('Downloading datasets')
+    DATA_DIR = "sample_data"
+    dataset = cifar10(DATA_DIR)
+    train_transforms = [Crop(32, 32), FlipLR(), Cutout(8, 8)]
+    print('Starting timer')
+    print('Preprocessing training data')
+    train_set = list(zip(
+            transpose(normalise(pad(dataset['train']['data'], 4))),
+            dataset['train']['labels']))
+    print('Finished in {:.2f} seconds'.format(timer()))
+    print('Preprocessing test data')
+    test_set = list(zip(transpose(normalise(dataset['test']['data'])),
+                        dataset['test']['labels']))
+    print('Finished in {:.2f} seconds'.format(timer()))
+    train_loader = Batches(Transform(train_set, train_transforms),
+                            args.batch_size, shuffle=True,
+                            set_random_choices=True, drop_last=True)
+    val_loader = Batches(test_set, args.batch_size, shuffle=False,
+                           drop_last=False)
 
     print('Initializing everything')
     ray.init(redis_password="sketched_sgd")
