@@ -12,7 +12,8 @@ def makeSketchers(nWeights, nWorkers, k, r, c, p2, device):
     sketched_params = {'k': k, 'p2': p2, 'num_cols': c,
             'num_rows': r, 'num_blocks': 1, 'momentum': 0.0, 'weight_decay': 0.0,
         'nesterov': False, 'dampening': 0, 'n_clients': nWorkers, 'lr': lr,
-        'sketch': True, 'sketch_down': False, 'device': device, 'unit_test': True} 
+        'sketch': False, 'sketch_down': False, 'device': device, 'unit_test': True, 
+        'n_clients_per_round': 1, 'virtual_momentum': True} 
     model_cls = torch.nn.Linear
     model_config = {'in_features': nWeights, 'out_features': 1, 'bias': False}
     fed_model = FedCommEffModel(model_cls, model_config, sketched_params)

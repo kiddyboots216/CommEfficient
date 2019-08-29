@@ -226,7 +226,7 @@ if __name__ == "__main__":
         args.num_rows = 1
         args.k = 10
         args.p2 = 1 
-        args.batch_size = 1
+        args.batch_size = args.clients
     else:
         model_config = {
                 'channels': {'prep': 64, 'layer1': 128, 
@@ -289,7 +289,7 @@ if __name__ == "__main__":
                            drop_last=False)
 
     print('Initializing everything')
-    ray.init(redis_password="sketched_sgd")
+    ray.init(redis_password="sketched_sgd", object_store_memory=6e10)
     lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
     lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
     criterion = torch.nn.CrossEntropyLoss(reduction='none')
