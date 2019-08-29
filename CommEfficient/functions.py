@@ -6,7 +6,8 @@ GPUS_ALLOCATED = 1.0
 class FedCommEffModel:
     def __init__(self, model_cls, model_config, params):
         global client_params
-        global param_server_states
+        #global param_server_states
+        global cur_state
         global cur_round
         global grad_size
         n_clients = params['n_clients']
@@ -21,7 +22,8 @@ class FedCommEffModel:
         param_vec = get_param_vec(self.model, cpu)
 
         param_vec_id = ray.put(param_vec)
-        param_server_states = [param_vec_id]
+        #param_server_states = [param_vec_id]
+        cur_state = param_vec_id
         grad_size = 0
         for p in self.model.parameters():
             if p.requires_grad:
@@ -43,7 +45,8 @@ class FedCommEffModel:
         self.training = training
 
     def __call__(self, batches, indices):
-        global param_server_states
+        #global param_server_states
+        global cur_state
         global cur_round
         global criterion
         global accuracy
@@ -58,8 +61,9 @@ class FedCommEffModel:
                 updated_params = {
                         idx: (cur_round, client_update.remote(
                             get_weights(client_params, idx), 
-                            param_server_states[get_last_round(client_params, idx)] 
-                            ,param_server_states[-1],
+                            #param_server_states[get_last_round(client_params, idx)] 
+                            #,param_server_states[-1],
+                            ,cur_state
                             self.params))
                         for idx in indices}
                 client_params.update(updated_params)
@@ -78,15 +82,18 @@ class FedCommEffModel:
             batches = [batches[0].cpu(), batches[1].cpu()]
             outs, loss, acc, _ = forward_grad.remote(
                     self.model_cls, self.model_config, 
-                    param_server_states[-1], 
+                    cur_state
+                    #param_server_states[-1], 
                     *batches, criterion, accuracy, self.params, self.training)
             return outs, loss, acc
 
     def __getattr__(self, name):
         if name == "parameters":
-            global param_server_states
-            curr_weights = ray.get(param_server_states[-1]).to(
-                    self.params['device'])
+            #global param_server_states
+            global cur_state
+            curr_weights = ray.get(cur_state).to(self.params['device'])
+            #curr_weights = ray.get(param_server_states[-1]).to(
+            #        self.params['device'])
             set_param_vec(self.model, curr_weights)
             return getattr(self.model, name)
 
@@ -110,15 +117,19 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
 
     def step(self, grads, indices):
         global client_params
-        global param_server_states
+        #global param_server_states
+        global cur_state
         global cur_round
         #global sketch
         # select momentum
         lr = get_lr(self.param_groups)
         new_state, new_momentum = server_update.remote(indices, 
-                param_server_states[-1], self.params, lr, 
+                #param_server_states[-1], 
+                cur_state,
+                self.params, lr, 
                 grads, self.server_momentums)
-        param_server_states.append(new_state)
+        #param_server_states.append(new_state)
+        cur_state = new_state
         self.server_momentums = new_momentum
         cur_round += 1
 
@@ -206,16 +217,17 @@ def server_update(indices, curr_weights,
     return updated_weights.cpu(), momentums
 
 @ray.remote(num_gpus=GPUS_ALLOCATED,)
-def client_update(client_weights, stale_weights,
+def client_update(client_weights, 
+        #stale_weights,
         curr_weights, params):
     device = params['device']
     #stale_weights = ray.get(param_server_states[round_last_updated]).to(device)
     #curr_weights = ray.get(param_server_states[-1]).to(device)
-    stale_weights = stale_weights.to(device)
+    #stale_weights = stale_weights.to(device)
     curr_weights = curr_weights.to(device)
     client_weights = client_weights.to(device)
     sketch_down = params['sketch_down']
-    diff_vec = curr_weights - stale_weights
+    diff_vec = curr_weights - client_weights
 
     if sketch_down:
         p2 = params['p2']
