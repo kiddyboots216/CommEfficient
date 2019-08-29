@@ -21,8 +21,8 @@ DATA_PATH = 'sample_data'
 GPUS_PER_WORKER = 0.8
 GPUS_PER_PARAM_SERVER = 0.8
 
-def train(model, opt, scheduler, criterion, 
-    accuracy, train_loader, val_loader, 
+def train(model, opt, scheduler, criterion,
+    accuracy, train_loader, val_loader,
     params, loggers=(), timer=None):
     timer = timer or Timer()
     batch_size = params["batch_size"]
@@ -31,7 +31,7 @@ def train(model, opt, scheduler, criterion,
     if params["functional"]:
         run = run_batches_functional
     for epoch in range(args.epochs):
-        train_loss, train_acc = run(model, opt, scheduler, 
+        train_loss, train_acc = run(model, opt, scheduler,
             criterion, accuracy, train_loader, True, params)
         train_time = timer()
         val_loss, val_acc = run(model, None, scheduler,
@@ -46,13 +46,13 @@ def train(model, opt, scheduler, criterion,
             'test_acc': val_acc,
             'total_time': timer.total_time,
         }
-        summary = union({'epoch': epoch+1, 
+        summary = union({'epoch': epoch+1,
             'lr': scheduler.get_lr()[0]*batch_size}, epoch_stats)
         for logger in loggers:
             logger.append(summary)
     return summary
 
-def run_batches(model, opt, scheduler, criterion, 
+def run_batches(model, opt, scheduler, criterion,
     accuracy, loader, training, fed_params):
     model.train(training)
     losses = []
@@ -86,7 +86,7 @@ def run_batches(model, opt, scheduler, criterion,
         accs.append(batch_acc)
     return np.mean(losses), np.mean(accs)
 
-def run_batches_functional(model, opt, scheduler, criterion, 
+def run_batches_functional(model, opt, scheduler, criterion,
     accuracy, loaders, training, params):
     participation = params['participation']
     DATA_LEN = params['DATA_LEN']
@@ -104,7 +104,7 @@ def run_batches_functional(model, opt, scheduler, criterion,
         for batch_idx, batch in enumerate(loaders):
             inputs = batch["input"]
             targets = batch["target"]
-            idx = np.random.choice(clients, 
+            idx = np.random.choice(clients,
                 n_clients_to_select, replace=False)
             minibatches = []
             for i, _ in enumerate(idx):
@@ -139,8 +139,8 @@ def run_batches_functional(model, opt, scheduler, criterion,
                 break
     return np.mean(losses), np.mean(accs)
 
-def run_batches_fed(model, opt, scheduler, criterion, 
-    accuracy, loaders, training, fed_params):
+def run_batches_fed(model, opt, scheduler, criterion,
+    accuracy, loader, training, fed_params):
     participation = fed_params['participation']
     DATA_LEN = fed_params['DATA_LEN']
     n_clients = fed_params['n_clients']
@@ -153,18 +153,20 @@ def run_batches_fed(model, opt, scheduler, criterion,
     accs = []
 
     if training:
-        for idx, batch in enumerate(loaders):
-            inputs = batch["input"]
+        for idx, batch in enumerate(loader):
+            data = batch["input"]
             targets = batch["target"]
-            idx = np.random.choice(clients, 
+
+            idx = np.random.choice(clients,
                 n_clients_to_select, replace=False)
             input_minibatches = []
             target_minibatches = []
             for i, _ in enumerate(idx):
                 start = i * batch_size // n_clients_to_select
                 end = (i+1) * batch_size // n_clients_to_select
-                input_minibatches.append(inputs[start:end])
+                input_minibatches.append(data[start:end])
                 target_minibatches.append(targets[start:end])
+
             outs = model(input_minibatches, idx)
             batch_loss = criterion(outs, target_minibatches, idx)
             opt.zero_grad(idx)
@@ -173,19 +175,21 @@ def run_batches_fed(model, opt, scheduler, criterion,
             scheduler.step()
             losses.append(batch_loss.mean())
             # TODO: Fix train acc calculation
-            o = torch.cat(ray.get(outs), dim=0)
-            batch_acc = accuracy(o, 
+            #o = torch.cat(ray.get(outs), dim=0)
+            o = torch.cat(outs, dim=0)
+
+            batch_acc = accuracy(o,
                                  torch.cat(target_minibatches).to(args.device)
                                 ).float().mean().cpu().numpy()
             accs.append(batch_acc)
 
     else:
-        for idx, batch in enumerate(loaders):
-            inputs, targets = batch["input"], batch["target"]
-            outs = model(inputs)
+        for idx, batch in enumerate(loader):
+            data, targets = batch["input"], batch["target"]
+            outs = model(data)
             batch_loss = criterion(outs, targets)
             losses.append(batch_loss.mean())
-            batch_acc = accuracy(ray.get(outs), 
+            batch_acc = accuracy(ray.get(outs).to(args.device),
                     targets.to(args.device)).float().mean().cpu().numpy()
             accs.append(batch_acc)
     return np.mean(losses), np.mean(accs)
@@ -219,17 +223,17 @@ if __name__ == "__main__":
     model_config = {}
     if args.test:
         model_config = {
-            'channels': {'prep': 1, 'layer1': 1, 
+            'channels': {'prep': 1, 'layer1': 1,
             'layer2': 1, 'layer3': 1},
         }
         args.num_cols = 10
         args.num_rows = 1
         args.k = 10
-        args.p2 = 1 
+        args.p2 = 1
         args.batch_size = 1
     else:
         model_config = {
-                'channels': {'prep': 64, 'layer1': 128, 
+                'channels': {'prep': 64, 'layer1': 128,
                 'layer2': 256, 'layer3': 512},
         }
 
@@ -244,7 +248,7 @@ if __name__ == "__main__":
         "num_blocks": args.num_blocks,
         # federation params
         "n_clients": args.clients,
-        "participation": args.participation, 
+        "participation": args.participation,
         "n_clients_per_round": int(args.clients * args.participation),
         # optimizer params
         "lr": 1, #assumes scheduler accounts for this lr
@@ -306,8 +310,8 @@ if __name__ == "__main__":
         workers = [FedSketchedWorker.remote(params
             ) for _ in range(args.clients)]
         param_server = FedParamServer.remote(params)
-        model = FedSketchedModel(model_cls, model_config, workers, 
-                param_server, params)
+        model = FedSketchedModel(model_cls, model_config, workers,
+                param_server, params, args.device)
         opt = optim.SGD(model.parameters(), lr=1)
         opt = FedSketchedOptimizer(opt, workers, param_server, model)
         criterion = FedSketchedLoss(criterion, workers, param_server, model)
@@ -315,6 +319,6 @@ if __name__ == "__main__":
     scheduler = optim.lr_scheduler.LambdaLR(opt, lr_lambda=[lambda_step])
 
     print('Finished initializing in {:.2f} seconds'.format(timer()))
-    train(model, opt, scheduler, criterion, accuracy, 
+    train(model, opt, scheduler, criterion, accuracy,
         train_loader, val_loader, params,
         loggers=(TableLogger(), TSVLogger()), timer=timer)

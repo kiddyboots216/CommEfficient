@@ -24,7 +24,7 @@ class FedParamServer:
         self.rounds = []
         self.sketch_params_larger_than = sketch_params_larger_than
         self.sketch_biases = sketch_biases
-        self.device = torch.device("cuda" if 
+        self.device = torch.device("cuda" if
             torch.cuda.is_available() else "cpu")
         print(f"Creating param server")
 
@@ -118,7 +118,7 @@ class FedParamServer:
         stale_weights = self.rounds[round_id].to(self.device)
         curr_weights = self.rounds[-1].to(self.device)
         diff_vec = torch.sub(curr_weights, stale_weights)
-        return diff_vec 
+        return diff_vec.detach().cpu()
 
     def _virtual_momentum(self, gradVec):
         return gradVec
@@ -177,13 +177,13 @@ class FedParamServer:
 
     def param_group_setitem(self, index, name, value):
         self.param_groups[index].__setitem__(name, value)
-        
+
     def param_group_setattr(self, index, name, value):
         self.param_groups[index].setattr(name, value)
-        
+
     def param_group_setdefault(self, index, name, value):
         self.param_groups[index].setdefault(name, value)
-        
+
     def _topk(self, vec, k):
         """ Return the largest k elements (by magnitude) of vec"""
         ret = torch.zeros_like(vec)
@@ -201,11 +201,11 @@ class FedParamServer:
         nesterov = p['nesterov']
         weight_decay = p['weight_decay']
         momentum = p['momentum']
-        opt = optim.SGD(self.model.parameters(), 
-            lr=lr, 
-            dampening=dampening, 
-            nesterov=nesterov, 
-            weight_decay=weight_decay, 
+        opt = optim.SGD(self.model.parameters(),
+            lr=lr,
+            dampening=dampening,
+            nesterov=nesterov,
+            weight_decay=weight_decay,
             momentum=momentum)
         self.param_groups = opt.param_groups
         self.grad_size = 0
@@ -221,19 +221,19 @@ class FedParamServer:
                         sketch_mask.append(torch.zeros(size))
                     weight_vec.append(p.data.view(-1).float())
                     self.grad_size += size
-        weight_vec = torch.cat(weight_vec).float().to(self.device) 
+        weight_vec = torch.cat(weight_vec).float().to(self.device)
         self.rounds.append(weight_vec.cpu())
         self.sketch_mask = torch.cat(sketch_mask).bool().to(self.device)
-        self.sketch = CSVec(d=self.sketch_mask.sum().item(), 
+        self.sketch = CSVec(d=self.sketch_mask.sum().item(),
             c=self.num_cols,
             r=self.num_rows,
             device=self.device,
             numBlocks=self.num_blocks)
         #print(f"Total dimension is {self.grad_size} using k {self.k} and p2 {self.p2} with sketch_mask.sum(): {self.sketch_mask.sum()}")
-        self.u = torch.zeros(self.grad_size, device=self.device) 
+        self.u = torch.zeros(self.grad_size, device=self.device)
         self.v = torch.zeros(self.grad_size, device=self.device)
 
-    def set_model(self, model_cls, model_config, 
+    def set_model(self, model_cls, model_config,
             sketch_biases, sketch_params_larger_than):
         rand_state = torch.random.get_rng_state()
         torch.random.manual_seed(42)
@@ -249,10 +249,8 @@ class FedParamServer:
                     m.bias.do_sketching = sketch_biases
         self.model = model
 
-    def model_call(self, *args):
-        args = [arg.to(self.device) for arg in args]
-        #import pdb; pdb.set_trace()
-        self.outs = self.model(*args)
+    def model_call(self, batch):
+        self.outs = self.model(batch.to(self.device))
         return self.outs.cpu()
 
     def set_loss(self, criterion):
@@ -263,7 +261,7 @@ class FedParamServer:
         self.loss = self.criterion(self.outs, args[1])
         return self.loss.detach().cpu().numpy()
         loss = self.criterion(
-            args[0].to(self.device), 
+            args[0].to(self.device),
             args[1].to(self.device))
         return loss
 

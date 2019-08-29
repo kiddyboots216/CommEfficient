@@ -8,15 +8,16 @@ from CommEfficient.sketched_classes import SketchedLossResult, SketchedParamGrou
 
 class FedSketchedModel:
     def __init__(self, model_cls, model_config, workers,
-                param_server, fed_params, 
+                param_server, fed_params, device,
                 sketch_biases=False, sketch_params_larger_than=0):
         self.cur_round = 0
         self.rounds = []
         self.workers = np.array(workers)
         self.param_server = param_server
+        self.device = device
         to_set_model = np.append(self.workers, self.param_server)
         self.model = model_cls(**model_config)
-        ray.wait([worker.set_model.remote(model_cls, model_config, 
+        ray.wait([worker.set_model.remote(model_cls, model_config,
             sketch_biases, sketch_params_larger_than
             ) for worker in to_set_model])
         self.workers_last_updated = {i:0 for i in range(len(workers))}
@@ -24,24 +25,28 @@ class FedSketchedModel:
     def train(self, training):
         self.training = training
 
-    def __call__(self, *args): 
+    def __call__(self, worker_batches, worker_ids=None):
         if self.training:
-            batches, idx = args
-            workers = self.workers[idx]
+            if worker_ids is None:
+                raise ValueError("must supply worker_ids if training")
+            participating_workers = self.workers[worker_ids]
             if self.cur_round > 0:
-                ray.wait([w.sketched_update.remote(
-                    self.param_server.get_latest.remote(
-                       self.workers_last_updated[idx[w_id]] 
-                    ), self.cur_round) for w_id, w in enumerate(workers)])
-                for w_id, worker in enumerate(workers):
-                    self.workers_last_updated[idx[w_id]] = self.cur_round
-            return [worker.model_call.remote(
-                batches[worker_id]) for worker_id, worker in enumerate(workers)]
+                futures = [w.sketched_update.remote(
+                            self.param_server.get_latest.remote(
+                               self.workers_last_updated[worker_ids[w_id]]
+                            ), self.cur_round)
+                           for w_id, w in enumerate(participating_workers)]
+                ray.wait(futures)
+                for w_id in range(len(participating_workers)):
+                    self.workers_last_updated[worker_ids[w_id]] = self.cur_round
+            outs = [w.model_call.remote(worker_batches[w_id].detach().cpu())
+                    for w_id, w in enumerate(participating_workers)]
+            return [o.to(self.device) for o in ray.get(outs)]
         else:
-            return self.param_server.model_call.remote(*args)
+            return self.param_server.model_call.remote(worker_batches.detach().cpu())
 
     def __setattr__(self, name, value):
-        if name in ["model", "workers", "participation", 
+        if name in ["model", "workers", "participation", "device",
                     "rounds", "param_server", "training",
                     "cur_round", "workers_last_updated"]:
             self.__dict__[name] = value
@@ -73,7 +78,7 @@ class FedSketchedOptimizer(optim.Optimizer):
         train_workers, update_workers = self._get_workers()
         self._step(train_workers, train_workers)
 
-    def step(self, idx): 
+    def step(self, idx):
         workers = self.workers[idx]
         self.cur_round += 1
         self.model.cur_round = self.cur_round
@@ -91,12 +96,12 @@ class FedSketchedOptimizer(optim.Optimizer):
         ray.wait(
         [param_server.server_update.remote(*grads)]
         )
-    
+
     def _get_workers(self):
         cur_round = self.model.rounds[-1]
         participating_clients = self.workers[cur_round]
         return participating_clients, [self.param_server]
-    
+
     def __getattr__(self, name):
         if name=="param_groups":
             param_groups = ray.get(
@@ -113,20 +118,21 @@ class FedSketchedLoss:
         to_set_loss = np.append(self.workers, self.param_server)
         ray.wait([worker.set_loss.remote(criterion) for worker in to_set_loss])
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, outs, target_minibatches, worker_indices=None, **kwargs):
         if len(kwargs) > 0:
             print("Kwargs aren't supported by Ray")
             return
-        if len(args) == 2:
-            outs = self.param_server.loss_call.remote(*args)
+        if worker_indices is None:
+            # doing validation now
+            outs = self.param_server.loss_call.remote(outs, target_minibatches.detach().cpu())
             results = ray.get(outs)
             #results = outs
             result = SketchedLossResult(results, [])
             return result
         else:
-            inputs, targets, idx = args
-            workers = self.workers[idx]
-            return self._loss(inputs, targets, workers)
+            workers = self.workers[worker_indices]
+            return self._loss(outs, target_minibatches, workers)
+            """
             target_minibatches = []
             batch_size = len(targets)
             n_clients = len(self.workers)
@@ -134,8 +140,8 @@ class FedSketchedLoss:
                 start = i * batch_size // n_clients
                 end = (i+1) * batch_size // n_clients
                 target_minibatches.append(targets[start:end])
-            return self._loss(
-                inputs, target_minibatches, workers)
+            return self._loss(outs, target_minibatches, workers)
+            """
 
         if len(args) == 2:
             results = ray.get(self.param_server.loss_call.remote(*args))
@@ -146,17 +152,17 @@ class FedSketchedLoss:
             participating_clients = self.workers
             results = torch.stack(
                  ray.get(
-                     [worker.loss_call.remote() for worker_id, 
+                     [worker.loss_call.remote() for worker_id,
                      worker in enumerate(participating_clients)]
-                 ), 
+                 ),
                  dim=0)
             result = SketchedLossResult(results, participating_clients)
             return result
 
     def _loss(self, input_minibatches, target_minibatches, workers):
         assert torch.cuda.is_available(), "Why isn't CUDA available?"
-        outs = [worker.loss_call.remote(input_minibatches[w_id],
-                                        target_minibatches[w_id])
+        outs = [worker.loss_call.remote(#input_minibatches[w_id],
+                                        target_minibatches[w_id].detach().cpu())
                 for w_id, worker in enumerate(workers)]
         #results = torch.stack(ray.get(outs), dim=0)
         results = np.stack(ray.get(outs), axis=0)
@@ -170,7 +176,7 @@ class FedSketchedLoss:
         participating_clients = self.workers[cur_round]
         return participating_clients
 
-# note: when using FedSketchedWorker, 
+# note: when using FedSketchedWorker,
 # many more GPUs than are actually available must be specified
 @ray.remote(num_gpus=0.5)
 class FedSketchedWorker(object):
@@ -189,12 +195,13 @@ class FedSketchedWorker(object):
         self.nesterov = args['nesterov']
         self.sketch_params_larger_than = sketch_params_larger_than
         self.sketch_biases = sketch_biases
-        self.device = torch.device("cuda" if 
+        self.device = torch.device("cuda" if
             torch.cuda.is_available() else "cpu")
         self.cur_round = 0
+        self.outs = None
         print(f"Creating worker")
 
-    def set_model(self, model_cls, model_config, 
+    def set_model(self, model_cls, model_config,
             sketch_biases, sketch_params_larger_than):
         rand_state = torch.random.get_rng_state()
         torch.random.manual_seed(42)
@@ -216,29 +223,13 @@ class FedSketchedWorker(object):
     def get_last_round(self):
         return self.cur_round
 
-    def model_call(self, *args):
-        #self.cuda()
-        args = [arg.to(self.device) for arg in args]
-        self.outs = self.model(*args)
+    def model_call(self, input_data):
+        self.outs = self.model(input_data.to(self.device))
         return self.outs.detach().cpu()
-        args = args[0]
-        args = [arg.to(self.device) for arg in args]
-        self.outs = self.model(args[0])
-        #print(f"Length of self.outs is {len(self.outs)}")
-        self.targets = args[1]
-        return self.outs
 
-    def loss_call(self, *args):
-        args = [arg.to(self.device) for arg in args]
-        self.loss = self.criterion(self.outs, args[1])
-        #import pdb; pdb.set_trace()
-        #return 'hello'
+    def loss_call(self, targets):
+        self.loss = self.criterion(self.outs, targets.to(self.device))
         return self.loss.detach().cpu().numpy()
-        #import pdb; pdb.set_trace()
-        self.loss = self.criterion(self.outs, self.targets)
-        del self.targets
-        #self.cpu()
-        return self.loss
 
     def model_getattr(self, name):
         return getattr(self.model, name)
@@ -251,13 +242,13 @@ class FedSketchedWorker(object):
 
     def param_group_setitem(self, index, name, value):
         self.param_groups[index].__setitem__(name, value)
-        
+
     def param_group_setattr(self, index, name, value):
         self.param_groups[index].setattr(name, value)
-        
+
     def param_group_setdefault(self, index, name, value):
         self.param_groups[index].setdefault(name, value)
-        
+
     def get_param_groups(self):
         try:
             return [{'initial_lr': group['initial_lr'],
@@ -282,11 +273,11 @@ class FedSketchedWorker(object):
         nesterov = p['nesterov']
         weight_decay = p['weight_decay']
         momentum = p['momentum']
-        opt = optim.SGD(self.model.parameters(), 
-            lr=lr, 
-            dampening=dampening, 
-            nesterov=nesterov, 
-            weight_decay=weight_decay, 
+        opt = optim.SGD(self.model.parameters(),
+            lr=lr,
+            dampening=dampening,
+            nesterov=nesterov,
+            weight_decay=weight_decay,
             momentum=momentum)
         self.param_groups = opt.param_groups
         self.grad_size = 0
@@ -301,7 +292,7 @@ class FedSketchedWorker(object):
                         sketch_mask.append(torch.zeros(size))
                     self.grad_size += size
         self.sketch_mask = torch.cat(sketch_mask).bool().to(self.device)
-        self.sketch = CSVec(d=self.sketch_mask.sum().item(), 
+        self.sketch = CSVec(d=self.sketch_mask.sum().item(),
             c=self.num_cols,
             r=self.num_rows,
             device=self.device,
@@ -314,15 +305,15 @@ class FedSketchedWorker(object):
         self._zero_grad()
 
     def compute_grad(self):
-        # compute grad 
+        # compute grad
         gradVec = self._getGradVec().to(self.device)
 
         # weight decay
         if self.weight_decay != 0:
-            gradVec.add_(self.weight_decay/self.n_clients, 
+            gradVec.add_(self.weight_decay/self.n_clients,
                         self._getParamVec())
         self.v.add_(gradVec)
-        return self.v
+        return self.v.detach().cpu()
         if self.nesterov:
             self.u.add_(gradVec).mul_(self.momentum)
             self.v.add_(self.u).add_(gradVec)
@@ -430,7 +421,7 @@ class FedSketchedWorker(object):
                     grad = p.grad.data.view(-1)
                     lrVec.append(torch.ones_like(grad) * lr)
         return torch.cat(lrVec)
-    
+
     def _getGradShapes(self):
         """Return the shapes and sizes of the weight matrices"""
         with torch.no_grad():
@@ -461,7 +452,7 @@ class FedSketchedWorker(object):
             # concat into a single vector
             gradVec = torch.cat(gradVec).to(self.device)
         return gradVec
-    
+
     def _getParamVec(self):
         """Returns the current model weights as a vector"""
         d = []
