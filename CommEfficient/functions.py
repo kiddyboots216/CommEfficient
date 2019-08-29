@@ -205,7 +205,7 @@ def server_update(indices, curr_weights,
     momentums = [u.cpu() for u in momentums]
     return updated_weights.cpu(), momentums
 
-@ray.remote(num_gpus=GPUS_ALLOCATED)
+@ray.remote(num_gpus=GPUS_ALLOCATED,)
 def client_update(client_weights, stale_weights,
         curr_weights, params):
     device = params['device']
@@ -223,7 +223,7 @@ def client_update(client_weights, stale_weights,
         global grad_size
         sketch = CSVec(d=grad_size, c=params['num_cols'],
             r=params['num_rows'], device=device,
-            numBlocks=1)
+            numBlocks=20)
         sketch.zero()
         sketch.accumulateVec(diff_vec)
         if p2 > 0:

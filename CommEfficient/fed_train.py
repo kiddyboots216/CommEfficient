@@ -289,7 +289,7 @@ if __name__ == "__main__":
                            drop_last=False)
 
     print('Initializing everything')
-    ray.init(redis_password="sketched_sgd", object_store_memory=6e10)
+    ray.init(redis_password="sketched_sgd", object_store_memory=2e10)
     lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
     lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
     criterion = torch.nn.CrossEntropyLoss(reduction='none')
