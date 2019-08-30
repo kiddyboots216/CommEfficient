@@ -50,6 +50,7 @@ def train(model, opt, scheduler, criterion,
             'lr': scheduler.get_lr()[0]*batch_size}, epoch_stats)
         for logger in loggers:
             logger.append(summary)
+        ray.timeline(filename="/tmp/timeline.json")
     return summary
 
 def run_batches(model, opt, scheduler, criterion, 
@@ -101,11 +102,15 @@ def run_batches_functional(model, opt, scheduler, criterion,
     accs = []
 
     if training:
+        start = 0
         for batch_idx, batch in enumerate(loaders):
             inputs = batch["input"]
             targets = batch["target"]
-            idx = np.random.choice(clients, 
-                n_clients_to_select, replace=False)
+            #idx = np.random.choice(clients, 
+            #    n_clients_to_select, replace=False)
+            start = start % n_clients
+            end = start + n_clients_to_select
+            idx = np.arange(start, end)
             minibatches = []
             for i, _ in enumerate(idx):
                 start = i * batch_size // n_clients_to_select
@@ -117,11 +122,11 @@ def run_batches_functional(model, opt, scheduler, criterion,
             outs, loss, acc, grads = model(minibatches, idx)
             opt.step(grads, idx)
             scheduler.step()
-            # TODO: Fix train acc calculation
             batch_loss = ray.get(loss)
             batch_acc = ray.get(acc)
             losses.append(batch_loss)
             accs.append(batch_acc)
+            start = end
             if params['test']:
                 break
 
@@ -289,7 +294,10 @@ if __name__ == "__main__":
                            drop_last=False)
 
     print('Initializing everything')
-    ray.init(redis_password="sketched_sgd", object_store_memory=2e10)
+    ray.init(
+            redis_password="sketched_sgd", 
+            object_store_memory=int(2e10),
+            )
     lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
     lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
     criterion = torch.nn.CrossEntropyLoss(reduction='none')

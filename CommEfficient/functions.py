@@ -1,6 +1,7 @@
 import ray
 import torch
 from csvec import CSVec
+import copy
 GPUS_ALLOCATED = 1.0
 
 class FedCommEffModel:
@@ -20,25 +21,16 @@ class FedCommEffModel:
             list(input_model.parameters())[0].data.zero_()
         self.model = input_model.to(device)
         param_vec = get_param_vec(self.model, cpu)
-
         param_vec_id = ray.put(param_vec)
         #param_server_states = [param_vec_id]
-        cur_state = param_vec_id
+        cur_state = param_vec
         grad_size = 0
         for p in self.model.parameters():
             if p.requires_grad:
                 grad_size += torch.numel(p)
-        """
-        momentum_vec_id = None
-        if params['client_momentum']:
-            momentum_vec = torch.zeros(grad_size, device=device)
-            momentum_vec_id = ray.put(momentum_vec)
-        """
         cur_round = 0
-        client_params = \
-                {i:
-                        (cur_round, param_vec_id)
-                        for i in range(n_clients)}
+        client_params = {i: (cur_round, param_vec_id)
+                         for i in range(n_clients)}
         self.params = params
 
     def train(self, training):
@@ -55,43 +47,59 @@ class FedCommEffModel:
             batches = [(x.cpu(), y.cpu()) for x,y in batches]
             # update client state dicts
             # update rounds last updated
-
+            outs, loss, acc, grads, weights = list(zip(
+                *[update_forward_grad.remote(
+                    get_weights(client_params, idx), 
+                    cur_state, 
+                    self.model_cls, 
+                    self.model_config, 
+                    *batches[i], 
+                    criterion, 
+                    accuracy, 
+                    self.params, 
+                    self.training) for i, idx in enumerate(indices)]))
+            outs, loss, acc, grads, weights = list(outs), list(loss), list(acc), list(grads), list(weights)
+            curr_weights = ray.get(weights)
+            for i, idx in enumerate(indices):
+                del client_params[idx]
+                client_params[idx] = (cur_round, curr_weights[i])
+            return outs, loss, acc, grads
+            """
             if cur_round > 0:
                 # update selected clients from param server
-                updated_params = {
-                        idx: (cur_round, client_update.remote(
-                            get_weights(client_params, idx), 
-                            #param_server_states[get_last_round(client_params, idx)] 
-                            #,param_server_states[-1],
-                            ,cur_state
-                            self.params))
-                        for idx in indices}
-                client_params.update(updated_params)
+                obj_ids = [client_update.remote(get_weights(client_params, idx),
+                                                cur_state, 
+                                                self.params) 
+                           for idx in indices]
+                objs = ray.get(obj_ids)
+                for i, idx in enumerate(indices):
+                    del client_params[idx]
+                    client_params[idx] = (cur_round, objs[i])
 
             # forward pass
-           # import pdb; pdb.set_trace()
             outs, loss, acc, grads = list(zip(*[forward_grad.remote(
                 self.model_cls, self.model_config, 
                 get_weights(client_params, idx),
                 *batches[i], criterion, accuracy, self.params, self.training)
                 for i, idx in enumerate(indices)]))
             return list(outs), list(loss), list(acc), list(grads)
+            """
 
         else:
             # param server does validation
             batches = [batches[0].cpu(), batches[1].cpu()]
-            outs, loss, acc, _ = forward_grad.remote(
+            outs, loss, acc = forward.remote(
                     self.model_cls, self.model_config, 
-                    cur_state
-                    #param_server_states[-1], 
-                    *batches, criterion, accuracy, self.params, self.training)
+                    cur_state,
+                    *batches, criterion, accuracy, self.params)
             return outs, loss, acc
 
     def __getattr__(self, name):
         if name == "parameters":
             #global param_server_states
             global cur_state
-            curr_weights = ray.get(cur_state).to(self.params['device'])
+            #curr_weights = ray.get(cur_state).to(self.params['device'])
+            curr_weights = cur_state.to(self.params['device'])
             #curr_weights = ray.get(param_server_states[-1]).to(
             #        self.params['device'])
             set_param_vec(self.model, curr_weights)
@@ -105,14 +113,17 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         self.server_momentum = None
         device = params['device']
         server_momentum = None
+        self.sketch = CSVec(d=grad_size, c=params['num_cols'],
+                r=params['num_rows'], device=device,
+                numBlocks=params['num_blocks'])
         if params.get('virtual_momentum', False):
             server_momentum = torch.zeros(grad_size)
         if params.get('momentum_sketch', False):
-            server_momentum = CSVec(d=grad_size, c=params['num_cols'],
-                r=params['num_rows'], device=device,
-                numBlocks=params['num_blocks'])
-            self.server_momentum = server_momentum_sketch
-        self.server_momentums = [server_momentum for _ in range(
+            server_momentum = self.sketch
+            #server_momentum = CSVec(d=grad_size, c=params['num_cols'],
+            #    r=params['num_rows'], device=device,
+            #    numBlocks=params['num_blocks'])
+        self.server_momentums = [copy.deepcopy(server_momentum) for _ in range(
             params['n_clients_per_round'])]
 
     def step(self, grads, indices):
@@ -123,13 +134,17 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         #global sketch
         # select momentum
         lr = get_lr(self.param_groups)
-        new_state, new_momentum = server_update.remote(indices, 
+        #new_state, new_momentum = server_update.remote(indices, 
+        new_state, new_momentum = server_update(indices,
                 #param_server_states[-1], 
                 cur_state,
                 self.params, lr, 
-                grads, self.server_momentums)
+                grads, self.server_momentums,
+                self.sketch)
         #param_server_states.append(new_state)
+        del cur_state
         cur_state = new_state
+        del self.server_momentums
         self.server_momentums = new_momentum
         cur_round += 1
 
@@ -152,7 +167,15 @@ class FedCommEffAccuracy:
         out = accuracy(*args)
         return out
 
-@ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=4)
+@ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=5)
+def update_forward_grad(client_weights, curr_weights, model_cls,
+        model_config, ins, targets, criterion, accuracy, params, train):
+    new_client_weights = client_update(client_weights, curr_weights, params)
+    outs, loss, acc, grads = forward_grad(model_cls, model_config,
+            new_client_weights, ins, targets, criterion, accuracy, params, train)
+    return outs, loss, acc, grads, new_client_weights.cpu()
+
+#@ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=4)
 def forward_grad(model_cls, model_config, weights, ins, targets,
         criterion, accuracy, params, train):
     device = params['device']
@@ -168,31 +191,42 @@ def forward_grad(model_cls, model_config, weights, ins, targets,
     grads = get_grad(model, weights, params, train=train)
     return outs.cpu(), loss, acc, grads
 
-@ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=2)
+@ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=3)
+def forward(model_cls, model_config, weights, ins, targets,
+        criterion, accuracy, params):
+    device = params['device']
+    model = model_cls(**model_config).to(device)
+    weights = weights.to(device)
+    set_param_vec(model, weights)
+    ins = ins.to(device)
+    targets = targets.to(device)
+    criterion = criterion.to(device)
+    accuracy = accuracy.to(device)
+    outs = model(ins)
+    loss, acc = compute_loss(outs, targets, criterion, accuracy, train=False)
+    return outs.cpu(), loss, acc
+
+#@ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=2)
 def server_update(indices, curr_weights,
-        params, lr, grads, momentums):
+        params, lr, grads, momentums, sketch):
     sketched = params['sketch']
     device = torch.device(params['device'])
     grads = [ray.get(grad).to(device) for grad in grads]
-    momentums = [u.to(device) for u in momentums]
     #momentums = [ray.get(momentum).to(device) for momentum in momentums]
     #curr_weights = ray.get(param_server_states[-1]).to(device)
+    #curr_weights = ray.get(curr_weights)
     curr_weights = curr_weights.to(device)
 
     if sketched:
         p2 = params['p2']
         k = params['k']
-        global grad_size
-        sketch = CSVec(d=grad_size, c=params['num_cols'],
-            r=params['num_rows'], device=device,
-            numBlocks=1)
         sketch.zero()
         if params.get('momentum_sketch', False):
             for g, u in zip(grads, momentums):
-                u.mul_
-            grads = [g + params['momentum'] * u for g, u in zip(grads, momentum)]
+                u *= params['momentum']
+                u += g
         for grad in grads:
-            sketch.accumulateVec(grad)
+            sketch += grad
         if p2 > 0:
             candidate_top_k = sketch.unSketch(k=p2*k)
             candidate_hh_coords = candidate_top_k.nonzero()
@@ -205,18 +239,20 @@ def server_update(indices, curr_weights,
 
     else:
         if params.get('virtual_momentum', False):
+            momentums = [u.to(device) for u in momentums]
             for g, u in zip(grads, momentums):
                 u.mul_(params['momentum'])
                 u.add_(1,g)
+            grads = momentums
             #grads = [u.mul_(params['momentum']).add_(
             #    1, g) for g, u in zip(grads, momentum)]
-        update = torch.mean(torch.stack(momentums), dim=0)
+        update = torch.mean(torch.stack(grads), dim=0)
     weight_update = update * lr
     updated_weights = curr_weights - weight_update
-    momentums = [u.cpu() for u in momentums]
-    return updated_weights.cpu(), momentums
+    grads = [u.cpu() for u in grads]
+    return updated_weights.cpu(), grads
 
-@ray.remote(num_gpus=GPUS_ALLOCATED,)
+#@ray.remote(num_gpus=GPUS_ALLOCATED,)
 def client_update(client_weights, 
         #stale_weights,
         curr_weights, params):
@@ -251,7 +287,8 @@ def client_update(client_weights,
     else:
         weight_update = diff_vec
     updated_vec = client_weights + weight_update 
-    return updated_vec.cpu()
+    return updated_vec
+    #return updated_vec.cpu()
 
 def get_weights(client_params, idx):
     return client_params[idx][1]
