@@ -30,6 +30,7 @@ if __name__ == "__main__":
         'p2': 1,
         'k': 1,
         'sketch_down': False,
+        'topk_down': False,
         'sketch': True,
         'momentum_sketch': False,
         'virtual_momentum': True,
