@@ -30,7 +30,7 @@ class FedCommEffModel:
                 grad_size += torch.numel(p)
         cur_round = 0
         error_vec = torch.zeros(grad_size)
-        #error_vec_id = ray.put(error_vec)
+        error_vec_id = ray.put(error_vec)
         #error_vec_id = identity.remote(error_vec)
         client_params = {i: [cur_round, param_vec, error_vec]
                          for i in range(n_clients)}
@@ -193,10 +193,10 @@ def server_update(indices, curr_weights,
         params, lr, grads, momentums, sketch):
     sketched = params['sketch']
     device = torch.device(params['device'])
-    try:
-        grads = [ray.get(grad).to(device) for grad in grads]
-    except:
-        grads = [grad.to(device) for grad in grads]
+    #try:
+    grads = [ray.get(grad).to(device) for grad in grads]
+   # except:
+    #grads = [grad.to(device) for grad in grads]
     #momentums = [ray.get(momentum).to(device) for momentum in momentums]
     #curr_weights = ray.get(param_server_states[-1]).to(device)
     #curr_weights = ray.get(curr_weights)

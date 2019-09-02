@@ -8,21 +8,25 @@ n_clients = 200
 n_clients_to_select = 4
 @ray.remote(num_gpus=1)
 def test(big_vec):
-    return big_vec+1
+    return big_vec + torch.randn(int(1e5))
 x = torch.randn(int(1e5))
-#x = ray.put(x)
+x = ray.put(x,
+        #weakref=True
+        )
 #x = ray.put(torch.randn(int(1e5))
        #, weakref=True
         #)
 data = [x for _ in range(n_clients)]
-start = 0
+start_idx = 0
 while True:
+    start_idx = start_idx % n_clients
+    end_idx = start_idx + n_clients_to_select
     indices = np.random.choice(n_clients, n_clients_to_select, replace=False)
-    #indices = np.arange(start % n_clients, (start + n_clients_to_select) % n_clients)
+    #indices = np.arange(start_idx, end_idx)
     new_data = [test.remote(data[idx]) for idx in indices]
     for i, idx in enumerate(indices):
         data[idx] = new_data[i]
-    start += 4
+    start_idx = end_idx
 
 
     obj_store = ray.objects()
