@@ -211,7 +211,7 @@ def server_update(indices, curr_weights,
                 u *= params['momentum']
                 u += g
         for grad in grads:
-            sketch += grad
+            sketch.accumulateVec(grad)
         if p2 > 0:
             candidate_top_k = sketch.unSketch(k=p2*k)
             candidate_hh_coords = candidate_top_k.nonzero()
@@ -262,7 +262,7 @@ def client_update(client_weights, curr_weights, params):
             r=params['num_rows'], device=device,
             numBlocks=20)
         sketch.zero()
-        sketch += diff_vec
+        sketch.accumulateVec(diff_vec)
         if p2 > 0:
             server_top_k = sketch.unSketch(k=p2*k)
             server_hh_coords = server_top_k.nonzero()

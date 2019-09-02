@@ -102,15 +102,15 @@ def run_batches_functional(model, opt, scheduler, criterion,
     accs = []
 
     if training:
-        #start = 0
+        start_idx = 0
         for batch_idx, batch in enumerate(loaders):
             inputs = batch["input"]
             targets = batch["target"]
-            idx = np.random.choice(clients, 
-                n_clients_to_select, replace=False)
-            #start = start % n_clients
-            #end = start + n_clients_to_select
-            #idx = np.arange(start, end)
+            start_idx = start_idx % n_clients
+            end_idx = start_idx + n_clients_to_select
+            #idx = np.random.choice(clients, 
+            #    n_clients_to_select, replace=False)
+            idx = np.arange(start_idx, end_idx)
             minibatches = []
             for i, _ in enumerate(idx):
                 start = i * batch_size // n_clients_to_select
@@ -126,7 +126,7 @@ def run_batches_functional(model, opt, scheduler, criterion,
             batch_acc = ray.get(acc)
             losses.append(batch_loss)
             accs.append(batch_acc)
-            #start = end
+            start_idx = end_idx
             if params['test']:
                 break
 
