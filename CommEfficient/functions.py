@@ -22,7 +22,7 @@ class FedCommEffModel:
             list(input_model.parameters())[0].data.zero_()
         self.model = input_model.to(device)
         param_vec = get_param_vec(self.model, cpu)
-        #param_vec_id = ray.put(param_vec)
+        param_vec_id = ray.put(param_vec)
         cur_state = param_vec
         grad_size = 0
         for p in self.model.parameters():
@@ -32,7 +32,8 @@ class FedCommEffModel:
         error_vec = torch.zeros(grad_size)
         error_vec_id = ray.put(error_vec)
         #error_vec_id = identity.remote(error_vec)
-        client_params = {i: [cur_round, param_vec, error_vec]
+        #client_params = {i: [cur_round, param_vec, error_vec]
+        client_params = {i: [cur_round, param_vec_id, error_vec_id]
                          for i in range(n_clients)}
         self.params = params
         self.params['grad_size'] = grad_size
@@ -50,6 +51,7 @@ class FedCommEffModel:
             batches = [(x.cpu(), y.cpu()) for x,y in batches]
             # update client state dicts
             # update rounds last updated
+            x = ray.put(accuracy)
             outs, loss, acc, grads, weights = list(zip(
                 *[update_forward_grad.remote(
                     get_weights(client_params, idx), 
@@ -59,7 +61,7 @@ class FedCommEffModel:
                     self.model_config, 
                     *batches[i], 
                     criterion, 
-                    accuracy, 
+                    x, 
                     self.params
                     ) for i, idx in enumerate(indices)]))
 
@@ -112,7 +114,7 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         # select momentum
         lr = get_lr(self.param_groups)
         #new_state, new_momentum = server_update.remote(indices, 
-        new_state, new_momentum, new_errors = server_update(
+        new_state, new_momentum, new_errors = server_update.remote(
                 indices,
                 #param_server_states[-1], 
                 cur_state,
@@ -120,6 +122,7 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
                 grads,
                 self.server_momentums, 
                 self.sketch)
+        new_errors = ray.get(new_errors)
         client_params = update_params(client_params, indices, new_errors, ERROR_IDX)        
         del cur_state
         cur_state = new_state
@@ -188,7 +191,7 @@ def forward(model_cls, model_config, weights, ins, targets,
     loss, acc = compute_loss(outs, targets, criterion, accuracy, train=False)
     return outs.cpu(), loss, acc
 
-#@ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=2)
+@ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=3)
 def server_update(indices, curr_weights,
         params, lr, grads, momentums, sketch):
     sketched = params['sketch']
@@ -238,7 +241,7 @@ def server_update(indices, curr_weights,
     for grad in grads:
         grad[weight_update.nonzero()] = 0
     updated_weights = curr_weights - weight_update
-    grads = [u.cpu() for u in grads]
+    grads = [ray.put(u.cpu()) for u in grads]
     return updated_weights.cpu(), momentums, grads
 
 #@ray.remote(num_gpus=GPUS_ALLOCATED,)
