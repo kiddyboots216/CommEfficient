@@ -51,7 +51,6 @@ class FedCommEffModel:
             batches = [(x.cpu(), y.cpu()) for x,y in batches]
             # update client state dicts
             # update rounds last updated
-            x = ray.put(accuracy)
             outs, loss, acc, grads, weights = list(zip(
                 *[update_forward_grad.remote(
                     get_weights(client_params, idx), 
@@ -61,13 +60,13 @@ class FedCommEffModel:
                     self.model_config, 
                     *batches[i], 
                     criterion, 
-                    x, 
+                    accuracy, 
                     self.params
-                    ) for i, idx in enumerate(indices)]))
+                ) for i, idx in enumerate(indices)]))
 
             outs, loss, acc, grads, weights = list(outs), list(loss), list(acc), list(grads), list(weights)
             curr_weights = ray.get(weights)
-            client_params = update_params(client_params, indices, weights, WEIGHT_IDX)
+            client_params = update_params(client_params, indices, weights, WEIGHT_IDX, cur_round)
             #client_params = update_params(client_params, indices, grads, ERROR_IDX)
             return outs, loss, acc, grads
         else:
@@ -294,10 +293,16 @@ def get_error(client_params, idx):
 def get_errors(client_params, indices):
     return [client_params[idx][2] for idx in indices]
 
-def update_params(client_params, client_indices, vecs, vec_idx):
-    for i, idx in enumerate(client_indices):
-        #del client_params[idx][vec_idx]
-        client_params[idx][vec_idx] = vecs[i]
+def update_params(client_params, client_indices, vecs, vec_idx, cur_round=None):
+    if cur_round:
+        for i, idx in enumerate(client_indices):
+            #del client_params[idx][vec_idx]
+            client_params[idx][0] = cur_round
+            client_params[idx][vec_idx] = vecs[i]
+    else:
+        for i, idx in enumerate(client_indices):
+            #del client_params[idx][vec_idx]
+            client_params[idx][vec_idx] = vecs[i]
     return client_params
 
 def get_last_round(client_params, idx):

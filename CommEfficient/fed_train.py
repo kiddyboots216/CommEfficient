@@ -298,7 +298,7 @@ if __name__ == "__main__":
     print('Initializing everything')
     ray.init(
             redis_password="sketched_sgd", 
-            object_store_memory=int(6e10),
+            object_store_memory=int(3e10),
             )
     lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
     lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
