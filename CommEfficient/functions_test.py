@@ -5,8 +5,8 @@ import ray
 if __name__ == "__main__":
     ray.init(redis_password='functional')
     D_in, D_out, H_sizes = 2, 4, [2,4]
-    n_clients = 1
-    epochs, batch_size = 1, 1
+    n_clients = 2
+    epochs, batch_size = 10, 1
     class FCNet(torch.nn.Module):
         def __init__(self, in_size, out_size, hidden_sizes):
             super(FCNet, self).__init__()
@@ -30,7 +30,7 @@ if __name__ == "__main__":
         'p2': 1,
         'k': 1,
         'sketch_down': False,
-        'topk_down': False,
+        'topk_down': True,
         'sketch': True,
         'momentum_sketch': False,
         'virtual_momentum': True,

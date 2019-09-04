@@ -2,15 +2,15 @@ import ray
 import torch
 from csvec import CSVec
 import copy
+from minimal_failure import ray_free, ray_get_and_free
 GPUS_ALLOCATED = 1.0
-WEIGHT_IDX = 1
-ERROR_IDX = 2
+WEIGHT_ID = 0
+ERROR_ID = 1
 
 class FedCommEffModel:
     def __init__(self, model_cls, model_config, params):
         global client_params
         global cur_state
-        global cur_round
         global grad_size
         n_clients = params['n_clients']
         device = params['device']
@@ -28,12 +28,10 @@ class FedCommEffModel:
         for p in self.model.parameters():
             if p.requires_grad:
                 grad_size += torch.numel(p)
-        cur_round = 0
         error_vec = torch.zeros(grad_size)
         error_vec_id = ray.put(error_vec)
         #error_vec_id = identity.remote(error_vec)
-        #client_params = {i: [cur_round, param_vec, error_vec]
-        client_params = {i: [cur_round, param_vec_id, error_vec_id]
+        client_params = {i: [param_vec_id, error_vec_id]
                          for i in range(n_clients)}
         self.params = params
         self.params['grad_size'] = grad_size
@@ -43,7 +41,6 @@ class FedCommEffModel:
 
     def __call__(self, batches, indices):
         global cur_state
-        global cur_round
         global criterion
         global accuracy
         global client_params
@@ -65,9 +62,10 @@ class FedCommEffModel:
                 ) for i, idx in enumerate(indices)]))
 
             outs, loss, acc, grads, weights = list(outs), list(loss), list(acc), list(grads), list(weights)
-            curr_weights = ray.get(weights)
-            client_params = update_params(client_params, indices, weights, WEIGHT_IDX, cur_round)
-            #client_params = update_params(client_params, indices, grads, ERROR_IDX)
+            ray.wait(weights)
+            client_params = update_params(client_params, indices, weights, WEIGHT_ID)
+            ray.wait(grads)
+            client_params = update_params(client_params, indices, grads, ERROR_ID)
             return outs, loss, acc, grads
         else:
             # param server does validation
@@ -81,6 +79,10 @@ class FedCommEffModel:
     def __getattr__(self, name):
         if name == "parameters":
             global cur_state
+            try:
+                cur_state = ray.get(cur_state)
+            except:
+                pass
             curr_weights = cur_state.to(self.params['device'])
             set_param_vec(self.model, curr_weights)
             return getattr(self.model, name)
@@ -109,7 +111,6 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
     def step(self, grads, indices):
         global client_params
         global cur_state
-        global cur_round
         # select momentum
         lr = get_lr(self.param_groups)
         #new_state, new_momentum = server_update.remote(indices, 
@@ -118,16 +119,16 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
                 #param_server_states[-1], 
                 cur_state,
                 self.params, lr, 
-                grads,
+                get_errors(client_params, indices),
                 self.server_momentums, 
                 self.sketch)
+        ray.wait([new_errors])
         new_errors = ray.get(new_errors)
-        client_params = update_params(client_params, indices, new_errors, ERROR_IDX)        
+        client_params = update_params(client_params, indices, new_errors, ERROR_ID)
         del cur_state
         cur_state = new_state
         del self.server_momentums
         self.server_momentums = new_momentum
-        cur_round += 1
 
     def zero_grad(self):
         pass
@@ -196,12 +197,14 @@ def server_update(indices, curr_weights,
     sketched = params['sketch']
     device = torch.device(params['device'])
     #try:
+    #grads = ray_get_and_free(grads)
     grads = [ray.get(grad).to(device) for grad in grads]
    # except:
     #grads = [grad.to(device) for grad in grads]
     #momentums = [ray.get(momentum).to(device) for momentum in momentums]
     #curr_weights = ray.get(param_server_states[-1]).to(device)
     #curr_weights = ray.get(curr_weights)
+    #curr_weights = ray_get_and_free(curr_weights)[0]
     curr_weights = curr_weights.to(device)
 
     if sketched:
@@ -285,28 +288,21 @@ def client_update(client_weights, curr_weights, params):
     #return updated_vec.cpu()
 
 def get_weights(client_params, idx):
-    return client_params[idx][1]
+    retval = client_params[idx][WEIGHT_ID]
+    return retval
 
 def get_error(client_params, idx):
-    return client_params[idx][2]
+    retval = client_params[idx][ERROR_ID]
+    return retval
 
 def get_errors(client_params, indices):
-    return [client_params[idx][2] for idx in indices]
+    return [client_params[idx][ERROR_ID] for idx in indices]
 
-def update_params(client_params, client_indices, vecs, vec_idx, cur_round=None):
-    if cur_round:
-        for i, idx in enumerate(client_indices):
-            #del client_params[idx][vec_idx]
-            client_params[idx][0] = cur_round
-            client_params[idx][vec_idx] = vecs[i]
-    else:
-        for i, idx in enumerate(client_indices):
-            #del client_params[idx][vec_idx]
-            client_params[idx][vec_idx] = vecs[i]
+def update_params(client_params, client_indices, vecs, vec_idx):
+    for i, idx in enumerate(client_indices):
+        ray_free(client_params[idx][vec_idx])
+        client_params[idx][vec_idx] = vecs[i]
     return client_params
-
-def get_last_round(client_params, idx):
-    return client_params[idx][0]
 
 def get_lr(optimizer_param_groups):
     if len(optimizer_param_groups) == 1:
