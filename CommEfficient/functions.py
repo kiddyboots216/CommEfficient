@@ -300,7 +300,10 @@ def get_errors(client_params, indices):
 def update_params(client_params, client_indices, vecs, vec_idx):
     for i, idx in enumerate(client_indices):
         #ray_free(client_params[idx][vec_idx])
-        client_params[idx][vec_idx] = vecs[i]
+        try:
+            client_params[idx][vec_idx] = ray.get(vecs[i])
+        except:
+            client_params[idx][vec_idx] = vecs[i]
     return client_params
 
 def get_lr(optimizer_param_groups):
