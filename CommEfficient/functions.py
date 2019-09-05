@@ -151,8 +151,8 @@ def update_forward_grad(client_weights, client_error, curr_weights, model_cls,
         model_config, ins, targets, criterion, accuracy, params):
     #client_weights = ray_get_and_free(client_weights)[0]
     #client_error = ray_get_and_free(client_error)[0]
-    #new_client_weights = client_update(client_weights, curr_weights, params)
-    new_client_weights = curr_weights
+    new_client_weights = client_update(client_weights, curr_weights, params)
+    #new_client_weights = curr_weights
     outs, loss, acc, grad = forward_grad(model_cls, model_config,
             new_client_weights, client_error, ins, targets, criterion, 
             accuracy, params)
@@ -281,7 +281,7 @@ def server_update(indices, curr_weights,
             update = torch.mean(torch.stack(grads), dim=0)
     weight_update = update * lr
     updated_weights = curr_weights - weight_update
-    print(f"{updated_weights} = {curr_weights} - {weight_update} from {grads}")
+    #print(f"{updated_weights} = {curr_weights} - {weight_update} from {grads}")
     for grad in grads:
         grad[weight_update.nonzero()] = 0
     #grads = [ray.put(u.cpu()) for u in grads]
