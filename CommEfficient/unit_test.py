@@ -13,7 +13,7 @@ def makeSketchers(nWeights, nWorkers, k, r, c, p2, device):
             'num_rows': r, 'num_blocks': 1, 'momentum': 0.0, 'weight_decay': 0.0,
         'nesterov': False, 'dampening': 0, 'n_clients': nWorkers, 'lr': lr,
         'sketch': True, 'sketch_down': False, 'device': device, 'unit_test': True, 
-        'n_clients_per_round': 1, 'virtual_momentum': True, 
+        'n_clients_per_round': nWorkers, 'virtual_momentum': False, 
         'momentum_sketch': False, 'topk_down': False} 
     model_cls = torch.nn.Linear
     model_config = {'in_features': nWeights, 'out_features': 1, 'bias': False}
@@ -48,9 +48,19 @@ def runTest(nData, nWeights, nWorkers, k, r, c, p2,
     #summer._doSlowSketching = doSlowSketching
 
     X, y = makeData(nData, nWeights, device)
-    minibatch = [X,y]
+    #minibatch = [X,y]
     idx = [i for i in range(nWorkers)]
-    minibatches = [minibatch for _ in range(nWorkers)]
+    #minibatches = [minibatch for _ in range(nWorkers)]
+    minibatches = []
+    #batch_size = int(nData/nWorkers)
+    batch_size = 4
+    for i in range(nWorkers):
+        start = i * batch_size // nWorkers
+        end = (i+1) * batch_size // nWorkers
+        in_batch = X[start:end]
+        target_batch = y[start:end]
+        minibatch = [in_batch, target_batch]
+        minibatches.append(minibatch)
     criterion = torch.nn.MSELoss(reduction='sum')
     fed_criterion = FedCommEffCriterion(criterion, {})
     fake_criterion = FedCommEffAccuracy(criterion, {})
@@ -173,7 +183,7 @@ Two Parameters:
 """
 
 testParams = [
-#    N, d, W, k, r, c,    p2, expectedW1s,     expectedW2s
+    #N, d, W, k, r, c,    p2, expectedW1s,     expectedW2s
     #(4, 1, 1, 1, 1, 1,    0,  ([0.14],),       ([0.3808],)),
     #(4, 1, 2, 1, 1, 1,    0,  ([0.14],),       ([0.3808],)),
     #(4, 2, 1, 2, 9, 1000, 0,  ([0.28, 0.34],), ([0.172, 0.204],)),
@@ -187,7 +197,7 @@ testParams = [
 
 def testAll():
     import ray
-    ray.init(num_gpus=3)
+    ray.init()
     doSlowSketching = False
     for device in ["cpu"]:
         for N, d, W, k, r, c, p2, w1s, w2s in testParams:

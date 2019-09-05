@@ -1,7 +1,27 @@
+"""
 import ray
 import torch
 import time
 from collections import Counter
+"""
+import time
+import ray
+"""
+import numpy as np
+ray.init(object_store_memory=int(250e6))
+
+@ray.remote
+def identity(vectors):
+    return [ray.put(ray.get(vec)) for vec in vectors]
+
+vectors = [ray.put(np.zeros(int(1e5), dtype=np.int32)) for _ in range(200)]
+i = 0
+while True:
+    vectors = ray.get(identity.remote(vectors))
+    i += 1
+    print(i)
+    print(ray.worker.global_worker.plasma_client.debug_string())
+"""
 FREE_DELAY_S = 10.0
 MAX_FREE_QUEUE_SIZE = 100
 _last_free_time = 0.0
@@ -60,6 +80,7 @@ def ray_get_and_free(object_ids):
         _last_free_time = now
 
     return result
+"""
 @ray.remote
 def update(vector):
     return ray_get_and_free(vector)
@@ -86,3 +107,4 @@ if __name__=="__main__":
         print(c)
         print(f"Object store size: {sum([val['DataSize'] if 'DataSize' in val else 0 for key, val in obj_store.items()])}")
         print()
+"""

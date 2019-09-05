@@ -20,7 +20,8 @@ from data_utils import get_data_loaders, hp_default
 DATA_PATH = 'sample_data'
 GPUS_PER_WORKER = 0.8
 GPUS_PER_PARAM_SERVER = 0.8
-
+global start_idx 
+start_idx = 0
 def train(model, opt, scheduler, criterion, 
     accuracy, train_loader, val_loader, 
     params, loggers=(), timer=None):
@@ -102,15 +103,17 @@ def run_batches_functional(model, opt, scheduler, criterion,
     accs = []
 
     if training:
-        start_idx = 0
+        global start_idx
         for batch_idx, batch in enumerate(loaders):
             inputs = batch["input"]
             targets = batch["target"]
             start_idx = start_idx % n_clients
             end_idx = start_idx + n_clients_to_select
-            #idx = np.random.choice(clients, 
-            #    n_clients_to_select, replace=False)
+            idx = np.random.choice(clients, 
+                n_clients_to_select, replace=False)
+            #print(f"Selecting randomly {idx}")
             idx = np.arange(start_idx, end_idx)
+            #print(f"Selecting in order {idx}")
             minibatches = []
             for i, _ in enumerate(idx):
                 start = i * batch_size // n_clients_to_select
@@ -298,7 +301,7 @@ if __name__ == "__main__":
     print('Initializing everything')
     ray.init(
             redis_password="sketched_sgd", 
-            object_store_memory=int(6e10),
+            object_store_memory=int(1e11),
             )
     lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
     lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
