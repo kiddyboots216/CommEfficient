@@ -271,11 +271,11 @@ class Net(nn.Module):
     
 class TSVLogger():
     def __init__(self):
-        self.log = ['epoch\thours\ttop1Accuracy']
+        self.log = ['epoch,hours,top1Accuracy']
     def append(self, output):
         epoch = output['epoch']
         hours = output['total_time']/3600
         acc = output['test_acc']*100
-        self.log.append('{}\t{:.8f}\t{:.2f}'.format(epoch, hours, acc))
+        self.log.append('{},{:.8f},{:.2f}'.format(epoch, hours, acc))
     def __str__(self):
         return '\n'.join(self.log)

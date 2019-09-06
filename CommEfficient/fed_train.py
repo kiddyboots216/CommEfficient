@@ -32,8 +32,12 @@ def train(model, opt, scheduler, criterion,
     if params["functional"]:
         run = run_batches_functional
     for epoch in range(args.epochs):
+
+        full_participation = False
+        if epoch < 2:
+            full_participation = False
         train_loss, train_acc = run(model, opt, scheduler, 
-            criterion, accuracy, train_loader, True, params)
+            criterion, accuracy, train_loader, True, params, full_participation)
         train_time = timer()
         val_loss, val_acc = run(model, None, scheduler,
             criterion, accuracy, val_loader, False, params)
@@ -51,7 +55,6 @@ def train(model, opt, scheduler, criterion,
             'lr': scheduler.get_lr()[0]*batch_size}, epoch_stats)
         for logger in loggers:
             logger.append(summary)
-        ray.timeline(filename="/tmp/timeline.json")
     return summary
 
 def run_batches(model, opt, scheduler, criterion, 
@@ -89,7 +92,7 @@ def run_batches(model, opt, scheduler, criterion,
     return np.mean(losses), np.mean(accs)
 
 def run_batches_functional(model, opt, scheduler, criterion, 
-    accuracy, loaders, training, params):
+    accuracy, loaders, training, params, full_participation=False):
     participation = params['participation']
     DATA_LEN = params['DATA_LEN']
     n_clients = params['n_clients']
@@ -111,8 +114,10 @@ def run_batches_functional(model, opt, scheduler, criterion,
             end_idx = start_idx + n_clients_to_select
             idx = np.random.choice(clients, 
                 n_clients_to_select, replace=False)
+            if full_participation:
+                idx = np.arange(n_clients_to_select)
             #print(f"Selecting randomly {idx}")
-            idx = np.arange(start_idx, end_idx)
+            #idx = np.arange(start_idx, end_idx)
             #print(f"Selecting in order {idx}")
             minibatches = []
             for i, _ in enumerate(idx):
@@ -330,6 +335,8 @@ if __name__ == "__main__":
     scheduler = optim.lr_scheduler.LambdaLR(opt, lr_lambda=[lambda_step])
 
     print('Finished initializing in {:.2f} seconds'.format(timer()))
+    tsv = TSVLogger()
     train(model, opt, scheduler, criterion, accuracy, 
         train_loader, val_loader, params,
-        loggers=(TableLogger(), TSVLogger()), timer=timer)
+        loggers=(TableLogger(), tsv), timer=timer)
+    print(str(tsv))

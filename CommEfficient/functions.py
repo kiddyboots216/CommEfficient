@@ -49,6 +49,7 @@ class FedCommEffModel:
             batches = [(x.cpu(), y.cpu()) for x,y in batches]
             # update client state dicts
             # update rounds last updated
+            x = ray.put(accuracy)
             outs, loss, acc, grads, weights = list(zip(
                 *[update_forward_grad.remote(
                     get_weights(client_params, idx), 
@@ -58,7 +59,7 @@ class FedCommEffModel:
                     self.model_config, 
                     *batches[i], 
                     criterion, 
-                    accuracy, 
+                    x, 
                     self.params
                 ) for i, idx in enumerate(indices)]))
 
