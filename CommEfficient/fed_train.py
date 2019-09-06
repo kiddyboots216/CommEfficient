@@ -221,6 +221,7 @@ if __name__ == "__main__":
     parser.add_argument("-clients", type=int, default=1)
     parser.add_argument("-participation", type=float, default=1.0)
     parser.add_argument("-device", choices=["cpu", "cuda"], default="cuda")
+    parser.add_argument("-object_store_memory", type=float, default=1e11)
     args = parser.parse_args()
 
     timer = Timer()
@@ -236,6 +237,7 @@ if __name__ == "__main__":
         args.k = 10
         args.p2 = 1 
         args.batch_size = args.clients
+        args.object_store_memory = 1e8
     else:
         model_config = {
                 'channels': {'prep': 64, 'layer1': 128, 
@@ -301,7 +303,7 @@ if __name__ == "__main__":
     print('Initializing everything')
     ray.init(
             redis_password="sketched_sgd", 
-            object_store_memory=int(1e11),
+            object_store_memory=int(args.object_store_memory),
             )
     lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
     lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size

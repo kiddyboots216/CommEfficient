@@ -4,6 +4,7 @@ from csvec import CSVec
 import copy
 from minimal_failure import ray_free, ray_get_and_free
 GPUS_ALLOCATED = 1.0
+CPUS_ALLOCATED = 1
 WEIGHT_ID = 0
 ERROR_ID = 1
 
@@ -146,7 +147,7 @@ class FedCommEffAccuracy:
         out = accuracy(*args)
         return out
 
-@ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=5)
+@ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=5, num_cpus=CPUS_ALLOCATED)
 def update_forward_grad(client_weights, client_error, curr_weights, model_cls,
         model_config, ins, targets, criterion, accuracy, params):
     #client_weights = ray_get_and_free(client_weights)[0]
