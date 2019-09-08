@@ -65,7 +65,6 @@ class FedCommEffModel:
 
             outs, loss, acc, grads, weights = list(outs), list(loss), list(acc), list(grads), list(weights)
             client_params = update_params(client_params, indices, weights, WEIGHT_ID)
-            #client_params = update_params(client_params, indices, grads, ERROR_ID)
             return outs, loss, acc, grads
         else:
             # param server does validation
@@ -94,40 +93,51 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         self.param_groups = optimizer.param_groups
         self.server_momentum = None
         device = params['device']
-        server_momentum = None
         self.sketch = CSVec(d=grad_size, c=params['num_cols'],
                 r=params['num_rows'], device=device,
                 numBlocks=params['num_blocks'])
-        if params.get('virtual_momentum', False):
-            server_momentum = torch.zeros(grad_size)
-        if params.get('momentum_sketch', False):
-            server_momentum = self.sketch
+        momentum_copy = None
+        n_momentums = 1
+        if params['virtual_momentum']:
+            momentum_copy = torch.zeros(grad_size)
+            n_momentums = params['n_clients_per_round']
+        elif params['local_momentum']:
+            momentum_copy = torch.zeros(grad_size)
+            n_momentums = params['n_clients']
+        elif params['momentum_sketch']:
+            momentum_copy = self.sketch
             #server_momentum = CSVec(d=grad_size, c=params['num_cols'],
             #    r=params['num_rows'], device=device,
             #    numBlocks=params['num_blocks'])
-        self.server_momentums = [copy.deepcopy(server_momentum) for _ in range(
-            params['n_clients_per_round'])]
+        self.momentums = [copy.deepcopy(momentum_copy) for _ in range(
+            n_momentums)]
 
     def step(self, grads, indices):
         global client_params
         global cur_state
-        # select momentum
         lr = get_lr(self.param_groups)
-        #new_state, new_momentum = server_update.remote(indices, 
-        new_state, new_momentum, new_errors = server_update(
+        momentums = None
+        if self.params['virtual_momentum']:
+            momentums = self.momentums
+        elif self.params['local_momentum']:
+            momentums = [self.momentums[idx] for idx in indices]
+        new_state, new_momentums, new_errors = server_update(
                 indices,
                 #param_server_states[-1], 
                 cur_state,
                 self.params, lr, 
                 grads,
-                self.server_momentums, 
+                momentums, 
                 self.sketch)
         #new_errors = ray.get(new_errors)
         client_params = update_params(client_params, indices, new_errors, ERROR_ID)
         del cur_state
         cur_state = new_state
-        del self.server_momentums
-        self.server_momentums = new_momentum
+        if self.params['virtual_momentum']:
+            self.momentums = new_momentums
+        elif self.params['local_momentum']:
+            for i, idx in enumerate(indices):
+                self.momentums[idx] = new_momentums[i]
 
     def zero_grad(self):
         pass
@@ -237,7 +247,6 @@ def forward(model_cls, model_config, weights, ins, targets,
 #@ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=3)
 def server_update(indices, curr_weights,
         params, lr, grads, momentums, sketch):
-    sketched = params['sketch']
     device = torch.device(params['device'])
     #try:
     #grads = ray_get_and_free(grads)
@@ -248,15 +257,24 @@ def server_update(indices, curr_weights,
     #curr_weights = ray.get(param_server_states[-1]).to(device)
     #curr_weights = ray.get(curr_weights)
     curr_weights = curr_weights.to(device)
+    k = params['k']
 
-    if sketched:
+    if params['sketch']:
         p2 = params['p2']
-        k = params['k']
         sketch.zero()
-        if params.get('momentum_sketch', False):
+        if params['momentum_sketch']:
             for g, u in zip(grads, momentums):
                 u *= params['momentum']
                 u += g
+        """
+        if params['local_momentum']:
+            momentums = [u.to(device) for u in momentums]
+            for g, u in zip(grads, momentums):
+                u.mul_(params['momentum'])
+                u.add_(1,g)
+            for u in momentums:
+                sketch.accumulateVec(u)
+        """
         for grad in grads:
             sketch.accumulateVec(grad)
         if p2 > 0:
@@ -264,23 +282,32 @@ def server_update(indices, curr_weights,
             candidate_hh_coords = candidate_top_k.nonzero()
             hhs = [grad[candidate_hh_coords] for grad in grads]
             candidate_top_k[candidate_hh_coords] = sum(hhs)
-            weights = _topk(candidate_top_k, k=k)
+            update = _topk(candidate_top_k, k=k)
         else:
-            weights = sketch.unSketch(k=k)
-        update = weights 
+            update = sketch.unSketch(k=k)
+        if params['virtual_momentum']:
+            u = momentums[0].to(device)
+            u.mul_(params['momentum'])
+            u.add_(1, update)
+            momentums = [u.cpu()]
 
+    elif params['true_topk']:
+        update = _topk(torch.sum(torch.stack(grads), dim=0), k=k)
+    elif params['local_topk']:
+        local_topks = [_topk(grad, k=k) for grad in grads]
+        update = _topk(torch.sum(torch.stack(local_topks), dim=0), k=k)
     else:
-        if params.get('virtual_momentum', False):
+        if params['virtual_momentum'] or params['local_momentum']:
             momentums = [u.to(device) for u in momentums]
             for g, u in zip(grads, momentums):
                 u.mul_(params['momentum'])
                 u.add_(1,g)
-            update = torch.mean(torch.stack(momentums), dim=0)
+            update = torch.sum(torch.stack(momentums), dim=0)
             #grads = [u.mul_(params['momentum']).add_(
             #    1, g) for g, u in zip(grads, momentum)]
             momentums = [u.cpu() for u in momentums]
         else:
-            update = torch.mean(torch.stack(grads), dim=0)
+            update = torch.sum(torch.stack(grads), dim=0)
     weight_update = update * lr
     updated_weights = curr_weights - weight_update
     #print(f"{updated_weights} = {curr_weights} - {weight_update} from {grads}")

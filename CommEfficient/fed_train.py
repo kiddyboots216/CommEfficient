@@ -221,8 +221,11 @@ if __name__ == "__main__":
     parser.add_argument("-sketch_down", action="store_true")
     parser.add_argument("-functional", action="store_true")
     parser.add_argument("-virtual_momentum", action="store_true")
+    parser.add_argument("-local_momentum", action="store_true")
     parser.add_argument("-momentum_sketch", action="store_true")
     parser.add_argument("-topk_down", action="store_true")
+    parser.add_argument("-true_topk", action="store_true")
+    parser.add_argument("-local_topk", action="store_true")
     parser.add_argument("-clients", type=int, default=1)
     parser.add_argument("-participation", type=float, default=1.0)
     parser.add_argument("-device", choices=["cpu", "cuda"], default="cuda")
@@ -275,8 +278,11 @@ if __name__ == "__main__":
         "sketch": args.sketch,
         "sketch_down": args.sketch_down,
         "topk_down": args.topk_down,
+        "true_topk": args.true_topk,
+        "local_topk": args.local_topk,
         "functional": args.functional,
         "virtual_momentum": args.virtual_momentum,
+        "local_momentum": args.local_momentum,
         "momentum_sketch": args.momentum_sketch,
     }
     """
