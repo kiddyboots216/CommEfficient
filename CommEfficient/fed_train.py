@@ -323,10 +323,10 @@ if __name__ == "__main__":
             object_store_memory=int(args.object_store_memory),
             )
     lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
-    lambda_step_retval = lr_schedule(step/len(train_loader))
     if args.grad_reduce == "sum":
-        lambda_step_retval = lambda_step_retval/args.batch_size
-    lambda_step = lambda step: lambda_step_retval 
+        lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
+    else:
+        lambda_step = lambda step: lr_schedule(step/len(train_loader))
     criterion = torch.nn.CrossEntropyLoss(reduction='none')
 
     if args.functional:
