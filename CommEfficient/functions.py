@@ -252,7 +252,7 @@ def server_update(indices, curr_weights,
     #grads = ray_get_and_free(grads)
     grads = [ray.get(grad).to(device) for grad in grads]
    # except:
-    grads = [grad.to(device) for grad in grads]
+    #grads = [grad.to(device) for grad in grads]
     #momentums = [ray.get(momentum).to(device) for momentum in momentums]
     #curr_weights = ray.get(param_server_states[-1]).to(device)
     #curr_weights = ray.get(curr_weights)
@@ -277,6 +277,8 @@ def server_update(indices, curr_weights,
         """
         for grad in grads:
             sketch.accumulateVec(grad)
+        if params["grad_reduce"] == "mean":
+            sketch /= len(grads)
         if p2 > 0:
             candidate_top_k = sketch.unSketch(k=p2*k)
             candidate_hh_coords = candidate_top_k.nonzero()

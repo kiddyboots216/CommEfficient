@@ -51,8 +51,12 @@ def train(model, opt, scheduler, criterion,
             'test_acc': val_acc,
             'total_time': timer.total_time,
         }
+        lr = scheduler.get_lr()[0]
+        if params["grad_reduce"] == "sum":
+            lr = lr * batch_size
         summary = union({'epoch': epoch+1, 
-            'lr': scheduler.get_lr()[0]*batch_size}, epoch_stats)
+            'lr': lr},
+            epoch_stats)
         for logger in loggers:
             logger.append(summary)
     return summary
@@ -226,6 +230,7 @@ if __name__ == "__main__":
     parser.add_argument("-topk_down", action="store_true")
     parser.add_argument("-true_topk", action="store_true")
     parser.add_argument("-local_topk", action="store_true")
+    parser.add_argument("-grad_reduce", choices=["sum", "mean", "median"], default="sum")
     parser.add_argument("-clients", type=int, default=1)
     parser.add_argument("-participation", type=float, default=1.0)
     parser.add_argument("-device", choices=["cpu", "cuda"], default="cuda")
@@ -273,6 +278,7 @@ if __name__ == "__main__":
         "dampening": 0,
         "epochs": args.epochs,
         "batch_size": args.batch_size,
+        "grad_reduce": args.grad_reduce,
         "DATA_LEN": 50000, # specific to CIFAR10
         # algorithmic params
         "sketch": args.sketch,
@@ -317,7 +323,10 @@ if __name__ == "__main__":
             object_store_memory=int(args.object_store_memory),
             )
     lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
-    lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
+    lambda_step_retval = lr_schedule(step/len(train_loader))
+    if args.grad_reduce == "sum":
+        lambda_step_retval = lambda_step_retval/args.batch_size
+    lambda_step = lambda step: lambda_step_retval 
     criterion = torch.nn.CrossEntropyLoss(reduction='none')
 
     if args.functional:
