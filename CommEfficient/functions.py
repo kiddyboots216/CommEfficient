@@ -207,6 +207,7 @@ def client_update(client_weights, curr_weights, params):
     else:
         weight_update = diff_vec
     updated_vec = client_weights + weight_update 
+    #print(f"{torch.norm(weight_update, 2)}")
     #print(f"{updated_vec} = {client_weights} + {weight_update}")
     return updated_vec
     #return updated_vec.cpu()
@@ -275,10 +276,16 @@ def server_update(indices, curr_weights,
             for u in momentums:
                 sketch.accumulateVec(u)
         """
-        for grad in grads:
-            sketch.accumulateVec(grad)
-        if params["grad_reduce"] == "mean":
-            sketch /= len(grads)
+        if params["grad_reduce"] == "median":
+            sketches = [copy.deepcopy(sketch) for _ in grads]
+            for i, grad in enumerate(grads):
+                sketches[i].accumulateVec(grad)
+            sketch = CSVec.median(sketches)
+        else:
+            for grad in grads:
+                sketch.accumulateVec(grad)
+            if params["grad_reduce"] == "mean":
+                sketch /= len(grads)
         if p2 > 0:
             candidate_top_k = sketch.unSketch(k=p2*k)
             candidate_hh_coords = candidate_top_k.nonzero()
@@ -366,7 +373,7 @@ def get_grad(model, weights, params, train):
 def compute_loss(outs, targets, criterion, accuracy, train):
     loss = criterion(outs, targets)
     if train:
-        loss.sum().backward()
+        loss.backward()
     batch_loss = loss.mean().cpu().detach().numpy()
     acc = accuracy(outs, targets).float().mean().cpu().detach().numpy()
     return batch_loss, acc

@@ -52,7 +52,8 @@ def train(model, opt, scheduler, criterion,
             'total_time': timer.total_time,
         }
         lr = scheduler.get_lr()[0]
-        if params["grad_reduce"] == "sum":
+        #if params["grad_reduce"] == "sum":
+        if True:
             lr = lr * batch_size
         summary = union({'epoch': epoch+1, 
             'lr': lr},
@@ -325,15 +326,15 @@ if __name__ == "__main__":
     lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
     if args.grad_reduce == "sum":
         lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
+        criterion = torch.nn.CrossEntropyLoss(reduction='sum')
     else:
-        lambda_step = lambda step: lr_schedule(step/len(train_loader))
-    criterion = torch.nn.CrossEntropyLoss(reduction='none')
+        lambda_step = lambda step: lr_schedule(step/len(train_loader))/(args.batch_size * params['n_clients_per_round'])
+        criterion = torch.nn.CrossEntropyLoss(reduction='sum')
 
     if args.functional:
         model = FedCommEffModel(model_cls, model_config, params)
         opt = torch.optim.SGD(model.parameters(), lr=1)
         opt = FedCommEffOptimizer(opt, params)
-        criterion = torch.nn.CrossEntropyLoss(reduction='none')
         criterion = FedCommEffCriterion(criterion, params)
         accuracy = Correct()
         accuracy = FedCommEffAccuracy(accuracy, params)
