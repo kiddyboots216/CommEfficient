@@ -226,8 +226,11 @@ def forward_grad(model_cls, model_config, weights, error, ins, targets,
     outs = model(ins)
     loss, acc = compute_loss(outs, targets, criterion, accuracy, train=True)
     grad = get_grad(model, weights, params, train=True)
-    #print(f"{error + grad} = {error} + {grad}")
-    error += grad
+    if params['error_accum'] == 'True':
+        #print(f"{error + grad} = {error} + {grad}")
+        error += grad
+    else:
+        error = grad
     return outs.cpu(), loss, acc, error
 
 @ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=3)
@@ -267,19 +270,23 @@ def server_update(indices, curr_weights,
             for g, u in zip(grads, momentums):
                 u *= params['momentum']
                 u += g
-        """
         if params['local_momentum']:
             momentums = [u.to(device) for u in momentums]
             for g, u in zip(grads, momentums):
                 u.mul_(params['momentum'])
                 u.add_(1,g)
-            for u in momentums:
-                sketch.accumulateVec(u)
-        """
         if params["grad_reduce"] == "median":
             sketches = [copy.deepcopy(sketch) for _ in grads]
+            """
             for i, grad in enumerate(grads):
                 sketches[i].accumulateVec(grad)
+            """
+            if params['local_momentum']:
+                for i, u in enumerate(momentums):
+                    sketches[i].accumulateVec(u)
+            else:
+                for i, grad in enumerate(grads):
+                    sketches[i].accumulateVec(grad)
             sketch = CSVec.median(sketches)
         else:
             for grad in grads:
@@ -289,7 +296,10 @@ def server_update(indices, curr_weights,
         if p2 > 0:
             candidate_top_k = sketch.unSketch(k=p2*k)
             candidate_hh_coords = candidate_top_k.nonzero()
-            hhs = [grad[candidate_hh_coords] for grad in grads]
+            if params['local_momentum']:
+                hhs = [grad[candidate_hh_coords] for grad in momentums]
+            else:
+                hhs = [grad[candidate_hh_coords] for grad in grads]
             candidate_top_k[candidate_hh_coords] = sum(hhs)
             update = _topk(candidate_top_k, k=k)
         else:
@@ -324,6 +334,8 @@ def server_update(indices, curr_weights,
         grad[weight_update.nonzero()] = 0
     #grads = [ray.put(u.cpu()) for u in grads]
     grads = [u.cpu() for u in grads]
+    if params['local_momentum']:
+        momentums = [u.cpu() for u in momentums]
     return updated_weights.cpu(), momentums, grads
 
 def get_weights(client_params, idx):

@@ -52,9 +52,11 @@ def train(model, opt, scheduler, criterion,
             'total_time': timer.total_time,
         }
         lr = scheduler.get_lr()[0]
-        #if params["grad_reduce"] == "sum":
-        if True:
+        if params["grad_reduce"] == "sum":
+        #if True:
             lr = lr * batch_size
+        elif params["grad_reduce"] in ["median", "mean"]:
+            lr = lr * (batch_size / params['n_clients_per_round'])
         summary = union({'epoch': epoch+1, 
             'lr': lr},
             epoch_stats)
@@ -235,6 +237,7 @@ if __name__ == "__main__":
     parser.add_argument("-clients", type=int, default=1)
     parser.add_argument("-participation", type=float, default=1.0)
     parser.add_argument("-device", choices=["cpu", "cuda"], default="cuda")
+    parser.add_argument("-error_accum", choices=['True', 'False'], default='True')
     parser.add_argument("-object_store_memory", type=float, default=1e11)
     args = parser.parse_args()
 
@@ -291,6 +294,7 @@ if __name__ == "__main__":
         "virtual_momentum": args.virtual_momentum,
         "local_momentum": args.local_momentum,
         "momentum_sketch": args.momentum_sketch,
+        "error_accum": args.error_accum,
     }
     """
     if args.fed:
@@ -328,7 +332,7 @@ if __name__ == "__main__":
         lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
         criterion = torch.nn.CrossEntropyLoss(reduction='sum')
     else:
-        lambda_step = lambda step: lr_schedule(step/len(train_loader))/(args.batch_size * params['n_clients_per_round'])
+        lambda_step = lambda step: lr_schedule(step/len(train_loader))/(args.batch_size/params['n_clients_per_round'])
         criterion = torch.nn.CrossEntropyLoss(reduction='sum')
 
     if args.functional:
