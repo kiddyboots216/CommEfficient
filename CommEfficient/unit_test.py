@@ -14,7 +14,8 @@ def makeSketchers(nWeights, nWorkers, k, r, c, p2, device):
         'nesterov': False, 'dampening': 0, 'n_clients': nWorkers, 'lr': lr,
         'sketch': True, 'sketch_down': False, 'device': device, 'unit_test': True, 
         'n_clients_per_round': nWorkers, 'virtual_momentum': False, 
-        'momentum_sketch': False, 'topk_down': False} 
+        'momentum_sketch': False, 'topk_down': False, 'local_topk': False, 'true_topk': False,
+        'local_momentum': False} 
     model_cls = torch.nn.Linear
     model_config = {'in_features': nWeights, 'out_features': 1, 'bias': False}
     fed_model = FedCommEffModel(model_cls, model_config, sketched_params)
@@ -184,13 +185,13 @@ Two Parameters:
 
 testParams = [
     #N, d, W, k, r, c,    p2, expectedW1s,     expectedW2s
-    #(4, 1, 1, 1, 1, 1,    0,  ([0.14],),       ([0.3808],)),
+    (4, 1, 1, 1, 1, 1,    0,  ([0.14],),       ([0.3808],)),
     #(4, 1, 2, 1, 1, 1,    0,  ([0.14],),       ([0.3808],)),
     #(4, 2, 1, 2, 9, 1000, 0,  ([0.28, 0.34],), ([0.172, 0.204],)),
     #(4, 2, 1, 2, 1, 1,    0,  ([0.62, 0.62],
     #                            [0.06, -0.06],
     #                            [-0.06, 0.06]), None),
-    (4, 2, 1, 2, 1, 1,    1,  ([0.28, 0.34],), ([0.172, 0.204],)),
+    #(4, 2, 1, 2, 1, 1,    1,  ([0.28, 0.34],), ([0.172, 0.204],)),
     #(4, 2, 2, 2, 9, 1000, 0,  ([0.28, 0.34],), ([0.172, 0.204],)),
     #(4, 2, 2, 1, 9, 1000, 0,  ([0, 0.34],), ([-0.3008, 0.34],))
 ]

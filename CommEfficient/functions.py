@@ -1,5 +1,6 @@
 import ray
 import torch
+import numpy as np
 from csvec import CSVec
 import copy
 from minimal_failure import ray_free, ray_get_and_free
@@ -37,7 +38,7 @@ class FedCommEffModel:
         sketch_copy = CSVec(d=grad_size, c=params['num_cols'],
             r=params['num_rows'], device=device,
             numBlocks=params['num_blocks'])
-        client_params = {i: [param_vec, sketch_copy, momentum_sketch]
+        client_params = {i: [param_vec, copy.deepcopy(sketch_copy), copy.deepcopy(sketch_copy)]
                          for i in range(n_clients)}
         self.params = params
         self.params['grad_size'] = grad_size
@@ -58,7 +59,8 @@ class FedCommEffModel:
             outs, loss, acc, grads, weights = list(zip(
                 *[update_forward_grad.remote(
                     get_weights(client_params, idx), 
-                    get_error(client_params, idx),
+                    #get_error(client_params, idx),
+                    None,
                     cur_state, 
                     self.model_cls, 
                     self.model_config, 
@@ -145,13 +147,15 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
             for i, idx in enumerate(indices):
                 self.momentums[idx] = new_momentums[i]
         """
+        errors = get_params(indices, ERROR_ID)
+        momentums = get_params(indices, MOMENTUM_ID)
         new_state, new_momentums, new_errors = server_update_sketched(
                 cur_state,
                 grads,
                 momentums,
                 errors,
                 self.params,
-                lr)
+                lr, self.sketch)
         del cur_state
         cur_state = new_state
         client_params = update_params(client_params, indices, new_momentums, MOMENTUM_ID)
@@ -263,12 +267,12 @@ def forward_grad_sketched(model_cls, model_config, weights, error, ins, targets,
     accuracy = accuracy.to(device)
     outs = model(ins)
     loss, acc = compute_loss(outs, targets, criterion, accuracy, train=True)
-    grad = get_grad(model, weights, params, train=True)
+    grad = get_grad(model, weights, params, train=True, device=device)
     sketch = CSVec(d=params['grad_size'], c=params['num_cols'],
         r=params['num_rows'], device=device,
         numBlocks=params['num_blocks'])
     sketch.accumulateVec(grad)
-    return outs.cpu(), loss, acc, sketch.table
+    return outs.cpu(), loss, acc, sketch.table.cpu()
 
 @ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=3)
 def forward(model_cls, model_config, weights, ins, targets,
@@ -285,7 +289,7 @@ def forward(model_cls, model_config, weights, ins, targets,
     loss, acc = compute_loss(outs, targets, criterion, accuracy, train=False)
     return outs.cpu(), loss, acc
 
-def server_update_sketched(curr_weights, grads, momentums, errors, params, lr):
+def server_update_sketched(curr_weights, grads, momentums, errors, params, lr, sketch):
     """
     We have W sketches for momentum and error; S(u_i), S(v_i)
     Workers send us S(g_i) and we do:
@@ -300,18 +304,36 @@ def server_update_sketched(curr_weights, grads, momentums, errors, params, lr):
     device = torch.device(params['device'])
     curr_weights = curr_weights.to(device)
     grads = [ray.get(grad).to(device) for grad in grads]
+    #print(f"{errors[0].table} = {momentum} * {momentums[0].table} + {grads[0]}")
     for grad, u, v in zip(grads, momentums, errors):
-        u *= momentum
-        u.accumulateTable(grad)
-        v += u
-    update = sum(errors).unSketch(k=k)
+        if params['momentum_sketch']:
+            u *= momentum
+            #print(f"Accumulating {grad} into {u.table}")
+            u.accumulateTable(grad)
+            #print(f"Adding {u.table} to {v.table}")
+            v += u
+        else:
+            v.accumulateTable(grad)
+    #print(f"{errors[0].table} = {momentum} * {momentums[0].table} + {grads[0]}")
+    update = np.sum(errors).unSketch(k=k)
     neg_update = -1. * update 
+    sketch.zero()
+    sketch.accumulateVec(neg_update)
+    hh_coords = sketch.table.nonzero()
+    import pdb; pdb.set_trace()
     for u, v in zip(momentums, errors):
-        u.accumulateVec(neg_update)
+        if params['momentum_sketch']:
+            u.table[hh_coords] = 0
+        v.table[hh_coords] = 0
+    """
+    for u, v in zip(momentums, errors):
+        if params['momentum_sketch']:
+            u.accumulateVec(neg_update)
         v.accumulateVec(neg_update)
+    """
     weight_update = update * lr
     updated_weights = curr_weights - weight_update
-    #print(f"{updated_weights} = {curr_weights} - {weight_update} from {grads}")
+    #print(f"{updated_weights} = {curr_weights} - {weight_update} ({update} * {lr}) from {grads}")
     return updated_weights.cpu(), momentums, errors
 
 #@ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=3)
@@ -415,6 +437,9 @@ def get_error(client_params, idx):
 def get_errors(client_params, indices):
     return [client_params[idx][ERROR_ID] for idx in indices]
 
+def get_params(indices, idx):
+    return [client_params[index][idx] for index in indices]
+
 def update_params(client_params, client_indices, vecs, vec_idx):
     for i, idx in enumerate(client_indices):
         #ray_free(client_params[idx][vec_idx])
@@ -438,13 +463,13 @@ def _topk(vec, k):
     ret[topkIndices] = vec[topkIndices]
     return ret
 
-def get_grad(model, weights, params, train):
+def get_grad(model, weights, params, train, device='cpu'):
     if train:
         grad_vec = get_grad_vec(model)
         if params['weight_decay'] != 0:
             grad_vec.add_(params['weight_decay']/params['n_clients_per_round'],
                 weights)
-        return grad_vec.cpu()
+        return grad_vec.to(device)
     else:
         return 0
 
