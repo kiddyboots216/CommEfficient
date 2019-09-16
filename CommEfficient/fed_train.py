@@ -238,7 +238,7 @@ if __name__ == "__main__":
     parser.add_argument("-participation", type=float, default=1.0)
     parser.add_argument("-device", choices=["cpu", "cuda"], default="cuda")
     parser.add_argument("-error_accum", choices=['True', 'False'], default='True')
-    parser.add_argument("-object_store_memory", type=float, default=1e11)
+    parser.add_argument("-object_store_memory", type=float, default=2e10)
     args = parser.parse_args()
 
     timer = Timer()
