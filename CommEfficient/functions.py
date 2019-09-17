@@ -31,6 +31,7 @@ class FedCommEffModel:
         for p in self.model.parameters():
             if p.requires_grad:
                 grad_size += torch.numel(p)
+        """
         error_vec = torch.zeros(grad_size)
         #error_vec_id = ray.put(error_vec)
         #client_params = {i: [param_vec_id, error_vec_id]
@@ -43,7 +44,7 @@ class FedCommEffModel:
             numBlocks=params['num_blocks'])
         client_params = {i: [param_vec, copy.deepcopy(sketch_copy), copy.deepcopy(sketch_copy)]
                          for i in range(n_clients)}
-        """
+        #"""
         self.params = params
         self.params['grad_size'] = grad_size
 
@@ -131,6 +132,7 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
             momentums = self.momentums
         elif self.params['local_momentum']:
             momentums = [self.momentums[idx] for idx in indices]
+        """
         new_state, new_momentums, new_errors = server_update(
                 indices,
                 #param_server_states[-1], 
@@ -162,7 +164,7 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         cur_state = new_state
         client_params = update_params(client_params, indices, new_momentums, MOMENTUM_ID)
         client_params = update_params(client_params, indices, new_errors, ERROR_ID)
-        """
+        #"""
 
     def zero_grad(self):
         pass
@@ -190,7 +192,7 @@ def update_forward_grad(client_weights, client_error, curr_weights, model_cls,
     #client_error = ray_get_and_free(client_error)[0]
     new_client_weights = client_update(client_weights, curr_weights, params)
     #new_client_weights = curr_weights
-    """
+    #"""
     outs, loss, acc, grad = forward_grad_sketched(model_cls, model_config,
             new_client_weights, client_error, ins, targets, criterion, 
             accuracy, params)
@@ -198,6 +200,7 @@ def update_forward_grad(client_weights, client_error, curr_weights, model_cls,
     outs, loss, acc, grad = forward_grad(model_cls, model_config,
             new_client_weights, client_error, ins, targets, criterion, 
             accuracy, params)
+    """
     return outs, loss, acc, grad, new_client_weights.cpu()
 
 def client_update(client_weights, curr_weights, params):
@@ -326,11 +329,11 @@ def server_update_sketched(curr_weights, grads, momentums, errors, params, lr, s
     sketch.zero()
     sketch.accumulateVec(neg_update)
     hh_coords = sketch.table.nonzero()
-    import pdb; pdb.set_trace()
+    hh_0, hh_1 = hh_coords[:, 0], hh_coords[:, 1]
     for u, v in zip(momentums, errors):
         if params['momentum_sketch']:
-            u.table[hh_coords] = 0
-        v.table[hh_coords] = 0
+            u.table[hh_0, hh_1] = 0
+        v.table[hh_0, hh_1] = 0
     """
     for u, v in zip(momentums, errors):
         if params['momentum_sketch']:
