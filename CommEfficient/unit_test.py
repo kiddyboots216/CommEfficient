@@ -12,7 +12,10 @@ def makeSketchers(nWeights, nWorkers, k, r, c, p2, device):
     sketched_params = {'k': k, 'p2': p2, 'num_cols': c,
             'num_rows': r, 'num_blocks': 1, 'momentum': 0.0, 'weight_decay': 0.0,
         'nesterov': False, 'dampening': 0, 'n_clients': nWorkers, 'lr': lr,
-        'sketch': True, 'sketch_down': False, 'device': device, 'unit_test': True} 
+        'sketch': True, 'sketch_down': False, 'device': device, 'unit_test': True, 
+        'n_clients_per_round': nWorkers, 'virtual_momentum': False, 
+        'momentum_sketch': False, 'topk_down': False, 'local_topk': False, 'true_topk': False,
+        'local_momentum': False} 
     model_cls = torch.nn.Linear
     model_config = {'in_features': nWeights, 'out_features': 1, 'bias': False}
     fed_model = FedCommEffModel(model_cls, model_config, sketched_params)
@@ -46,9 +49,19 @@ def runTest(nData, nWeights, nWorkers, k, r, c, p2,
     #summer._doSlowSketching = doSlowSketching
 
     X, y = makeData(nData, nWeights, device)
-    minibatch = [X,y]
+    #minibatch = [X,y]
     idx = [i for i in range(nWorkers)]
-    minibatches = [minibatch for _ in range(nWorkers)]
+    #minibatches = [minibatch for _ in range(nWorkers)]
+    minibatches = []
+    #batch_size = int(nData/nWorkers)
+    batch_size = 4
+    for i in range(nWorkers):
+        start = i * batch_size // nWorkers
+        end = (i+1) * batch_size // nWorkers
+        in_batch = X[start:end]
+        target_batch = y[start:end]
+        minibatch = [in_batch, target_batch]
+        minibatches.append(minibatch)
     criterion = torch.nn.MSELoss(reduction='sum')
     fed_criterion = FedCommEffCriterion(criterion, {})
     fake_criterion = FedCommEffAccuracy(criterion, {})
@@ -171,21 +184,21 @@ Two Parameters:
 """
 
 testParams = [
-#    N, d, W, k, r, c,    p2, expectedW1s,     expectedW2s
-    #(4, 1, 1, 1, 1, 1,    0,  ([0.14],),       ([0.3808],)),
+    #N, d, W, k, r, c,    p2, expectedW1s,     expectedW2s
+    (4, 1, 1, 1, 1, 1,    0,  ([0.14],),       ([0.3808],)),
     #(4, 1, 2, 1, 1, 1,    0,  ([0.14],),       ([0.3808],)),
     #(4, 2, 1, 2, 9, 1000, 0,  ([0.28, 0.34],), ([0.172, 0.204],)),
     #(4, 2, 1, 2, 1, 1,    0,  ([0.62, 0.62],
     #                            [0.06, -0.06],
     #                            [-0.06, 0.06]), None),
-    (4, 2, 1, 2, 1, 1,    1,  ([0.28, 0.34],), ([0.172, 0.204],)),
+    #(4, 2, 1, 2, 1, 1,    1,  ([0.28, 0.34],), ([0.172, 0.204],)),
     #(4, 2, 2, 2, 9, 1000, 0,  ([0.28, 0.34],), ([0.172, 0.204],)),
     #(4, 2, 2, 1, 9, 1000, 0,  ([0, 0.34],), ([-0.3008, 0.34],))
 ]
 
 def testAll():
     import ray
-    ray.init(num_gpus=3)
+    ray.init()
     doSlowSketching = False
     for device in ["cpu"]:
         for N, d, W, k, r, c, p2, w1s, w2s in testParams:

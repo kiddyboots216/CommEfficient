@@ -20,9 +20,10 @@ from data_utils import get_data_loaders, hp_default
 DATA_PATH = 'sample_data'
 GPUS_PER_WORKER = 0.8
 GPUS_PER_PARAM_SERVER = 0.8
-
-def train(model, opt, scheduler, criterion,
-    accuracy, train_loader, val_loader,
+global start_idx 
+start_idx = 0
+def train(model, opt, scheduler, criterion, 
+    accuracy, train_loader, val_loader, 
     params, loggers=(), timer=None):
     timer = timer or Timer()
     batch_size = params["batch_size"]
@@ -31,8 +32,11 @@ def train(model, opt, scheduler, criterion,
     if params["functional"]:
         run = run_batches_functional
     for epoch in range(args.epochs):
-        train_loss, train_acc = run(model, opt, scheduler,
-            criterion, accuracy, train_loader, True, params)
+        full_participation = False
+        if epoch < 2:
+            full_participation = False
+        train_loss, train_acc = run(model, opt, scheduler, 
+            criterion, accuracy, train_loader, True, params, full_participation)
         train_time = timer()
         val_loss, val_acc = run(model, None, scheduler,
             criterion, accuracy, val_loader, False, params)
@@ -46,8 +50,15 @@ def train(model, opt, scheduler, criterion,
             'test_acc': val_acc,
             'total_time': timer.total_time,
         }
-        summary = union({'epoch': epoch+1,
-            'lr': scheduler.get_lr()[0]*batch_size}, epoch_stats)
+        lr = scheduler.get_lr()[0]
+        if params["grad_reduce"] == "sum":
+        #if True:
+            lr = lr * batch_size
+        elif params["grad_reduce"] in ["median", "mean"]:
+            lr = lr * (batch_size / params['n_clients_per_round'])
+        summary = union({'epoch': epoch+1, 
+            'lr': lr},
+            epoch_stats)
         for logger in loggers:
             logger.append(summary)
     return summary
@@ -86,8 +97,8 @@ def run_batches(model, opt, scheduler, criterion,
         accs.append(batch_acc)
     return np.mean(losses), np.mean(accs)
 
-def run_batches_functional(model, opt, scheduler, criterion,
-    accuracy, loaders, training, params):
+def run_batches_functional(model, opt, scheduler, criterion, 
+    accuracy, loaders, training, params, full_participation=False):
     participation = params['participation']
     DATA_LEN = params['DATA_LEN']
     n_clients = params['n_clients']
@@ -101,11 +112,19 @@ def run_batches_functional(model, opt, scheduler, criterion,
     accs = []
 
     if training:
+        global start_idx
         for batch_idx, batch in enumerate(loaders):
             inputs = batch["input"]
             targets = batch["target"]
-            idx = np.random.choice(clients,
+            start_idx = start_idx % n_clients
+            end_idx = start_idx + n_clients_to_select
+            idx = np.random.choice(clients, 
                 n_clients_to_select, replace=False)
+            if full_participation:
+                idx = np.arange(n_clients_to_select)
+            #print(f"Selecting randomly {idx}")
+            #idx = np.arange(start_idx, end_idx)
+            #print(f"Selecting in order {idx}")
             minibatches = []
             for i, _ in enumerate(idx):
                 start = i * batch_size // n_clients_to_select
@@ -115,13 +134,13 @@ def run_batches_functional(model, opt, scheduler, criterion,
                 minibatch = [in_batch, target_batch]
                 minibatches.append(minibatch)
             outs, loss, acc, grads = model(minibatches, idx)
-            opt.step(grads, idx)
             scheduler.step()
-            # TODO: Fix train acc calculation
+            opt.step(grads, idx)
             batch_loss = ray.get(loss)
             batch_acc = ray.get(acc)
             losses.append(batch_loss)
             accs.append(batch_acc)
+            start_idx = end_idx
             if params['test']:
                 break
 
@@ -201,7 +220,7 @@ if __name__ == "__main__":
     parser.add_argument("-p2", type=int, default=4)
     parser.add_argument("-cols", type=int, default=500000)
     parser.add_argument("-rows", type=int, default=5)
-    parser.add_argument("-num_blocks", type=int, default=1)
+    parser.add_argument("-num_blocks", type=int, default=20)
     parser.add_argument("-batch_size", type=int, default=512)
     parser.add_argument("-nesterov", action="store_true")
     parser.add_argument("-momentum", type=float, default=0.9)
@@ -212,10 +231,17 @@ if __name__ == "__main__":
     parser.add_argument("-sketch_down", action="store_true")
     parser.add_argument("-functional", action="store_true")
     parser.add_argument("-virtual_momentum", action="store_true")
+    parser.add_argument("-local_momentum", action="store_true")
     parser.add_argument("-momentum_sketch", action="store_true")
+    parser.add_argument("-topk_down", action="store_true")
+    parser.add_argument("-true_topk", action="store_true")
+    parser.add_argument("-local_topk", action="store_true")
+    parser.add_argument("-grad_reduce", choices=["sum", "mean", "median"], default="sum")
     parser.add_argument("-clients", type=int, default=1)
     parser.add_argument("-participation", type=float, default=1.0)
     parser.add_argument("-device", choices=["cpu", "cuda"], default="cuda")
+    parser.add_argument("-error_accum", choices=['True', 'False'], default='True')
+    parser.add_argument("-object_store_memory", type=float, default=2e10)
     args = parser.parse_args()
 
     timer = Timer()
@@ -229,8 +255,9 @@ if __name__ == "__main__":
         args.num_cols = 10
         args.num_rows = 1
         args.k = 10
-        args.p2 = 1
-        args.batch_size = 1
+        args.p2 = 1 
+        args.batch_size = args.clients
+        args.object_store_memory = 1e8
     else:
         model_config = {
                 'channels': {'prep': 64, 'layer1': 128,
@@ -258,13 +285,19 @@ if __name__ == "__main__":
         "dampening": 0,
         "epochs": args.epochs,
         "batch_size": args.batch_size,
+        "grad_reduce": args.grad_reduce,
         "DATA_LEN": 50000, # specific to CIFAR10
         # algorithmic params
         "sketch": args.sketch,
         "sketch_down": args.sketch_down,
+        "topk_down": args.topk_down,
+        "true_topk": args.true_topk,
+        "local_topk": args.local_topk,
         "functional": args.functional,
         "virtual_momentum": args.virtual_momentum,
+        "local_momentum": args.local_momentum,
         "momentum_sketch": args.momentum_sketch,
+        "error_accum": args.error_accum,
     }
     """
     if args.fed:
@@ -293,16 +326,22 @@ if __name__ == "__main__":
                            drop_last=False)
 
     print('Initializing everything')
-    ray.init(redis_password="sketched_sgd")
+    ray.init(
+            redis_password="sketched_sgd", 
+            object_store_memory=int(args.object_store_memory),
+            )
     lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
-    lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
-    criterion = torch.nn.CrossEntropyLoss(reduction='none')
+    if args.grad_reduce == "sum":
+        lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
+        criterion = torch.nn.CrossEntropyLoss(reduction='sum')
+    else:
+        lambda_step = lambda step: lr_schedule(step/len(train_loader))/(args.batch_size/params['n_clients_per_round'])
+        criterion = torch.nn.CrossEntropyLoss(reduction='sum')
 
     if args.functional:
         model = FedCommEffModel(model_cls, model_config, params)
         opt = torch.optim.SGD(model.parameters(), lr=1)
         opt = FedCommEffOptimizer(opt, params)
-        criterion = torch.nn.CrossEntropyLoss(reduction='none')
         criterion = FedCommEffCriterion(criterion, params)
         accuracy = Correct()
         accuracy = FedCommEffAccuracy(accuracy, params)
@@ -319,6 +358,8 @@ if __name__ == "__main__":
     scheduler = optim.lr_scheduler.LambdaLR(opt, lr_lambda=[lambda_step])
 
     print('Finished initializing in {:.2f} seconds'.format(timer()))
-    train(model, opt, scheduler, criterion, accuracy,
+    tsv = TSVLogger()
+    train(model, opt, scheduler, criterion, accuracy, 
         train_loader, val_loader, params,
-        loggers=(TableLogger(), TSVLogger()), timer=timer)
+        loggers=(TableLogger(), tsv), timer=timer)
+    print(str(tsv))
