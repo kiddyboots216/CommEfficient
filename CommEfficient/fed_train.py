@@ -230,6 +230,10 @@ if __name__ == "__main__":
     parser.add_argument("-virtual_momentum", action="store_true")
     parser.add_argument("-local_momentum", action="store_true")
     parser.add_argument("-momentum_sketch", action="store_true")
+    parser.add_argument("-virtual_momentum_sketch", action="store_true")
+    parser.add_argument("-local_momentum_sketch", action="store_true")
+    parser.add_argument("-virtual_error_sketch", action="store_true")
+    parser.add_argument("-local_error_sketch", action="store_true")
     parser.add_argument("-topk_down", action="store_true")
     parser.add_argument("-true_topk", action="store_true")
     parser.add_argument("-local_topk", action="store_true")
@@ -295,6 +299,10 @@ if __name__ == "__main__":
         "local_momentum": args.local_momentum,
         "momentum_sketch": args.momentum_sketch,
         "error_accum": True if args.error_accum == 'True' else False,
+        "do_virtual_momentum_sketch": args.virtual_momentum_sketch,
+        "do_local_momentum_sketch": args.local_momentum_sketch,
+        "do_virtual_error_sketch": args.virtual_error_sketch,
+        "do_local_error_sketch": args.local_error_sketch,
     }
     """
     if args.fed:
