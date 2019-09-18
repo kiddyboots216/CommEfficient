@@ -196,10 +196,14 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
                 self.params,
                 lr, self.sketch)
         cur_state = new_state
-        self.momentums = new_momentums
+        if self.params['do_virtual_momentum_sketch']:
+            self.momentums = new_momentums
+        elif self.params['do_local_momentum_sketch']:
+            for i, idx in enumerate(indices):
+                self.momentums[idx] = new_momentums[i]
         if self.params['do_virtual_error_sketch']:
             self.errors = new_errors
-        if self.params['do_local_error_sketch']:
+        elif self.params['do_local_error_sketch']:
             for i, idx in enumerate(indices):
                 self.errors[idx] = new_errors[i]
         #self.errors = new_errors
