@@ -61,7 +61,6 @@ class FedCommEffModel:
         if self.training:
             batches = [(x.cpu(), y.cpu()) for x,y in batches]
             # update client state dicts
-            # update rounds last updated
             x = ray.put(accuracy)
             """
             outs, loss, acc, grads, weights = list(zip(
@@ -77,7 +76,6 @@ class FedCommEffModel:
                     self.params
                 ) for i, idx in enumerate(indices)]))
             """
-
             outs, loss, acc, grads, weights = list(zip(
                 *[update_forward_grad_sketched.remote(
                     get_weights(client_params, idx), 
@@ -117,12 +115,10 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         global grad_size
         self.params = params
         self.param_groups = optimizer.param_groups
-        self.server_momentum = None
         device = params['device']
         self.sketch = CSVec(d=grad_size, c=params['num_cols'],
                 r=params['num_rows'], device=device,
                 numBlocks=params['num_blocks'])
-        """
         momentum_copy = None
         n_momentums = 1
         if params['virtual_momentum']:
@@ -132,32 +128,26 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
             momentum_copy = torch.zeros(grad_size)
             n_momentums = params['n_clients']
         if params['momentum_sketch']:
-            #n_momentums = params['n_clients_per_round']
-            #momentum_copy = self.sketch
-            self.momentums = [copy.deepcopy(self.sketch) for _ in range(
-                params['n_clients_per_round'])]
+            n_momentums = params['n_clients_per_round']
+            momentum_copy = self.sketch
         if params['error_accum']:
-            self.errors = [copy.deepcopy(self.sketch) for _ in range(
-                params['n_clients_per_round'])]
-        """
-        self.momentums = [copy.deepcopy(self.sketch) for _ in range(
-                params['n_clients_per_round'])]
-        self.errors = [copy.deepcopy(self.sketch) for _ in range(
-                params['n_clients_per_round'])]
+            error_copy = self.sketch
+        self.momentums = [copy.deepcopy(momentum_copy) for _ in range(
+            params['n_clients_per_round'])]
+        self.errors = [copy.deepcopy(error_copy) for _ in range(
+            params['n_clients_per_round'])]
 
     def step(self, grads, indices):
         global client_params
         global cur_state
         lr = get_lr(self.param_groups)
-        """
-        momentums = None
+        momentums = [None for _ in indices]
         if self.params['virtual_momentum']:
             momentums = self.momentums
         elif self.params['local_momentum']:
             momentums = [self.momentums[idx] for idx in indices]
         elif self.params['momentum_sketch']:
             momentums = self.momentums
-        """
         """
         new_state, new_momentums, new_errors = server_update(
                 indices,
@@ -178,8 +168,6 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
                 self.momentums[idx] = new_momentums[i]
         """
         #errors = get_params(indices, ERROR_ID)
-        #momentums = get_params(indices, MOMENTUM_ID)
-        momentums = self.momentums
         errors = self.errors
         new_state, new_momentums, new_errors = server_update_sketched(
                 cur_state,
@@ -340,15 +328,9 @@ def server_update_sketched(curr_weights, grad_sketches, momentum_sketches, error
     k = params['k']
     device = torch.device(params['device'])
     curr_weights = curr_weights.to(device)
-    #grads = [ray.get(grad).to(device) for grad in grads]
-    grad_sketches = ray.get(grad_sketches)
-    grad_sketches = [grad.to(device) for grad in grad_sketches]
+    grad_sketches = [ray.get(grad).to(device) for grad in grad_sketches]
     #print(f"{errors[0].table} = {momentum} * {momentums[0].table} + {grads[0]}")
     for grad_sketch, momentum_sketch, error_sketch in zip(grad_sketches, momentum_sketches, error_sketches):
-        momentum_sketch *= momentum
-        momentum_sketch.accumulateTable(grad_sketch)
-        error_sketch += momentum_sketch
-        """
         if params['momentum_sketch']:
             momentum_sketch *= momentum
             #print(f"Accumulating {grad} into {u.table}")
@@ -360,29 +342,21 @@ def server_update_sketched(curr_weights, grad_sketches, momentum_sketches, error
             error_sketch.accumulateTable(grad_sketch)
         else:
             sketch.accumulateTable(grad_sketch)
-        """
     #print(f"{errors[0].table} = {momentum} * {momentums[0].table} + {grads[0]}")
-    """
     if params['error_accum']:
         update = np.sum(error_sketches).unSketch(k=k)
     else:
         update = sketch.unSketch(k=k)
-    """
-    update = np.sum(error_sketches).unSketch(k=k)
     neg_update = -1. * update 
     sketch.zero()
     sketch.accumulateVec(neg_update)
     hh_coords = sketch.table.nonzero()
     hh_0, hh_1 = hh_coords[:, 0], hh_coords[:, 1]
     for momentum_sketch, error_sketch in zip(momentum_sketches, error_sketches):
-        momentum_sketch.table[hh_0, hh_1] = 0
-        error_sketch.table[hh_0, hh_1] = 0
-        """
         if params['momentum_sketch']:
             momentum_sketch.table[hh_0, hh_1] = 0
         if params['error_accum']:
             error_sketch.table[hh_0, hh_1] = 0
-        """
     weight_update = update * lr
     updated_weights = curr_weights - weight_update
     #print(f"{updated_weights} = {curr_weights} - {weight_update} ({update} * {lr}) from {grads}")

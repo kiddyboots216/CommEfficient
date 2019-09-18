@@ -124,7 +124,7 @@ def run_batches_functional(model, opt, scheduler, criterion,
             if full_participation:
                 idx = np.arange(n_clients_to_select)
             #print(f"Selecting randomly {idx}")
-            #idx = np.arange(start_idx, end_idx)
+            idx = np.arange(start_idx, end_idx)
             #print(f"Selecting in order {idx}")
             minibatches = []
             for i, _ in enumerate(idx):
