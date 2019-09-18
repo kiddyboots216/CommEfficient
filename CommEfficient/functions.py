@@ -146,6 +146,8 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
             momentums = self.momentums
         elif self.params['local_momentum']:
             momentums = [self.momentums[idx] for idx in indices]
+        elif self.params['momentum_sketch']:
+            momentums = self.momentums
         """
         new_state, new_momentums, new_errors = server_update(
                 indices,
@@ -166,7 +168,7 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
                 self.momentums[idx] = new_momentums[i]
         """
         errors = get_params(indices, ERROR_ID)
-        momentums = get_params(indices, MOMENTUM_ID)
+        #momentums = get_params(indices, MOMENTUM_ID)
         new_state, new_momentums, new_errors = server_update_sketched(
                 cur_state,
                 grads,
@@ -175,7 +177,7 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
                 self.params,
                 lr, self.sketch)
         cur_state = new_state
-        client_params = update_params(client_params, indices, new_momentums, MOMENTUM_ID)
+        #client_params = update_params(client_params, indices, new_momentums, MOMENTUM_ID)
         client_params = update_params(client_params, indices, new_errors, ERROR_ID)
         #"""
 
