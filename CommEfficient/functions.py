@@ -353,27 +353,22 @@ def server_update_sketched(curr_weights, grad_sketches, momentum_sketches, error
     device = torch.device(params['device'])
     curr_weights = curr_weights.to(device)
     grad_sketches = [ray.get(grad).to(device) for grad in grad_sketches]
-    #print(f"{errors[0].table} = {momentum} * {momentums[0].table} + {grads[0]}")
     for grad_sketch, momentum_sketch, error_sketch in zip(grad_sketches, momentum_sketches, error_sketches):
         if params['do_virtual_momentum_sketch'] or params['do_local_momentum_sketch']:
             momentum_sketch *= momentum
-            #print(f"Accumulating {grad} into {u.table}")
             momentum_sketch.accumulateTable(grad_sketch)
-            #print(f"Adding {u.table} to {v.table}")
             if params['do_virtual_error_sketch'] or params['do_local_error_sketch']:
                 error_sketch += momentum_sketch
         elif params['do_virtual_error_sketch'] or params['do_local_error_sketch']:
             error_sketch.accumulateTable(grad_sketch)
         else:
             sketch.accumulateTable(grad_sketch)
-    #print(f"{errors[0].table} = {momentum} * {momentums[0].table} + {grads[0]}")
     if params['do_virtual_error_sketch'] or params['do_local_error_sketch']:
         update = np.sum(error_sketches).unSketch(k=k)
     else:
         update = sketch.unSketch(k=k)
-    neg_update = -1. * update 
     sketch.zero()
-    sketch.accumulateVec(neg_update)
+    sketch.accumulateVec(update)
     hh_coords = sketch.table.nonzero()
     hh_0, hh_1 = hh_coords[:, 0], hh_coords[:, 1]
     for momentum_sketch, error_sketch in zip(momentum_sketches, error_sketches):
@@ -547,6 +542,3 @@ def set_param_vec(model, param_vec):
         p.data.add_(param_vec[start:end].view(p.size()))
         start = end
 
-@ray.remote
-def identity(x):
-    return x
