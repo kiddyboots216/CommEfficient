@@ -226,7 +226,7 @@ if __name__ == "__main__":
     parser.add_argument("-fed", action="store_true")
     parser.add_argument("-sketch", action="store_true")
     parser.add_argument("-sketch_down", action="store_true")
-    parser.add_argument("-functional", action="store_true")
+    parser.add_argument("-functional", action="store_true", default=True)
     parser.add_argument("-virtual_momentum", action="store_true")
     parser.add_argument("-local_momentum", action="store_true")
     parser.add_argument("-momentum_sketch", action="store_true")
@@ -294,7 +294,7 @@ if __name__ == "__main__":
         "virtual_momentum": args.virtual_momentum,
         "local_momentum": args.local_momentum,
         "momentum_sketch": args.momentum_sketch,
-        "error_accum": args.error_accum,
+        "error_accum": True if args.error_accum == 'True' else False,
     }
     """
     if args.fed:
