@@ -12,9 +12,9 @@ MOMENTUM_ID = 2
 
 class FedCommEffModel:
     def __init__(self, model_cls, model_config, params):
-        global client_params
+        #global client_params
         global cur_state
-        global grad_size
+        #global grad_size
         n_clients = params['n_clients']
         device = params['device']
         cpu = "cpu"
@@ -48,6 +48,7 @@ class FedCommEffModel:
         """
         client_params = {i: [param_vec] for i in range(n_clients)}
         #"""
+        self.client_params = client_params
         self.params = params
         self.params['grad_size'] = grad_size
 
@@ -57,11 +58,12 @@ class FedCommEffModel:
         global cur_state
         global criterion
         global accuracy
-        global client_params
+        #global client_params
+        client_params = self.client_params
         if self.training:
             batches = [(x.cpu(), y.cpu()) for x,y in batches]
             # update client state dicts
-            x = ray.put(accuracy)
+            #x = ray.put(accuracy)
             """
             outs, loss, acc, grads, weights = list(zip(
                 *[update_forward_grad.remote(
@@ -83,12 +85,13 @@ class FedCommEffModel:
                     self.model_cls, 
                     self.model_config, 
                     *batches[i], 
-                    criterion, 
-                    x, 
+                    #criterion, 
+                    #x, 
                     self.params
                 ) for i, idx in enumerate(indices)]))
             outs, loss, acc, grads, weights = list(outs), list(loss), list(acc), list(grads), list(weights)
             client_params = update_params(client_params, indices, weights, WEIGHT_ID)
+            self.client_params = client_params
             return outs, loss, acc, grads
         else:
             # param server does validation
@@ -96,23 +99,26 @@ class FedCommEffModel:
             outs, loss, acc = forward.remote(
                     self.model_cls, self.model_config, 
                     cur_state,
-                    *batches, criterion, accuracy, self.params)
+                    *batches, 
+                    #criterion, accuracy, 
+                    self.params)
             return outs, loss, acc
 
     def __getattr__(self, name):
         if name == "parameters":
             global cur_state
-            try:
-                cur_state = ray.get(cur_state)
-            except:
-                pass
             curr_weights = cur_state.to(self.params['device'])
             set_param_vec(self.model, curr_weights)
             return getattr(self.model, name)
 
 class FedCommEffOptimizer(torch.optim.Optimizer):
     def __init__(self, optimizer, params):
-        global grad_size
+        #global grad_size
+        grad_size = 0
+        for group in optimizer.param_groups:
+            for p in group["params"]:
+                if p.requires_grad:
+                    grad_size += torch.numel(p)
         self.params = params
         self.param_groups = optimizer.param_groups
         device = params['device']
@@ -149,7 +155,7 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
             n_errors)]
 
     def step(self, grads, indices):
-        global client_params
+        #global client_params
         global cur_state
         lr = get_lr(self.param_groups)
         momentums = [None for _ in indices]
@@ -232,7 +238,10 @@ class FedCommEffAccuracy:
 
 @ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=5, num_cpus=CPUS_ALLOCATED)
 def update_forward_grad(client_weights, client_error, curr_weights, model_cls,
-        model_config, ins, targets, criterion, accuracy, params):
+        model_config, ins, targets, params):
+        #criterion, accuracy, params):
+    global criterion
+    global accuracy
     new_client_weights = client_update(client_weights, curr_weights, params)
     outs, loss, acc, grad = forward_grad(model_cls, model_config,
             new_client_weights, client_error, ins, targets, criterion, 
@@ -241,7 +250,10 @@ def update_forward_grad(client_weights, client_error, curr_weights, model_cls,
 
 @ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=5, num_cpus=CPUS_ALLOCATED)
 def update_forward_grad_sketched(client_weights, curr_weights, model_cls,
-        model_config, ins, targets, criterion, accuracy, params):
+        model_config, ins, targets, params):
+        #criterion, accuracy, params):
+    global criterion
+    global accuracy
     new_client_weights = client_update(client_weights, curr_weights, params)
     outs, loss, acc, grad = forward_grad_sketched(model_cls, model_config,
             new_client_weights, ins, targets, criterion, 
@@ -329,7 +341,10 @@ def forward_grad_sketched(model_cls, model_config, weights, ins, targets,
 
 @ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=3)
 def forward(model_cls, model_config, weights, ins, targets,
-        criterion, accuracy, params):
+        params):
+        #criterion, accuracy, params):
+    global criterion
+    global accuracy
     device = params['device']
     model = model_cls(**model_config).to(device)
     weights = weights.to(device)
