@@ -17,6 +17,11 @@ from fed_param_server import FedParamServer
 from functions import FedCommEffModel, FedCommEffOptimizer, \
         FedCommEffCriterion, FedCommEffAccuracy
 from data_utils import get_data_loaders, hp_default
+
+import multiprocessing
+if __name__ == "__main__":
+    multiprocessing.set_start_method("spawn")
+
 DATA_PATH = 'sample_data'
 GPUS_PER_WORKER = 0.8
 GPUS_PER_PARAM_SERVER = 0.8
@@ -133,11 +138,12 @@ def run_batches_functional(model, opt, scheduler, criterion,
                 target_batch = targets[start:end]
                 minibatch = [in_batch, target_batch]
                 minibatches.append(minibatch)
-            outs, loss, acc, grads = model(minibatches, idx)
+            outs, loss, acc = model(minibatches, idx)
             scheduler.step()
-            opt.step(grads, idx)
-            batch_loss = ray.get(loss)
-            batch_acc = ray.get(acc)
+            opt.step(idx)
+            batch_loss = loss
+            #print("batch_loss", batch_loss.mean())
+            batch_acc = acc
             losses.append(batch_loss)
             accs.append(batch_acc)
             start_idx = end_idx
@@ -150,8 +156,8 @@ def run_batches_functional(model, opt, scheduler, criterion,
             minibatch = [inputs, targets]
             idx = [0]
             outs, loss, acc = model(minibatch, idx)
-            batch_loss = ray.get(loss)
-            batch_acc = ray.get(acc)
+            batch_loss = loss
+            batch_acc = acc
             losses.append(batch_loss)
             accs.append(batch_acc)
             if params['test']:
@@ -334,10 +340,12 @@ if __name__ == "__main__":
                            drop_last=False)
 
     print('Initializing everything')
+    """
     ray.init(
             redis_password="sketched_sgd", 
             object_store_memory=int(args.object_store_memory),
             )
+    """
     lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
     if args.grad_reduce == "sum":
         lambda_step = lambda step: lr_schedule(step/len(train_loader))/args.batch_size
@@ -347,12 +355,12 @@ if __name__ == "__main__":
         criterion = torch.nn.CrossEntropyLoss(reduction='sum')
 
     if args.functional:
-        model = FedCommEffModel(model_cls, model_config, params)
-        opt = torch.optim.SGD(model.parameters(), lr=1)
-        opt = FedCommEffOptimizer(opt, params)
         criterion = FedCommEffCriterion(criterion, params)
         accuracy = Correct()
         accuracy = FedCommEffAccuracy(accuracy, params)
+        model = FedCommEffModel(model_cls, model_config, params)
+        opt = torch.optim.SGD(model.parameters(), lr=1)
+        opt = FedCommEffOptimizer(opt, params)
     else:
         workers = [FedSketchedWorker.remote(params
             ) for _ in range(args.clients)]

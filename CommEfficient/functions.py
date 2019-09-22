@@ -4,18 +4,49 @@ import numpy as np
 from csvec import CSVec
 import copy
 from minimal_failure import ray_free, ray_get_and_free
+
+import ctypes
+import multiprocessing
+from multiprocessing.sharedctypes import RawArray
+from multiprocessing import Array
+#from multiprocessing import shared_memory
+
+GPUS_PER_MACHINE = 4
+
 GPUS_ALLOCATED = 1.0
 CPUS_ALLOCATED = 1
 WEIGHT_ID = 0
 ERROR_ID = 1
 MOMENTUM_ID = 2
 
+#from mpi4py import MPI
+#comm = MPI.COMM_WORLD
+#rank = comm.Get_rank()
+#world_size = comm.Get_size()
+
+g_worker_Sgrads_sm = None
+g_client_weights_sm = None
+g_ps_weights_sm = None
+
+g_criterion = None
+g_accuracy = None
+
+def init_pool(worker_Sgrads_sm, client_weights_sm, ps_weights_sm):
+    global gw_worker_Sgrads_sm, gw_client_weights_sm, gw_ps_weights_sm
+    gw_worker_Sgrads_sm = worker_Sgrads_sm
+    gw_client_weights_sm = client_weights_sm
+    gw_ps_weights_sm = ps_weights_sm
+
+def sm2np(sm, shape, dtype=ctypes.c_float):
+    nparray = np.ndarray(shape, dtype=dtype, buffer=sm)
+    #nparray = np.frombuffer(sm, dtype=ctypes.c_float)
+    assert(nparray.base is sm)
+    return nparray
+
 class FedCommEffModel:
     def __init__(self, model_cls, model_config, params):
-        #global client_params
-        global cur_state
-        #global grad_size
         n_clients = params['n_clients']
+        participation = params["participation"]
         device = params['device']
         cpu = "cpu"
         self.model_cls = model_cls
@@ -24,9 +55,8 @@ class FedCommEffModel:
         if params.get('unit_test', False):
             list(input_model.parameters())[0].data.zero_()
         self.model = input_model.to(device)
-        param_vec = get_param_vec(self.model, cpu)
+        param_vec = get_param_vec(self.model, cpu).numpy()
         #param_vec_id = ray.put(param_vec)
-        cur_state = param_vec
         grad_size = 0
         for p in self.model.parameters():
             if p.requires_grad:
@@ -34,32 +64,73 @@ class FedCommEffModel:
         """
         error_vec = torch.zeros(grad_size)
         #error_vec_id = ray.put(error_vec)
-        #client_params = {i: [param_vec_id, error_vec_id]
-        #client_params = {i: [param_vec, error_vec]
-        client_params = {i: [param_vec, error_vec, error_vec]
+        #client_weights = {i: [param_vec_id, error_vec_id]
+        #client_weights = {i: [param_vec, error_vec]
+        client_weights = {i: [param_vec, error_vec, error_vec]
                          for i in range(n_clients)}
         """
         """
         sketch_copy = CSVec(d=grad_size, c=params['num_cols'],
             r=params['num_rows'], device=device,
             numBlocks=params['num_blocks'])
-        client_params = {i: [param_vec, copy.deepcopy(sketch_copy), copy.deepcopy(sketch_copy)]
+        client_weights = {i: [param_vec, copy.deepcopy(sketch_copy), copy.deepcopy(sketch_copy)]
                          for i in range(n_clients)}
         """
-        client_params = {i: [param_vec] for i in range(n_clients)}
-        #"""
-        self.client_params = client_params
+
+        global g_worker_Sgrads_sm
+        global g_client_weights_sm
+        global g_ps_weights_sm
+
+        # ps_weights needs to be in shared memory so the workers can
+        # update themselves with (possibly an approximation of) the
+        # latest PS weights
+
+        g_ps_weights_sm = Array(ctypes.c_float,
+                                param_vec.size,
+                                lock=False)
+        ps_weights = sm2np(g_ps_weights_sm, param_vec.shape)
+        # store the initial weights of the model
+        ps_weights[:] = param_vec[:]
+
+        # client weights emulates each client's possibly stale weights
+        g_client_weights_sm = Array(ctypes.c_float,
+                                    param_vec.size * n_clients,
+                                    lock=False)
+
+        # copy ps_weights into every row of client_weights
+        client_weights = sm2np(g_client_weights_sm,
+                               (n_clients, param_vec.size))
+        client_weights[:] = np.tile(param_vec, (n_clients, 1))
+
+        # this shared memory block will hold the gradient sketches computed
+        # by each worker in a round
+        n_workers = int(n_clients * participation)
+        g_worker_Sgrads_sm = Array(
+                'f',
+                n_workers * params["num_rows"] * params["num_cols"],
+                lock=False
+            )
+        # and zero out worker_Sgrads to start
+        worker_Sgrads_shape = (n_workers, params["num_rows"], params["num_cols"])
+        worker_Sgrads = sm2np(g_worker_Sgrads_sm, worker_Sgrads_shape)
+        worker_Sgrads[:] = 0
+
+        self.process_pool = multiprocessing.Pool(
+                GPUS_PER_MACHINE,
+                initializer=init_pool,
+                initargs=(g_worker_Sgrads_sm, g_client_weights_sm,
+                          g_ps_weights_sm)
+            )
+
         self.params = params
         self.params['grad_size'] = grad_size
 
     def train(self, training):
         self.training = training
+
     def __call__(self, batches, indices):
-        global cur_state
-        global criterion
-        global accuracy
-        #global client_params
-        client_params = self.client_params
+        global g_criterion
+        global g_accuracy
         if self.training:
             batches = [(x.cpu(), y.cpu()) for x,y in batches]
             # update client state dicts
@@ -67,47 +138,55 @@ class FedCommEffModel:
             """
             outs, loss, acc, grads, weights = list(zip(
                 *[update_forward_grad.remote(
-                    get_weights(client_params, idx), 
-                    get_error(client_params, idx),
-                    cur_state, 
-                    self.model_cls, 
-                    self.model_config, 
-                    *batches[i], 
-                    criterion, 
-                    x, 
+                    get_weights(client_weights, idx),
+                    get_error(client_weights, idx),
+                    ps_weights,
+                    self.model_cls,
+                    self.model_config,
+                    *batches[i],
+                    criterion,
+                    x,
                     self.params
                 ) for i, idx in enumerate(indices)]))
             """
-            outs, loss, acc, grads, weights = list(zip(
-                *[update_forward_grad_sketched.remote(
-                    get_weights(client_params, idx), 
-                    cur_state, 
-                    self.model_cls, 
-                    self.model_config, 
-                    *batches[i], 
-                    #criterion, 
-                    #x, 
-                    self.params
-                ) for i, idx in enumerate(indices)]))
-            outs, loss, acc, grads, weights = list(outs), list(loss), list(acc), list(grads), list(weights)
-            client_params = update_params(client_params, indices, weights, WEIGHT_ID)
-            self.client_params = client_params
-            return outs, loss, acc, grads
+            args_tuples = [(i, idx, self.model_cls, self.model_config,
+                            batches[i][0], batches[i][1], self.params,
+                            g_criterion, g_accuracy)
+                           for i, idx in enumerate(indices)]
+            results = self.process_pool.starmap(update_forward_grad_sketched,
+                                                args_tuples)
+            """
+            processes = []
+            for i in range(len(indices)):
+                p = Process(target=update_forward_grad_sketched, args=args_tuples[i])
+                p.start()
+                processes.append(p)
+            for p in processes:
+                p.join()
+            """
+            outs = np.array([r[0] for r in results])
+            loss = np.array([r[1] for r in results])
+            acc = np.array([r[2] for r in results])
+
+            return outs, loss, acc
         else:
             # param server does validation
             batches = [batches[0].cpu(), batches[1].cpu()]
-            outs, loss, acc = forward.remote(
-                    self.model_cls, self.model_config, 
-                    cur_state,
-                    *batches, 
-                    #criterion, accuracy, 
+            outs, loss, acc = forward(
+                    self.model_cls, self.model_config,
+                    *batches,
+                    #criterion, accuracy,
                     self.params)
             return outs, loss, acc
 
     def __getattr__(self, name):
         if name == "parameters":
-            global cur_state
-            curr_weights = cur_state.to(self.params['device'])
+            global g_ps_weights_sm
+
+            ps_weights = sm2np(g_ps_weights_sm,
+                               (self.params["grad_size"],))
+            curr_weights = torch.from_numpy(ps_weights)
+            curr_weights = curr_weights.to(self.params['device'])
             set_param_vec(self.model, curr_weights)
             return getattr(self.model, name)
 
@@ -154,9 +233,8 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         self.errors = [copy.deepcopy(error_copy) for _ in range(
             n_errors)]
 
-    def step(self, grads, indices):
-        #global client_params
-        global cur_state
+    def step(self, indices):
+        #global client_weights
         lr = get_lr(self.param_groups)
         momentums = [None for _ in indices]
         """
@@ -172,16 +250,16 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         """
         new_state, new_momentums, new_errors = server_update(
                 indices,
-                #param_server_states[-1], 
-                cur_state,
-                self.params, lr, 
+                #param_server_states[-1],
+                ps_weights,
+                self.params, lr,
                 grads,
-                momentums, 
+                momentums,
                 self.sketch)
         #new_errors = ray.get(new_errors)
-        client_params = update_params(client_params, indices, new_errors, ERROR_ID)
-        del cur_state
-        cur_state = new_state
+        client_weights = update_params(client_weights, indices, new_errors, ERROR_ID)
+        del ps_weights
+        ps_weights = new_state
         if self.params['virtual_momentum']:
             self.momentums = new_momentums
         elif self.params['local_momentum']:
@@ -194,14 +272,15 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
             errors = self.errors
         elif self.params['do_local_error_sketch']:
             errors = [self.errors[idx] for idx in indices]
-        new_state, new_momentums, new_errors = server_update_sketched(
-                cur_state,
-                grads,
+        new_ps_weights, new_momentums, new_errors = get_updated_server_sketched(
                 momentums,
                 errors,
                 self.params,
                 lr, self.sketch)
-        cur_state = new_state
+
+        ps_weights = sm2np(g_ps_weights_sm, (self.params["grad_size"],))
+        ps_weights[:] = new_ps_weights
+
         if self.params['do_virtual_momentum_sketch']:
             self.momentums = new_momentums
         elif self.params['do_local_momentum_sketch']:
@@ -213,60 +292,99 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
             for i, idx in enumerate(indices):
                 self.errors[idx] = new_errors[i]
         #self.errors = new_errors
-        #client_params = update_params(client_params, indices, new_momentums, MOMENTUM_ID)
-        #client_params = update_params(client_params, indices, new_errors, ERROR_ID)
+        #client_weights = update_params(client_weights, indices, new_momentums, MOMENTUM_ID)
+        #client_weights = update_params(client_weights, indices, new_errors, ERROR_ID)
         #"""
 
     def zero_grad(self):
         pass
 class FedCommEffCriterion:
     def __init__(self, input_criterion, params):
-        global criterion
-        criterion = input_criterion
+        global g_criterion
+        g_criterion = input_criterion
     def __call__(self, *args):
-        global criterion
-        out = criterion(*args)
+        global g_criterion
+        out = g_criterion(*args)
         return out
 class FedCommEffAccuracy:
     def __init__(self, input_accuracy, params):
-        global accuracy
-        accuracy = input_accuracy
+        global g_accuracy
+        g_accuracy = input_accuracy
     def __call__(self, *args):
-        global accuracy
-        out = accuracy(*args)
+        global g_accuracy
+        out = g_accuracy(*args)
         return out
 
-@ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=5, num_cpus=CPUS_ALLOCATED)
+#@ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=5, num_cpus=CPUS_ALLOCATED)
 def update_forward_grad(client_weights, client_error, curr_weights, model_cls,
         model_config, ins, targets, params):
         #criterion, accuracy, params):
-    global criterion
-    global accuracy
+    global g_criterion
+    global g_accuracy
     new_client_weights = client_update(client_weights, curr_weights, params)
     outs, loss, acc, grad = forward_grad(model_cls, model_config,
-            new_client_weights, client_error, ins, targets, criterion, 
-            accuracy, params)
+            new_client_weights, client_error, ins, targets, g_criterion,
+            g_accuracy, params)
     return outs, loss, acc, grad, new_client_weights.cpu()
 
-@ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=5, num_cpus=CPUS_ALLOCATED)
-def update_forward_grad_sketched(client_weights, curr_weights, model_cls,
-        model_config, ins, targets, params):
-        #criterion, accuracy, params):
-    global criterion
-    global accuracy
-    new_client_weights = client_update(client_weights, curr_weights, params)
-    outs, loss, acc, grad = forward_grad_sketched(model_cls, model_config,
-            new_client_weights, ins, targets, criterion, 
-            accuracy, params)
-    return outs, loss, acc, grad, new_client_weights.cpu()
+def get_worker_device(device):
+    # cpu => cpu; cuda => cuda:#
+    # bad! relying on private _identity. Lazy!
+    worker_id = multiprocessing.current_process()._identity[0]
+    if device == "cuda":
+        device = "cuda:{:d}".format(worker_id % GPUS_PER_MACHINE)
+    return device
 
-def client_update(client_weights, curr_weights, params):
+def update_forward_grad_sketched(worker_id, client_id, model_cls,
+                                 model_config, ins, targets, params,
+                                 criterion, accuracy):
+
+    # pull PS and client weights out of the shared memory block
+    grad_size = params["grad_size"]
+    n_clients = params["n_clients"]
+    participation = params["participation"]
+
+    global gw_worker_Sgrads_sm
+    global gw_client_weights_sm
+    global gw_ps_weights_sm
+
+    ps_weights = sm2np(gw_ps_weights_sm, (grad_size,))
+    client_weights = sm2np(gw_client_weights_sm, (n_clients, grad_size))
+
+    worker_weights = client_weights[client_id]
+
+
+    params["device"] = get_worker_device(params["device"])
+    ps_weights = torch.from_numpy(ps_weights).to(params["device"])
+    worker_weights = torch.from_numpy(worker_weights).to(params["device"])
+
+
+    new_worker_weights = get_new_worker_weights(ps_weights,
+                                                worker_weights,
+                                                params)
+
+    outs, loss, acc, Sgrad = forward_grad_sketched(
+            model_cls, model_config, new_worker_weights,
+            ins, targets, criterion, accuracy, params
+        )
+
+    # write grad to the shared memory grad array in spot worker_id
+    n_workers = int(n_clients * participation)
+    worker_Sgrads_shape = (n_workers, params["num_rows"], params["num_cols"])
+    worker_Sgrads = sm2np(gw_worker_Sgrads_sm, worker_Sgrads_shape)
+    worker_Sgrads[worker_id,:,:] = Sgrad.cpu().numpy()[:,:]
+
+    return outs.numpy(), loss, acc
+
+def get_new_worker_weights(ps_weights, worker_weights, params):
     device = params['device']
-    curr_weights = curr_weights.to(device)
-    client_weights = client_weights.to(device)
-    diff_vec = curr_weights - client_weights
-    diff_vec = diff_vec.float()
-    grad_size = params['grad_size']
+
+    ps_weights = ps_weights.to(device)
+    worker_weights = worker_weights.to(device)
+
+    # we'll update the old worker_weights with a possibly compressed
+    # version of diff_vec
+    diff_vec = ps_weights - worker_weights
     topk_down = params['topk_down']
     sketch_down = params['sketch_down']
 
@@ -292,10 +410,11 @@ def client_update(client_weights, curr_weights, params):
         weight_update = _topk(diff_vec, k=k)
     else:
         weight_update = diff_vec
-    updated_vec = client_weights + weight_update 
+
+    new_worker_weights = worker_weights + weight_update
     #print(f"{torch.norm(weight_update, 2)}")
     #print(f"{updated_vec} = {client_weights} + {weight_update}")
-    return updated_vec
+    return new_worker_weights
     #return updated_vec.cpu()
 
 def forward_grad(model_cls, model_config, weights, error, ins, targets,
@@ -337,27 +456,33 @@ def forward_grad_sketched(model_cls, model_config, weights, ins, targets,
     sketch.accumulateVec(grad)
     table = sketch.table.cpu()
     del sketch
-    return outs.cpu(), loss, acc, table
+    return outs.cpu().detach(), loss, acc, table
 
-@ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=3)
-def forward(model_cls, model_config, weights, ins, targets,
+#@ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=3)
+def forward(model_cls, model_config, ins, targets,
         params):
         #criterion, accuracy, params):
-    global criterion
-    global accuracy
+    global g_criterion
+    global g_accuracy
+
     device = params['device']
+
+    global g_ps_weights_sm
+    ps_weights = sm2np(g_ps_weights_sm, (params["grad_size"],))
+    weights = torch.from_numpy(ps_weights).to(device)
+
     model = model_cls(**model_config).to(device)
     weights = weights.to(device)
     set_param_vec(model, weights)
     ins = ins.to(device)
     targets = targets.to(device)
-    criterion = criterion.to(device)
-    accuracy = accuracy.to(device)
+    criterion = g_criterion.to(device)
+    accuracy = g_accuracy.to(device)
     outs = model(ins)
     loss, acc = compute_loss(outs, targets, criterion, accuracy, train=False)
-    return outs.cpu(), loss, acc
+    return outs.cpu().detach(), loss, acc
 
-def server_update_sketched(curr_weights, grad_sketches, momentum_sketches, error_sketches, params, lr, sketch):
+def get_updated_server_sketched(momentum_sketches, error_sketches, params, lr, sketch):
     """
     We have W sketches for momentum and error; S(u_i), S(v_i)
     Workers send us S(g_i) and we do:
@@ -370,9 +495,23 @@ def server_update_sketched(curr_weights, grad_sketches, momentum_sketches, error
     momentum = params['momentum']
     k = params['k']
     device = torch.device(params['device'])
-    curr_weights = curr_weights.to(device)
-    grad_sketches = [ray.get(grad).to(device) for grad in grad_sketches]
-    for grad_sketch, momentum_sketch, error_sketch in zip(grad_sketches, momentum_sketches, error_sketches):
+
+    global g_ps_weights_sm
+    global g_client_weights_sm
+    global g_worker_Sgrads_sm
+    ps_weights = sm2np(g_ps_weights_sm, (params["grad_size"],),)
+    client_weights = sm2np(g_client_weights_sm,
+                           (params["n_clients"], params["grad_size"]))
+    n_workers = int(params["n_clients"] * params["participation"])
+    worker_Sgrads_shape = (n_workers, params["num_rows"], params["num_cols"])
+    worker_Sgrads = sm2np(g_worker_Sgrads_sm, worker_Sgrads_shape)
+
+    ps_weights = torch.from_numpy(ps_weights).to(device)
+
+    worker_Sgrads = [torch.from_numpy(Sg).to(device)
+                     for Sg in worker_Sgrads]
+
+    for grad_sketch, momentum_sketch, error_sketch in zip(worker_Sgrads, momentum_sketches, error_sketches):
         if params['do_virtual_momentum_sketch'] or params['do_local_momentum_sketch']:
             momentum_sketch *= momentum
             momentum_sketch.accumulateTable(grad_sketch)
@@ -396,7 +535,7 @@ def server_update_sketched(curr_weights, grad_sketches, momentum_sketches, error
         if params['do_virtual_error_sketch'] or params['do_local_error_sketch']:
             error_sketch.table[hh_0, hh_1] = 0
     weight_update = update * lr
-    updated_weights = curr_weights - weight_update
+    updated_weights = ps_weights - weight_update
     #print(f"{updated_weights} = {curr_weights} - {weight_update} ({update} * {lr}) from {grads}")
     return updated_weights.cpu(), momentum_sketches, error_sketches
 
@@ -482,24 +621,24 @@ def server_update(indices, curr_weights,
         momentums = [u.cpu() for u in momentums]
     return updated_weights.cpu(), momentums, grads
 
-def get_weights(client_params, idx):
-    retval = client_params[idx][WEIGHT_ID]
+def get_weights(client_weights, idx):
+    retval = client_weights[idx][WEIGHT_ID]
     return retval
 
-def get_error(client_params, idx):
-    retval = client_params[idx][ERROR_ID]
+def get_error(client_weights, idx):
+    retval = client_weights[idx][ERROR_ID]
     return retval
 
-def get_errors(client_params, indices):
-    return [client_params[idx][ERROR_ID] for idx in indices]
+def get_errors(client_weights, indices):
+    return [client_weights[idx][ERROR_ID] for idx in indices]
 
 def get_params(indices, idx):
-    return [client_params[index][idx] for index in indices]
+    return [client_weights[index][idx] for index in indices]
 
-def update_params(client_params, client_indices, vecs, vec_idx):
+def update_params(client_weights, client_indices, vecs, vec_idx):
     for i, idx in enumerate(client_indices):
-        client_params[idx][vec_idx] = vecs[i]
-    return client_params
+        client_weights[idx][vec_idx] = vecs[i]
+    return client_weights
 
 def get_lr(optimizer_param_groups):
     if len(optimizer_param_groups) == 1:
