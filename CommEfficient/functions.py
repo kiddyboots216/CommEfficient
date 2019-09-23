@@ -9,7 +9,7 @@ from multiprocessing.sharedctypes import RawArray
 from multiprocessing import Array
 #from multiprocessing import shared_memory
 
-GPUS_PER_MACHINE = 4
+GPUS_PER_MACHINE = 8
 
 GPUS_ALLOCATED = 1.0
 CPUS_ALLOCATED = 1
@@ -237,7 +237,7 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
 
     def step(self, indices):
         #global client_weights
-        lr = self.get_lr(self.param_groups)
+        lr = self.get_lr()
         momentums = [None for _ in indices]
         """
         if self.params['virtual_momentum']:
@@ -334,7 +334,8 @@ def get_worker_device(device):
     # bad! relying on private _identity. Lazy!
     worker_id = multiprocessing.current_process()._identity[0]
     if device == "cuda":
-        device = "cuda:{:d}".format(worker_id % GPUS_PER_MACHINE)
+        #device = "cuda:{:d}".format(worker_id % GPUS_PER_MACHINE)
+        device = "cuda:{:d}".format((worker_id % 7) + 1)
     return device
 
 def update_forward_grad_sketched(worker_id, client_id, model_cls,
@@ -388,6 +389,7 @@ def get_new_worker_weights(ps_weights, worker_weights, params):
     # version of diff_vec
     diff_vec = ps_weights - worker_weights
     topk_down = params['topk_down']
+    """
     sketch_down = params['sketch_down']
 
     if sketch_down:
@@ -408,6 +410,8 @@ def get_new_worker_weights(ps_weights, worker_weights, params):
             weights = sketch.unSketch(k=k)
         weight_update = weights
     elif topk_down:
+    """
+    if topk_down:
         k = params['k']
         weight_update = _topk(diff_vec, k=k)
     else:
@@ -656,7 +660,7 @@ def _topk(vec, k):
     ret[topkIndices] = vec[topkIndices]
     return ret
 
-def get_grad(model, weights, params, train, device='cpu'):
+def get_grad(model, weights, params, train=True, device='cpu'):
     if train:
         grad_vec = get_grad_vec(model)
         if params['weight_decay'] != 0:
@@ -686,6 +690,12 @@ def get_grad_vec(model):
         # concat into a single vector
         grad_vec = torch.cat(grad_vec)
     return grad_vec
+
+def zero_grad(model):
+    for p in model.parameters():
+        if p.grad is not None:
+            p.grad.detach_()
+            p.grad.zero_()
 
 def get_param_vec(model, device):
     return torch.cat([p.data.view(-1) for p in model.parameters()]).to(device)
@@ -784,16 +794,22 @@ class FedCommEffModelGPT2:
                             for i, idx in enumerate(indices)]
             results = self.process_pool.starmap(update_forward_grad_sketched_gpt2,
                                                 args_tuples)
-            loss = np.array([r[0] for r in results])
+            #loss = np.array([r[0] for r in results])
+            return results
 
         else:
             global g_criterion
+            """
             args_tuples = [(self.model, batches[i], self.params, g_criterion)
                             for i, idx in enumerate(indices)]
             results = self.process_pool.starmap(forward_gpt2, args_tuples)
+            results = [forward_gpt2(self.model, batches[i], self.params, g_criterion)
+                    for i, idx in enumerate(indices)]
             nlls = np.array([r[0] for r in results])
             accs = np.array([r[1] for r in results])
             ppls = np.array([r[2] for r in results])
+            """
+            nlls, accs, ppls = forward_gpt2(self.model, batches, self.params, g_criterion)
             return nlls, accs, ppls
 
     def __getattr__(self, name):
@@ -852,7 +868,7 @@ def forward_grad_sketched_gpt2(model, weights, batch, params):
     model.train()
     weights = weights.to(device)
     set_param_vec(model, weights)
-    mega_batch = tuple(input_tensor.to(device) for input_tensor in batch)
+    mega_batch = batch
     grad_accum_steps = params['grad_accum_steps']
     accum_grad = get_grad(model, weights, params, device=device)
     batch_size = params['batch_size']
@@ -860,12 +876,17 @@ def forward_grad_sketched_gpt2(model, weights, batch, params):
         start = i * batch_size
         end = (i+1) * batch_size
         batch = [b[start:end] for b in mega_batch]
+        batch = tuple(input_tensor.to(device) for input_tensor in batch)
         input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids = batch
         (lm_loss), (mc_loss), *_ = model(
             input_ids, token_type_ids=token_type_ids, mc_token_ids=mc_token_ids,
             mc_labels=mc_labels, lm_labels=lm_labels
         )
         loss = (lm_loss * params['lm_coef'] + mc_loss * params['mc_coef']) 
+        for p in model.parameters():
+            if p.grad is not None:
+                p.grad.detach_()
+                p.grad.zero_()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), params['max_norm'])
         grad = get_grad(model, weights, params, device=device)
@@ -879,14 +900,12 @@ def forward_grad_sketched_gpt2(model, weights, batch, params):
     return loss.item(), table
 
 def forward_gpt2(model, batch, params, criterion):
-    # pull PS and client weights out of the shared memory block
     # pull PS weights out of the shared memory block
     grad_size = params["grad_size"]
-    global gw_ps_weights_sm
-    ps_weights = sm2np(gw_ps_weights_sm, (grad_size,))
-    params["device"] = get_worker_device(params["device"])
-    ps_weights = torch.from_numpy(ps_weights).to(params["device"])
     device = params['device']
+    global g_ps_weights_sm
+    ps_weights = sm2np(g_ps_weights_sm, (params["grad_size"],))
+    ps_weights = torch.from_numpy(ps_weights).to(params["device"])
     model.to(device)
     model.eval()
     set_param_vec(model, ps_weights)

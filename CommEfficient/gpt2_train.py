@@ -22,6 +22,7 @@ from CommEfficient.minimal import PiecewiseLinear, TableLogger, TSVLogger, Timer
 from torch.optim import SGD
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
+import multiprocessing
 
 global start_idx
 start_idx = 0
@@ -76,33 +77,35 @@ def run_batches(model, opt, scheduler, loader, params, timer, training, logger=N
                 end = (i+1) * batch_size // n_clients_to_select
                 minibatch = [b[start:end] for b in batch]
                 minibatches.append(minibatch)
-            loss, grads = model(minibatches, idx)
+            loss = model(minibatches, idx)
             scheduler.step()
-            opt.step(grads, idx)
+            opt.step(idx)
             loss = np.mean(loss)
             losses.append(loss)
             start_idx = end_idx
-            if batch_idx % 100 == 0:
-                train_time = timer()
-                batch_stats = {
-                    'train_time': train_time,
-                    'train_loss': loss,
-                    'total_time': timer.total_time,
-                }
-                lr = scheduler.get_lr()[0]
+            train_time = timer()
+            batch_stats = {
+                'train_time': train_time,
+                'train_loss': loss,
+                'total_time': timer.total_time,
+            }
+            lr = scheduler.get_lr()[0]
 
-                writer.add_scalar('Loss/train', loss, batch_idx)
-                writer.add_scalar('Lr', lr, batch_idx)
-                writer.add_scalar('Time/train', train_time, batch_idx)
-                summary = union({'batch_idx': batch_idx+1,
-                    'lr': lr}, batch_stats)
-                logger.append(summary)
+            writer.add_scalar('Loss/train', loss, batch_idx)
+            writer.add_scalar('Lr', lr, batch_idx)
+            writer.add_scalar('Time/train', train_time, batch_idx)
+            summary = union({'batch_idx': batch_idx+1,
+                'lr': lr}, batch_stats)
+            logger.append(summary)
+            if params['test']:
+                break
         return np.mean(losses)
 
     else:
         nlls, accs, ppls = [], [], []
         for batch_idx, batch in enumerate(loader):
             idx = np.arange(n_clients_to_select)
+            """
             minibatches = []
             for i, _ in enumerate(idx):
                 start = i * batch_size // n_clients_to_select
@@ -110,6 +113,8 @@ def run_batches(model, opt, scheduler, loader, params, timer, training, logger=N
                 minibatch = [b[start:end] for b in batch]
                 minibatches.append(minibatch)
             nll, acc, ppl = model(minibatches, idx)
+            """
+            nll, acc, ppl = model(batch, idx)
             nll = np.mean(nll)
             acc = np.mean(acc)
             ppl = np.mean(ppl)
@@ -266,9 +271,11 @@ def train():
         args.k = 10
         args.cols = 10
         args.rows = 3
-        args.train_batch_size = 8
+        args.train_batch_size = 2
+        args.valid_batch_size = 2
         args.epochs = 1
         args.clients = 1
+        args.gradient_accumulation_steps = 1
         args.participation = 1.0
         args.object_store_memory = 2e10
 
@@ -280,7 +287,7 @@ def train():
         "p2": args.p2,
         "num_cols": args.cols,
         "num_rows": args.rows,
-        "batch_size": args.train_batch_size,
+        "batch_size": 2,
         "num_blocks": args.num_blocks,
         # federation params
         "n_clients": args.clients,
@@ -312,7 +319,6 @@ def train():
         "grad_accum_steps": args.gradient_accumulation_steps,
     }
     args.train_batch_size *= params["n_clients_per_round"]
-    args.valid_batch_size *= params["n_clients_per_round"]
     params["train_batch_size"] = args.train_batch_size
     params["valid_batch_size"] = args.valid_batch_size
 
@@ -337,7 +343,7 @@ def train():
     # Add special tokens if they are not already added
     add_special_tokens_(model, tokenizer)
     # HAVE TO USE SGD FOR FED
-    optimizer = SGD(model.parameters(), lr=1)
+    optimizer = SGD(model.parameters(), lr=1, momentum=0.9)
 
     logger.info('Finished in {:.2f} seconds'.format(timer()))
     logger.info("Prepare datasets")
@@ -359,4 +365,5 @@ def train():
     model.save_pretrained(log_dir)
 
 if __name__ == "__main__":
+    multiprocessing.set_start_method("spawn")
     train()
