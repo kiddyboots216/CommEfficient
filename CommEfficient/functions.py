@@ -2,7 +2,6 @@ import torch
 import numpy as np
 from csvec import CSVec
 import copy
-from minimal_failure import ray_free, ray_get_and_free
 
 import cProfile
 
@@ -245,9 +244,13 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         self.errors = [copy.deepcopy(error_copy) for _ in range(
             n_errors)]
 
+    def get_lr(self):
+        lr = get_lr(self.param_groups)
+        return lr
+
     def step(self, indices):
         #global client_weights
-        lr = get_lr(self.param_groups)
+        lr = self.get_lr()
         momentums = [None for _ in indices]
         """
         if self.params['virtual_momentum']:
@@ -344,7 +347,8 @@ def get_worker_device(device):
     # bad! relying on private _identity. Lazy!
     worker_id = multiprocessing.current_process()._identity[0]
     if device == "cuda":
-        device = "cuda:{:d}".format(worker_id % GPUS_PER_MACHINE)
+        #device = "cuda:{:d}".format(worker_id % GPUS_PER_MACHINE)
+        device = "cuda:{:d}".format((worker_id % 7) + 1)
     return device
 
 def update_forward_grad_sketched(worker_id, client_id, model_cls,
@@ -398,6 +402,7 @@ def get_new_worker_weights(ps_weights, worker_weights, params):
     # version of diff_vec
     diff_vec = ps_weights - worker_weights
     topk_down = params['topk_down']
+    """
     sketch_down = params['sketch_down']
 
     if sketch_down:
@@ -418,6 +423,8 @@ def get_new_worker_weights(ps_weights, worker_weights, params):
             weights = sketch.unSketch(k=k)
         weight_update = weights
     elif topk_down:
+    """
+    if topk_down:
         k = params['k']
         weight_update = _topk(diff_vec, k=k)
     else:
@@ -666,7 +673,7 @@ def _topk(vec, k):
     ret[topkIndices] = vec[topkIndices]
     return ret
 
-def get_grad(model, weights, params, train, device='cpu'):
+def get_grad(model, weights, params, train=True, device='cpu'):
     if train:
         grad_vec = get_grad_vec(model)
         if params['weight_decay'] != 0:
@@ -697,6 +704,12 @@ def get_grad_vec(model):
         grad_vec = torch.cat(grad_vec)
     return grad_vec
 
+def zero_grad(model):
+    for p in model.parameters():
+        if p.grad is not None:
+            p.grad.detach_()
+            p.grad.zero_()
+
 def get_param_vec(model, device):
     return torch.cat([p.data.view(-1) for p in model.parameters()]).to(device)
     param_vec = []
@@ -712,3 +725,255 @@ def set_param_vec(model, param_vec):
         p.data.add_(param_vec[start:end].view(p.size()))
         start = end
 
+# GPT2 FUNCTIONS
+class FedCommEffModelGPT2:
+    def __init__(self, input_model, model_cls, params):
+        n_clients = params['n_clients']
+        participation = params["participation"]
+        device = params['device']
+        cpu = "cpu"
+        self.model_cls = model_cls
+        if params.get('unit_test', False):
+            list(input_model.parameters())[0].data.zero_()
+        self.model = input_model.to(device)
+        param_vec = get_param_vec(self.model, cpu).numpy()
+        grad_size = 0
+        for p in self.model.parameters():
+            if p.requires_grad:
+                grad_size += torch.numel(p)
+
+        global g_worker_Sgrads_sm
+        global g_client_weights_sm
+        global g_ps_weights_sm
+
+        # ps_weights needs to be in shared memory so the workers can
+        # update themselves with (possibly an approximation of) the
+        # latest PS weights
+
+        g_ps_weights_sm = Array(ctypes.c_float,
+                                param_vec.size,
+                                lock=False)
+        ps_weights = sm2np(g_ps_weights_sm, param_vec.shape)
+        # store the initial weights of the model
+        ps_weights[:] = param_vec[:]
+
+        # client weights emulates each client's possibly stale weights
+        g_client_weights_sm = Array(ctypes.c_float,
+                                    param_vec.size * n_clients,
+                                    lock=False)
+
+        # copy ps_weights into every row of client_weights
+        client_weights = sm2np(g_client_weights_sm,
+                               (n_clients, param_vec.size))
+        client_weights[:] = np.tile(param_vec, (n_clients, 1))
+
+        # this shared memory block will hold the gradient sketches computed
+        # by each worker in a round
+        n_workers = int(n_clients * participation)
+        g_worker_Sgrads_sm = Array(
+                'f',
+                n_workers * params["num_rows"] * params["num_cols"],
+                lock=False
+            )
+        # and zero out worker_Sgrads to start
+        worker_Sgrads_shape = (n_workers, params["num_rows"], params["num_cols"])
+        worker_Sgrads = sm2np(g_worker_Sgrads_sm, worker_Sgrads_shape)
+        worker_Sgrads[:] = 0
+
+        self.process_pool = multiprocessing.Pool(
+                GPUS_PER_MACHINE,
+                initializer=init_pool,
+                initargs=(g_worker_Sgrads_sm, g_client_weights_sm,
+                          g_ps_weights_sm)
+            )
+
+        self.params = params
+        self.params['grad_size'] = grad_size
+
+    def train(self, training):
+        self.training = training
+    def save_pretrained(self, log_dir):
+        global g_ps_weights_sm
+        ps_weights = sm2np(g_ps_weights_sm,
+                           (self.params["grad_size"],))
+        curr_weights = torch.from_numpy(ps_weights)
+        curr_weights = curr_weights.to(self.params['device'])
+        set_param_vec(self.model, curr_weights)
+        self.model.save_pretrained(log_dir)
+    def __call__(self, batches, indices):
+        client_params = self.client_params
+        if self.training:
+            args_tuples = [(i, idx, self.model, batches[i], self.params)
+                            for i, idx in enumerate(indices)]
+            results = self.process_pool.starmap(update_forward_grad_sketched_gpt2,
+                                                args_tuples)
+            #loss = np.array([r[0] for r in results])
+            return results
+
+        else:
+            global g_criterion
+            """
+            args_tuples = [(self.model, batches[i], self.params, g_criterion)
+                            for i, idx in enumerate(indices)]
+            results = self.process_pool.starmap(forward_gpt2, args_tuples)
+            results = [forward_gpt2(self.model, batches[i], self.params, g_criterion)
+                    for i, idx in enumerate(indices)]
+            nlls = np.array([r[0] for r in results])
+            accs = np.array([r[1] for r in results])
+            ppls = np.array([r[2] for r in results])
+            """
+            nlls, accs, ppls = forward_gpt2(self.model, batches, self.params, g_criterion)
+            return nlls, accs, ppls
+
+    def __getattr__(self, name):
+        if name == "parameters":
+            global g_ps_weights_sm
+            ps_weights = sm2np(g_ps_weights_sm,
+                               (self.params["grad_size"],))
+            curr_weights = torch.from_numpy(ps_weights)
+            curr_weights = curr_weights.to(self.params['device'])
+            set_param_vec(self.model, curr_weights)
+            return getattr(self.model, name)
+
+def update_forward_grad_sketched_gpt2(worker_id, client_id, model,
+                                 batch, params):
+
+    # pull PS and client weights out of the shared memory block
+    grad_size = params["grad_size"]
+    n_clients = params["n_clients"]
+    participation = params["participation"]
+
+    global gw_worker_Sgrads_sm
+    global gw_client_weights_sm
+    global gw_ps_weights_sm
+
+    ps_weights = sm2np(gw_ps_weights_sm, (grad_size,))
+    client_weights = sm2np(gw_client_weights_sm, (n_clients, grad_size))
+
+    worker_weights = client_weights[client_id]
+
+
+    params["device"] = get_worker_device(params["device"])
+    ps_weights = torch.from_numpy(ps_weights).to(params["device"])
+    worker_weights = torch.from_numpy(worker_weights).to(params["device"])
+
+
+    new_worker_weights = get_new_worker_weights(ps_weights,
+                                                worker_weights,
+                                                params)
+
+    loss, Sgrad = forward_grad_sketched_gpt2(
+            model, new_worker_weights,
+            batch, params
+        )
+
+    # write grad to the shared memory grad array in spot worker_id
+    n_workers = int(n_clients * participation)
+    worker_Sgrads_shape = (n_workers, params["num_rows"], params["num_cols"])
+    worker_Sgrads = sm2np(gw_worker_Sgrads_sm, worker_Sgrads_shape)
+    worker_Sgrads[worker_id,:,:] = Sgrad.cpu().numpy()[:,:]
+
+    return loss
+
+def forward_grad_sketched_gpt2(model, weights, batch, params):
+    device = params['device']
+    model.to(device)
+    model.train()
+    weights = weights.to(device)
+    set_param_vec(model, weights)
+    mega_batch = batch
+    grad_accum_steps = params['grad_accum_steps']
+    accum_grad = get_grad(model, weights, params, device=device)
+    batch_size = params['batch_size']
+    #train_batch_size = params['train_batch_size']
+    #print(f"Real batch size: {mega_batch[3].size()[0]} from {train_batch_size} with {[b.size() for b in batch]}")
+    train_batch_size = mega_batch[3].size()[0]
+    accum_loss = 0
+    n_steps = train_batch_size // batch_size
+    for i in range(n_steps):
+        start = i * batch_size
+        end = (i+1) * batch_size
+        batch = [b[start:end] for b in mega_batch]
+        batch = tuple(input_tensor.to(device) for input_tensor in batch)
+        #print(f"Batch size: {[b.size() for b in batch]}")
+        input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids = batch
+        (lm_loss), (mc_loss), *_ = model(
+            input_ids, token_type_ids=token_type_ids, mc_token_ids=mc_token_ids,
+            mc_labels=mc_labels, lm_labels=lm_labels
+        )
+        loss = (lm_loss * params['lm_coef'] + mc_loss * params['mc_coef']) 
+        for p in model.parameters():
+            if p.grad is not None:
+                p.grad.detach_()
+                p.grad.zero_()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(weights, params['max_norm'])
+        grad = get_grad(model, weights, params, device=device)
+        accum_grad += grad
+        accum_loss += loss.item()
+    sketch = CSVec(d=params['grad_size'], c=params['num_cols'],
+        r=params['num_rows'], device=device,
+        numBlocks=params['num_blocks'])
+    sketch.accumulateVec(accum_grad)
+    table = sketch.table.cpu()
+    return accum_loss/max(n_steps, 1), table
+
+def forward_gpt2(model, batch, params, criterion):
+    # pull PS weights out of the shared memory block
+    grad_size = params["grad_size"]
+    device = params['device']
+    global g_ps_weights_sm
+    ps_weights = sm2np(g_ps_weights_sm, (params["grad_size"],))
+    ps_weights = torch.from_numpy(ps_weights).to(params["device"])
+    model.to(device)
+    model.eval()
+    set_param_vec(model, ps_weights)
+    logits, labels = inference(model, batch, params)
+    lm_logits, mc_logits = logits
+    lm_labels, mc_labels = labels
+    nll = criterion(lm_logits, lm_labels).detach().cpu().numpy()
+    acc = accuracy(mc_logits, mc_labels)
+    ppl = np.exp(nll)
+    return nll, acc, ppl
+
+def accuracy(y_pred, y):
+    y_pred, y = _check_shape(y_pred, y)
+    indices = torch.argmax(y_pred, dim=1)
+    correct = torch.eq(indices, y).view(-1)
+    _num_correct, _num_examples = 0, 0
+    _num_correct += torch.sum(correct).item()
+    _num_examples += correct.shape[0]
+    acc = _num_correct/_num_examples
+    return acc
+
+def _check_shape(y_pred, y):
+    if y.ndimension() > 1 and y.shape[1] == 1:
+        # (N, 1, ...) -> (N, ...)
+        y = y.squeeze(dim=1)
+    if y_pred.ndimension() > 1 and y_pred.shape[1] == 1:
+        # (N, 1, ...) -> (N, ...)
+        y_pred = y_pred.squeeze(dim=1)
+    if not (y.ndimension() == y_pred.ndimension() or y.ndimension() + 1 == y_pred.ndimension()):
+        raise ValueError("y must have shape of (batch_size, ...) and y_pred must have "
+             "shape of (batch_size, num_categories, ...) or (batch_size, ...), "
+             "but given {} vs {}.".format(y.shape, y_pred.shape))
+    y_shape = y.shape
+    y_pred_shape = y_pred.shape
+    if y.ndimension() + 1 == y_pred.ndimension():
+        y_pred_shape = (y_pred_shape[0],) + y_pred_shape[2:]
+    if not (y_shape == y_pred_shape):
+        raise ValueError("y and y_pred must have compatible shapes.")
+    return y_pred, y
+
+def inference(model, batch, params):
+    model.eval()
+    with torch.no_grad():
+        batch = tuple(input_tensor.to(params["device"]) for input_tensor in batch)
+        input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids = batch
+        model_outputs = model(input_ids, mc_token_ids, token_type_ids=token_type_ids)
+        lm_logits, mc_logits, *_ = model(
+            input_ids, token_type_ids=token_type_ids, mc_token_ids=mc_token_ids,
+        )
+        lm_logits_flat_shifted = lm_logits[..., :-1, :].contiguous().view(-1, lm_logits.size(-1))
+        lm_labels_flat_shifted = lm_labels[..., 1:].contiguous().view(-1)
+        return (lm_logits_flat_shifted, mc_logits), (lm_labels_flat_shifted, mc_labels)
