@@ -365,7 +365,7 @@ def train():
     if args.test:
         args.train_batch_size = 2
         args.gradient_accumulation_steps = 2
-        args.clients = 7
+        args.clients = 6
         args.valid_batch_size = 2
         args.epochs = 1
         args.sketch = True
