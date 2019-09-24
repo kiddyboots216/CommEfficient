@@ -1,9 +1,10 @@
-import ray
 import torch
 import numpy as np
 from csvec import CSVec
 import copy
 from minimal_failure import ray_free, ray_get_and_free
+
+import cProfile
 
 import ctypes
 import multiprocessing
@@ -11,7 +12,7 @@ from multiprocessing.sharedctypes import RawArray
 from multiprocessing import Array
 #from multiprocessing import shared_memory
 
-GPUS_PER_MACHINE = 4
+GPUS_PER_MACHINE = 8
 
 GPUS_ALLOCATED = 1.0
 CPUS_ALLOCATED = 1
@@ -42,6 +43,14 @@ def sm2np(sm, shape, dtype=ctypes.c_float):
     #nparray = np.frombuffer(sm, dtype=ctypes.c_float)
     assert(nparray.base is sm)
     return nparray
+
+def profile_helper(*args):
+    cProfile.runctx("update_forward_grad_sketched(*args)",
+                    globals(), locals(),
+                    "profile/init{:d}.prof".format(
+                        multiprocessing.current_process()._identity[0]
+                    )
+                   )
 
 class FedCommEffModel:
     def __init__(self, model_cls, model_config, params):
@@ -153,8 +162,11 @@ class FedCommEffModel:
                             batches[i][0], batches[i][1], self.params,
                             g_criterion, g_accuracy)
                            for i, idx in enumerate(indices)]
-            results = self.process_pool.starmap(update_forward_grad_sketched,
-                                                args_tuples)
+            results = self.process_pool.starmap(
+                    #profile_helper,
+                    update_forward_grad_sketched,
+                    args_tuples
+                )
             """
             processes = []
             for i in range(len(indices)):
