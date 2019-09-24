@@ -64,6 +64,7 @@ def run_batches(model, opt, scheduler, loader, params, timer, training, logger=N
         losses = []
         global start_idx
         for batch_idx, batch in enumerate(loader):
+            #print(f"Batch size: {[b.size() for b in batch]}")
             start_idx = start_idx % n_clients
             end_idx = start_idx + n_clients_to_select
             idx = np.random.choice(clients, 
@@ -73,8 +74,8 @@ def run_batches(model, opt, scheduler, loader, params, timer, training, logger=N
             #print(f"Selecting in order {idx}")
             minibatches = []
             for i, _ in enumerate(idx):
-                start = i * batch_size // n_clients_to_select
-                end = (i+1) * batch_size // n_clients_to_select
+                start = i * batch_size 
+                end = (i+1) * batch_size 
                 minibatch = [b[start:end] for b in batch]
                 minibatches.append(minibatch)
             loss = model(minibatches, idx)
@@ -97,8 +98,10 @@ def run_batches(model, opt, scheduler, loader, params, timer, training, logger=N
             summary = union({'batch_idx': batch_idx+1,
                 'lr': lr}, batch_stats)
             logger.append(summary)
+            """
             if params['test']:
                 break
+            """
         return np.mean(losses)
 
     else:
@@ -181,12 +184,14 @@ def get_data_loaders(args, tokenizer, test=False):
 
     logger.info("Build inputs and labels")
     datasets = {"train": defaultdict(list), "valid": defaultdict(list)}
+    dialogs_processed = 0
     for dataset_name, dataset in personachat.items():
         num_candidates = len(dataset[0]["utterances"][0]["candidates"])
         if args.num_candidates > 0 and dataset_name == 'train':
             num_candidates = min(args.num_candidates, num_candidates)
         for dialog in dataset:
             persona = dialog["personality"].copy()
+            dialogs_processed += 1
             for _ in range(args.personality_permutations):
                 for utterance in dialog["utterances"]:
                     history = utterance["history"][-(2*args.max_history+1):]
@@ -198,7 +203,7 @@ def get_data_loaders(args, tokenizer, test=False):
                     datasets[dataset_name]["mc_labels"].append(num_candidates - 1)
                     datasets[dataset_name]["n_candidates"] = num_candidates
                 persona = [persona[-1]] + persona[:-1]  # permuted personalities
-            if test:
+            if test and dialogs_processed > 4:
                 break
 
     logger.info("Pad inputs and convert to Tensor")
@@ -268,16 +273,15 @@ def train():
     args = parser.parse_args()
 
     if args.test:
-        args.k = 10
-        args.cols = 10
-        args.rows = 3
         args.train_batch_size = 2
+        args.gradient_accumulation_steps = 2
+        args.clients = 7
         args.valid_batch_size = 2
         args.epochs = 1
-        args.clients = 1
-        args.gradient_accumulation_steps = 1
+        args.sketch = True
+        args.virtual_error_sketch = True
+        args.virtual_momentum_sketch = True
         args.participation = 1.0
-        args.object_store_memory = 2e10
 
     params = {
         "device": args.device,
@@ -287,7 +291,7 @@ def train():
         "p2": args.p2,
         "num_cols": args.cols,
         "num_rows": args.rows,
-        "batch_size": 2,
+        "batch_size": args.train_batch_size,
         "num_blocks": args.num_blocks,
         # federation params
         "n_clients": args.clients,
@@ -317,10 +321,11 @@ def train():
         "lm_coef": args.lm_coef,
         "mc_coef": args.mc_coef,
         "grad_accum_steps": args.gradient_accumulation_steps,
+        "valid_batch_size": args.valid_batch_size,
     }
-    args.train_batch_size *= params["n_clients_per_round"]
+    args.train_batch_size *= params["grad_accum_steps"]
     params["train_batch_size"] = args.train_batch_size
-    params["valid_batch_size"] = args.valid_batch_size
+    args.train_batch_size *= params["n_clients_per_round"]
 
     logging.basicConfig(level=logging.INFO)
     logger.info("Arguments: %s", pformat(args))
@@ -343,7 +348,7 @@ def train():
     # Add special tokens if they are not already added
     add_special_tokens_(model, tokenizer)
     # HAVE TO USE SGD FOR FED
-    optimizer = SGD(model.parameters(), lr=1, momentum=0.9)
+    optimizer = SGD(model.parameters(), lr=params["lr"], momentum=params["momentum"])
 
     logger.info('Finished in {:.2f} seconds'.format(timer()))
     logger.info("Prepare datasets")

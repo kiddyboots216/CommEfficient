@@ -872,11 +872,17 @@ def forward_grad_sketched_gpt2(model, weights, batch, params):
     grad_accum_steps = params['grad_accum_steps']
     accum_grad = get_grad(model, weights, params, device=device)
     batch_size = params['batch_size']
-    for i in range(grad_accum_steps):
+    #train_batch_size = params['train_batch_size']
+    #print(f"Real batch size: {mega_batch[3].size()[0]} from {train_batch_size} with {[b.size() for b in batch]}")
+    train_batch_size = mega_batch[3].size()[0]
+    accum_loss = 0
+    n_steps = train_batch_size // batch_size
+    for i in range(n_steps):
         start = i * batch_size
         end = (i+1) * batch_size
         batch = [b[start:end] for b in mega_batch]
         batch = tuple(input_tensor.to(device) for input_tensor in batch)
+        #print(f"Batch size: {[b.size() for b in batch]}")
         input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids = batch
         (lm_loss), (mc_loss), *_ = model(
             input_ids, token_type_ids=token_type_ids, mc_token_ids=mc_token_ids,
@@ -888,16 +894,16 @@ def forward_grad_sketched_gpt2(model, weights, batch, params):
                 p.grad.detach_()
                 p.grad.zero_()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), params['max_norm'])
+        torch.nn.utils.clip_grad_norm_(weights, params['max_norm'])
         grad = get_grad(model, weights, params, device=device)
         accum_grad += grad
+        accum_loss += loss.item()
     sketch = CSVec(d=params['grad_size'], c=params['num_cols'],
         r=params['num_rows'], device=device,
         numBlocks=params['num_blocks'])
     sketch.accumulateVec(accum_grad)
     table = sketch.table.cpu()
-    del sketch
-    return loss.item(), table
+    return accum_loss/max(n_steps, 1), table
 
 def forward_gpt2(model, batch, params, criterion):
     # pull PS weights out of the shared memory block
