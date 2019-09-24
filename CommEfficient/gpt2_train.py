@@ -294,7 +294,7 @@ def get_data_loaders(args, tokenizer, test=False):
                     datasets[dataset_name]["mc_labels"].append(num_candidates - 1)
                     datasets[dataset_name]["n_candidates"] = num_candidates
                 persona = [persona[-1]] + persona[:-1]  # permuted personalities
-            if test and dialogs_processed > 4:
+            if test and dialogs_processed > args.n_dialogs:
                 break
 
     logger.info("Pad inputs and convert to Tensor")
@@ -359,8 +359,7 @@ def train():
     parser.add_argument("--grad_reduce", choices=["sum", "mean", "median"], default="sum")
     parser.add_argument("--clients", type=int, default=1)
     parser.add_argument("--participation", type=float, default=1.0)
-    parser.add_argument("--error_accum", choices=['True', 'False'], default='True')
-    parser.add_argument("--object_store_memory", type=float, default=1e11)
+    parser.add_argument("--n_dialogs", type=int, default=1)
     args = parser.parse_args()
 
     if args.test:
@@ -401,7 +400,6 @@ def train():
         "topk_down": args.topk_down,
         "true_topk": args.true_topk,
         "local_topk": args.local_topk,
-        "error_accum": True if args.error_accum == 'True' else False,
         "do_virtual_momentum_sketch": args.virtual_momentum_sketch,
         "do_local_momentum_sketch": args.local_momentum_sketch,
         "do_virtual_error_sketch": args.virtual_error_sketch,
