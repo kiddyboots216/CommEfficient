@@ -98,17 +98,8 @@ class AttrDict(dict):
         super(AttrDict, self).__init__(*args, **kwargs)
         self.__dict__ = self
 
-
-def make_logdir(model_name: str):
-    """"""
-    # Code copied from ignite repo
-    current_time = datetime.now().strftime('%b%d_%H-%M-%S')
-    logdir = os.path.join(
-        'runs', current_time + '_' + socket.gethostname() + '_' + model_name)
-    return logdir
-
 # FedSketched imports
-from CommEfficient.functions import FedCommEffOptimizer, FedCommEffCriterion, FedCommEffModelGPT2
+from CommEfficient.functions import FedCommEffOptimizer, FedCommEffCriterion, FedCommEffModelGPT2, make_logdir
 from CommEfficient.minimal import PiecewiseLinear, TableLogger, TSVLogger, Timer, union
 from torch.optim import SGD
 from torch.utils.tensorboard import SummaryWriter

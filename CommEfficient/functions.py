@@ -1,4 +1,7 @@
 import torch
+from datetime import datetime
+import os
+import logging
 import numpy as np
 from csvec import CSVec
 import copy
@@ -8,8 +11,6 @@ import multiprocessing
 from multiprocessing.sharedctypes import RawArray
 from multiprocessing import Array
 #from multiprocessing import shared_memory
-
-GPUS_PER_MACHINE = 8
 
 GPUS_ALLOCATED = 1.0
 CPUS_ALLOCATED = 1
@@ -28,6 +29,20 @@ g_ps_weights_sm = None
 
 g_criterion = None
 g_accuracy = None
+
+def make_logdir(params: dict):
+    rows = params["num_rows"]
+    cols = params["num_cols"]
+    k = params["k"]
+    sketch = params["sketch"]
+    sketch_str = f"{rows} x {cols} : {k}" if sketch else "False"
+    workers = params["n_workers"]
+    clients = params["n_clients"]
+    clients_str = f"{workers}/{clients}"
+    current_time = datetime.now().strftime('%b%d_%H-%M-%S')
+    logdir = os.path.join(
+        'runs', current_time + '_' + clients_str + '_' + sketch_str)
+    return logdir
 
 def init_pool(worker_Sgrads_sm, client_weights_sm, ps_weights_sm):
     global gw_worker_Sgrads_sm, gw_client_weights_sm, gw_ps_weights_sm
@@ -102,7 +117,7 @@ class FedCommEffModel:
 
         # this shared memory block will hold the gradient sketches computed
         # by each worker in a round
-        n_workers = int(n_clients * participation)
+        n_workers = params["n_workers"]
         g_worker_Sgrads_sm = Array(
                 'f',
                 n_workers * params["num_rows"] * params["num_cols"],
@@ -114,7 +129,7 @@ class FedCommEffModel:
         worker_Sgrads[:] = 0
 
         self.process_pool = multiprocessing.Pool(
-                GPUS_PER_MACHINE,
+                n_workers,
                 initializer=init_pool,
                 initargs=(g_worker_Sgrads_sm, g_client_weights_sm,
                           g_ps_weights_sm)
@@ -130,7 +145,7 @@ class FedCommEffModel:
         global g_criterion
         global g_accuracy
         if self.training:
-            batches = [(x.cpu(), y.cpu()) for x,y in batches]
+            # batches = [(x.cpu(), y.cpu()) for x,y in batches]
             # update client state dicts
             #x = ray.put(accuracy)
             """
@@ -169,7 +184,7 @@ class FedCommEffModel:
             return outs, loss, acc
         else:
             # param server does validation
-            batches = [batches[0].cpu(), batches[1].cpu()]
+            # batches = [batches[0].cpu(), batches[1].cpu()]
             outs, loss, acc = forward(
                     self.model_cls, self.model_config,
                     *batches,
@@ -206,16 +221,8 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         momentum_copy = None
         n_errors = 1
         error_copy = None
-        """
-        if params['virtual_momentum']:
-            n_momentums = params['n_clients_per_round']
-            momentum_copy = torch.zeros(grad_size)
-        elif params['local_momentum']:
-            n_momentums = params['n_clients']
-            momentum_copy = torch.zeros(grad_size)
-        """
         if params['do_virtual_momentum_sketch']:
-            n_momentums = params['n_clients_per_round']
+            n_momentums = params['n_workers']
             momentum_copy = self.sketch
         elif params['do_local_momentum_sketch']:
             n_momentums = params['n_clients']
@@ -223,7 +230,7 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         self.momentums = [copy.deepcopy(momentum_copy) for _ in range(
             n_momentums)]
         if params['do_virtual_error_sketch']:
-            n_errors = params['n_clients_per_round']
+            n_errors = params['n_workers']
             error_copy = self.sketch
         elif params['do_local_error_sketch']:
             n_errors = params['n_clients']
@@ -329,13 +336,15 @@ def update_forward_grad(client_weights, client_error, curr_weights, model_cls,
             g_accuracy, params)
     return outs, loss, acc, grad, new_client_weights.cpu()
 
-def get_worker_device(device):
+def get_worker_device(params):
     # cpu => cpu; cuda => cuda:#
     # bad! relying on private _identity. Lazy!
+    device = params["device"]
+    n_workers = params["n_workers"]
     worker_id = multiprocessing.current_process()._identity[0]
     if device == "cuda":
-        #device = "cuda:{:d}".format(worker_id % GPUS_PER_MACHINE)
-        device = "cuda:{:d}".format((worker_id % 7) + 1)
+        device = "cuda:{:d}".format(worker_id % n_workers)
+        #device = "cuda:{:d}".format((worker_id % 7) + 1)
     return device
 
 def update_forward_grad_sketched(worker_id, client_id, model_cls,
@@ -357,7 +366,7 @@ def update_forward_grad_sketched(worker_id, client_id, model_cls,
     worker_weights = client_weights[client_id]
 
 
-    params["device"] = get_worker_device(params["device"])
+    params["device"] = get_worker_device(params)
     ps_weights = torch.from_numpy(ps_weights).to(params["device"])
     worker_weights = torch.from_numpy(worker_weights).to(params["device"])
 
@@ -664,7 +673,7 @@ def get_grad(model, weights, params, train=True, device='cpu'):
     if train:
         grad_vec = get_grad_vec(model)
         if params['weight_decay'] != 0:
-            grad_vec.add_(params['weight_decay']/params['n_clients_per_round'],
+            grad_vec.add_(params['weight_decay']/params['n_workers'],
                 weights)
         return grad_vec.to(device)
     else:
@@ -754,7 +763,7 @@ class FedCommEffModelGPT2:
 
         # this shared memory block will hold the gradient sketches computed
         # by each worker in a round
-        n_workers = params['n_clients_per_round']
+        n_workers = params['n_workers']
         g_worker_Sgrads_sm = Array(
                 'f',
                 n_workers * params["num_rows"] * params["num_cols"],
@@ -766,7 +775,7 @@ class FedCommEffModelGPT2:
         worker_Sgrads[:] = 0
 
         self.process_pool = multiprocessing.Pool(
-                params['n_clients_per_round'],
+                params['n_workers'],
                 initializer=init_pool,
                 initargs=(g_worker_Sgrads_sm, g_client_weights_sm,
                           g_ps_weights_sm)
@@ -838,7 +847,7 @@ def update_forward_grad_sketched_gpt2(worker_id, client_id, model,
     worker_weights = client_weights[client_id]
 
 
-    params["device"] = get_worker_device(params["device"])
+    params["device"] = get_worker_device(params)
     ps_weights = torch.from_numpy(ps_weights).to(params["device"])
     worker_weights = torch.from_numpy(worker_weights).to(params["device"])
     model.to(params["device"])
@@ -853,7 +862,7 @@ def update_forward_grad_sketched_gpt2(worker_id, client_id, model,
         )
 
     # write grad to the shared memory grad array in spot worker_id
-    n_workers = params["n_clients_per_round"]
+    n_workers = params["n_workers"]
     worker_Sgrads_shape = (n_workers, params["num_rows"], params["num_cols"])
     worker_Sgrads = sm2np(gw_worker_Sgrads_sm, worker_Sgrads_shape)
     worker_Sgrads[worker_id,:,:] = Sgrad.cpu().numpy()[:,:]

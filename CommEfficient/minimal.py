@@ -97,6 +97,17 @@ class Cutout(namedtuple('Cutout', ('h', 'w'))):
         C, H, W = x_shape
         return {'x0': range(W+1-self.w), 'y0': range(H+1-self.h)}
 
+def cifar10(root):
+    train_set = torchvision.datasets.CIFAR10(root=root, train=True,
+                                             download=True)
+    test_set = torchvision.datasets.CIFAR10(root=root, train=False,
+                                            download=True)
+    return {
+        'train': {'data': train_set.train_data,
+                  'labels': train_set.train_labels},
+        'test': {'data': test_set.test_data,
+                 'labels': test_set.test_labels}
+    }
 
 class Transform():
     def __init__(self, dataset, transforms):
@@ -125,18 +136,6 @@ class Transform():
             self.choices.append({k:np.random.choice(v, size=N)
                                  for (k,v) in options.items()})
 
-def cifar10(root):
-    train_set = torchvision.datasets.CIFAR10(root=root, train=True,
-                                             download=True)
-    test_set = torchvision.datasets.CIFAR10(root=root, train=False,
-                                            download=True)
-    return {
-        'train': {'data': train_set.train_data,
-                  'labels': train_set.train_labels},
-        'test': {'data': test_set.test_data,
-                 'labels': test_set.test_labels}
-    }
-
 #####################
 ## data loading
 #####################
@@ -155,6 +154,9 @@ class Batches():
     def __iter__(self):
         if self.set_random_choices:
             self.dataset.set_random_choices()
+        return ([x, y.long()] for (x,y) in self.dataloader)
+        return ({'input': x, 'target': y.long()}
+                for (x,y) in self.dataloader)
         return ({'input': x.cuda(), 'target': y.cuda().long()}
                 for (x,y) in self.dataloader)
 

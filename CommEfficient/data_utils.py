@@ -6,11 +6,17 @@ import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 from torch.utils.data.dataset import Dataset
 DATA_PATH = 'sample_data'
+def transpose(x, source='NHWC', target='NCHW'):
+    return x.transpose([source.index(d) for d in target])
 def get_cifar10():
     '''Return CIFAR10 train/test data and labels as numpy arrays'''
     data_train = torchvision.datasets.CIFAR10(root=os.path.join(DATA_PATH, "CIFAR10"), train=True, download=True) 
     data_test = torchvision.datasets.CIFAR10(root=os.path.join(DATA_PATH, "CIFAR10"), train=False, download=True) 
 
+    x_train, y_train = data_train.train_data, np.array(data_train.train_labels)
+    x_test, y_test = data_test.test_data, np.array(data_test.test_labels)
+
+    return x_train, y_train, x_test, y_test
     x_train, y_train = data_train.train_data.transpose((0,3,1,2)), np.array(data_train.train_labels)
     x_test, y_test = data_test.test_data.transpose((0,3,1,2)), np.array(data_test.test_labels)
 
