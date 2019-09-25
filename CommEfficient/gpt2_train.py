@@ -352,6 +352,7 @@ def train():
     parser.add_argument("--participation", type=float, default=1.0)
     parser.add_argument("--n_dialogs", type=int, default=1)
     args = parser.parse_args()
+    args.workers = int(args.clients * args.participation)
 
     if args.test:
         args.train_batch_size = 2
@@ -377,7 +378,7 @@ def train():
         # federation params
         "n_clients": args.clients,
         "participation": args.participation, 
-        "n_clients_per_round": int(args.clients * args.participation),
+        "n_workers": args.workers,
         # optimizer params
         "lr": 1, #assumes scheduler accounts for this lr
         "momentum": args.momentum,
