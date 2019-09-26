@@ -343,8 +343,8 @@ def get_worker_device(params):
     n_workers = params["n_workers"]
     worker_id = multiprocessing.current_process()._identity[0]
     if device == "cuda":
-        device = "cuda:{:d}".format(worker_id % n_workers)
-        #device = "cuda:{:d}".format((worker_id % 7) + 1)
+        #device = "cuda:{:d}".format(worker_id % n_workers)
+        device = "cuda:{:d}".format((worker_id % n_workers) + 1)
     return device
 
 def update_forward_grad_sketched(worker_id, client_id, model_cls,
@@ -878,7 +878,7 @@ def forward_grad_sketched_gpt2(model, weights, batch, params):
     mega_batch = batch
     grad_accum_steps = params['grad_accum_steps']
     batch_size = params['batch_size']
-    #train_batch_size = params['train_batch_size']
+    train_batch_size = params['train_batch_size']
     #print(f"Real batch size: {mega_batch[3].size()[0]} from {train_batch_size} with {[b.size() for b in batch]}")
     train_batch_size = mega_batch[3].size()[0]
     accum_loss = None
@@ -894,20 +894,26 @@ def forward_grad_sketched_gpt2(model, weights, batch, params):
             mc_labels=mc_labels, lm_labels=lm_labels
         )
         loss = (lm_loss * params['lm_coef'] + mc_loss * params['mc_coef']) / n_steps
-        print(f"Loss: {loss} from {lm_loss} and {mc_loss}")
+        #print(f"Loss: {loss} from {lm_loss} and {mc_loss}")
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), params['max_norm'])
         if accum_loss is not None:
             accum_loss += loss
         else:
             accum_loss = loss
+        #print(f"accum loss: {accum_loss} from {loss}")
+    #print(f"accum loss: {accum_loss}")
     grad = get_grad(model, weights, params, device=device)
     sketch = CSVec(d=params['grad_size'], c=params['num_cols'],
         r=params['num_rows'], device=device,
         numBlocks=params['num_blocks'])
     sketch.accumulateVec(grad)
     table = sketch.table.cpu()
-    return accum_loss.item()/max(n_steps, 1), table
+    if accum_loss is not None:
+        loss = accum_loss.item()/max(n_steps, 1)
+    else:
+        loss = 0
+    return loss, table
 
 def forward_gpt2(model, batch, params, criterion):
     # pull PS weights out of the shared memory block

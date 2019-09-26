@@ -109,12 +109,13 @@ import multiprocessing
 global start_idx
 start_idx = 0
 
-def train_gpt2(model, opt, scheduler, train_loader, val_loader, params, logger=None, timer=None, writer=None):
+def train_gpt2(model, opt, scheduler, train_loader, val_loader, params, log_dir, logger=None, timer=None, writer=None):
     timer = timer or Timer()
     epochs = params["epochs"]
     for epoch in range(epochs):
         train_loss = run_batches(model, opt, scheduler, train_loader, params, timer, training=True, logger=logger, writer=writer)
         train_time = timer()
+        model.save_pretrained(log_dir)
         nll, acc, ppl = run_batches(model, None, None, val_loader, params, timer, training=False, logger=TableLogger(), writer=writer)
         val_time = timer()
         epoch_stats = {
@@ -174,7 +175,7 @@ def run_batches(model, opt, scheduler, loader, params, timer, training, logger=N
             }
             lr = scheduler.get_lr()[0]
 
-            writer.add_scalar('Loss/train', loss, batch_idx)
+            writer.add_scalar('training/loss', loss, batch_idx)
             writer.add_scalar('Lr', lr, batch_idx)
             writer.add_scalar('Time/train', train_time, batch_idx)
             summary = union({'batch_idx': batch_idx+1,
@@ -352,8 +353,6 @@ def train():
     parser.add_argument("--participation", type=float, default=1.0)
     parser.add_argument("--n_dialogs", type=int, default=1)
     args = parser.parse_args()
-    args.workers = int(args.clients * args.participation)
-
     if args.test:
         args.train_batch_size = 2
         args.gradient_accumulation_steps = 2
@@ -364,6 +363,8 @@ def train():
         args.virtual_error_sketch = True
         args.virtual_momentum_sketch = True
         args.participation = 1.0
+
+    args.workers = int(args.clients * args.participation)
 
     params = {
         "device": args.device,
@@ -406,7 +407,7 @@ def train():
     }
     args.train_batch_size *= params["grad_accum_steps"]
     params["train_batch_size"] = args.train_batch_size
-    args.train_batch_size *= params["n_clients_per_round"]
+    args.train_batch_size *= params["n_workers"]
 
     logging.basicConfig(level=logging.INFO)
     logger.info("Arguments: %s", pformat(args))
@@ -422,7 +423,7 @@ def train():
     model = model_class.from_pretrained(args.model_checkpoint)
     model.to(args.device)
     # Do logging now before we overwrite model
-    log_dir = make_logdir(args.model_checkpoint)
+    log_dir = make_logdir(params)
     writer = SummaryWriter(log_dir=log_dir)
     tokenizer.save_pretrained(log_dir)
     getattr(model, 'module', model).config.to_json_file(os.path.join(log_dir, CONFIG_NAME))
@@ -446,9 +447,8 @@ def train():
             [args.lr, 0.0])
     lambda_step = lambda x: lr_schedule(x)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=[lambda_step])
-    train_gpt2(model, optimizer, scheduler, train_loader, val_loader, params, logger=TableLogger(), timer=timer, writer=writer)
+    train_gpt2(model, optimizer, scheduler, train_loader, val_loader, params, log_dir, logger=TableLogger(), timer=timer, writer=writer)
 
-    model.save_pretrained(log_dir)
 
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
