@@ -511,7 +511,10 @@ def _server_helper_true_topk(momentum_vecs, error_vecs, params, lr):
     assert params["momentum_type"] == "virtual"
     assert params["error_type"] == "none"
 
-    grad_sum = sum(worker_grads)
+    #grad_sum = sum(worker_grads)
+    grad_sum = worker_grads[0]
+    for grad in worker_grads[1:]:
+        grad_sum += grad
     del worker_grads
     # there's only one momentum vector for true topk + virtual momentum
     momentum_vec = momentum_vecs[0]
@@ -520,7 +523,7 @@ def _server_helper_true_topk(momentum_vecs, error_vecs, params, lr):
     update = _topk(momentum_vec, params["k"])
     momentum_vec -= update
 
-    updated_weights = ps_weights - update * lr
+    #updated_weights = ps_weights - update * lr
     return (ps_weights - update * lr).cpu(), [momentum_vec], error_vecs
 
     return updated_weights.cpu(), [momentum_vec], error_vecs
@@ -691,6 +694,7 @@ def _topk(vec, k):
     ret = torch.zeros_like(vec)
     # on a gpu, sorting is faster than pytorch's topk method
     #topkIndices = torch.sort(vec**2)[1][-k:]
+    # however, torch.topk is more space efficient
     topkIndices = torch.topk(vec**2, k)[1]
     ret[topkIndices] = vec[topkIndices]
     return ret

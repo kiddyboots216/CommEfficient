@@ -361,6 +361,7 @@ def train():
     parser.add_argument("--participation", type=float, default=1.0)
     parser.add_argument("--n_dialogs", type=int, default=1)
     args = parser.parse_args()
+    """
     if args.test:
         args.train_batch_size = 2
         args.gradient_accumulation_steps = 2
@@ -370,6 +371,7 @@ def train():
         args.virtual_error_sketch = True
         args.virtual_momentum_sketch = True
         args.participation = 1.0
+    """
 
     args.workers = int(args.clients * args.participation)
 
