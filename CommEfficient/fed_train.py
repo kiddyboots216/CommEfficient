@@ -180,15 +180,17 @@ if __name__ == "__main__":
     parser.add_argument("-momentum", type=float, default=0.9)
     parser.add_argument("-epochs", type=int, default=24)
     parser.add_argument("-test", action="store_true")
-    parser.add_argument("-sketch", action="store_true")
-    parser.add_argument("-virtual_momentum_sketch", action="store_true")
-    parser.add_argument("-local_momentum_sketch", action="store_true")
-    parser.add_argument("-virtual_error_sketch", action="store_true")
-    parser.add_argument("-local_error_sketch", action="store_true")
+    momentum_types = ["none", "local", "virtual"]
+    parser.add_argument("-momentum_type", choices=momentum_types,
+                        default="none")
+    error_types = momentum_types
+    parser.add_argument("-error_type", choices=error_types,
+                        default="none")
     parser.add_argument("-topk_down", action="store_true")
-    parser.add_argument("-true_topk", action="store_true")
-    parser.add_argument("-local_topk", action="store_true")
-    parser.add_argument("-grad_reduce", choices=["sum", "mean", "median"], default="sum")
+    modes = ["sketch", "true_topk", "local_topk"]
+    parser.add_argument("-mode", choices=modes, default="sketch")
+    reductions = ["sum", "mean", "median"]
+    parser.add_argument("-grad_reduce", choices=reductions, default="sum")
     parser.add_argument("-clients", type=int, default=1)
     parser.add_argument("-participation", type=float, default=1.0)
     parser.add_argument("-classes", type=int, default=10)
@@ -242,10 +244,8 @@ if __name__ == "__main__":
         "grad_reduce": args.grad_reduce,
         "DATA_LEN": args.DATA_LEN,
         # algorithmic params
-        "sketch": args.sketch,
+        "mode": args.mode,
         "topk_down": args.topk_down,
-        "true_topk": args.true_topk,
-        "local_topk": args.local_topk,
         "do_virtual_momentum_sketch": args.virtual_momentum_sketch,
         "do_local_momentum_sketch": args.local_momentum_sketch,
         "do_virtual_error_sketch": args.virtual_error_sketch,
