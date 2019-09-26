@@ -98,17 +98,8 @@ class AttrDict(dict):
         super(AttrDict, self).__init__(*args, **kwargs)
         self.__dict__ = self
 
-
-def make_logdir(model_name: str):
-    """"""
-    # Code copied from ignite repo
-    current_time = datetime.now().strftime('%b%d_%H-%M-%S')
-    logdir = os.path.join(
-        'runs', current_time + '_' + socket.gethostname() + '_' + model_name)
-    return logdir
-
 # FedSketched imports
-from CommEfficient.functions import FedCommEffOptimizer, FedCommEffCriterion, FedCommEffModelGPT2
+from CommEfficient.functions import FedCommEffOptimizer, FedCommEffCriterion, FedCommEffModelGPT2, make_logdir
 from CommEfficient.minimal import PiecewiseLinear, TableLogger, TSVLogger, Timer, union
 from torch.optim import SGD
 from torch.utils.tensorboard import SummaryWriter
@@ -118,12 +109,13 @@ import multiprocessing
 global start_idx
 start_idx = 0
 
-def train_gpt2(model, opt, scheduler, train_loader, val_loader, params, logger=None, timer=None, writer=None):
+def train_gpt2(model, opt, scheduler, train_loader, val_loader, params, log_dir, logger=None, timer=None, writer=None):
     timer = timer or Timer()
     epochs = params["epochs"]
     for epoch in range(epochs):
         train_loss = run_batches(model, opt, scheduler, train_loader, params, timer, training=True, logger=logger, writer=writer)
         train_time = timer()
+        model.save_pretrained(log_dir)
         nll, acc, ppl = run_batches(model, None, None, val_loader, params, timer, training=False, logger=TableLogger(), writer=writer)
         val_time = timer()
         epoch_stats = {
@@ -183,7 +175,7 @@ def run_batches(model, opt, scheduler, loader, params, timer, training, logger=N
             }
             lr = scheduler.get_lr()[0]
 
-            writer.add_scalar('Loss/train', loss, batch_idx)
+            writer.add_scalar('training/loss', loss, batch_idx)
             writer.add_scalar('Lr', lr, batch_idx)
             writer.add_scalar('Time/train', train_time, batch_idx)
             summary = union({'batch_idx': batch_idx+1,
@@ -294,7 +286,7 @@ def get_data_loaders(args, tokenizer, test=False):
                     datasets[dataset_name]["mc_labels"].append(num_candidates - 1)
                     datasets[dataset_name]["n_candidates"] = num_candidates
                 persona = [persona[-1]] + persona[:-1]  # permuted personalities
-            if test and dialogs_processed > 4:
+            if test and dialogs_processed > args.n_dialogs:
                 break
 
     logger.info("Pad inputs and convert to Tensor")
@@ -359,20 +351,20 @@ def train():
     parser.add_argument("--grad_reduce", choices=["sum", "mean", "median"], default="sum")
     parser.add_argument("--clients", type=int, default=1)
     parser.add_argument("--participation", type=float, default=1.0)
-    parser.add_argument("--error_accum", choices=['True', 'False'], default='True')
-    parser.add_argument("--object_store_memory", type=float, default=1e11)
+    parser.add_argument("--n_dialogs", type=int, default=1)
     args = parser.parse_args()
-
     if args.test:
         args.train_batch_size = 2
         args.gradient_accumulation_steps = 2
-        args.clients = 7
+        args.clients = 6
         args.valid_batch_size = 2
         args.epochs = 1
         args.sketch = True
         args.virtual_error_sketch = True
         args.virtual_momentum_sketch = True
         args.participation = 1.0
+
+    args.workers = int(args.clients * args.participation)
 
     params = {
         "device": args.device,
@@ -387,7 +379,7 @@ def train():
         # federation params
         "n_clients": args.clients,
         "participation": args.participation, 
-        "n_clients_per_round": int(args.clients * args.participation),
+        "n_workers": args.workers,
         # optimizer params
         "lr": 1, #assumes scheduler accounts for this lr
         "momentum": args.momentum,
@@ -401,7 +393,6 @@ def train():
         "topk_down": args.topk_down,
         "true_topk": args.true_topk,
         "local_topk": args.local_topk,
-        "error_accum": True if args.error_accum == 'True' else False,
         "do_virtual_momentum_sketch": args.virtual_momentum_sketch,
         "do_local_momentum_sketch": args.local_momentum_sketch,
         "do_virtual_error_sketch": args.virtual_error_sketch,
@@ -416,7 +407,7 @@ def train():
     }
     args.train_batch_size *= params["grad_accum_steps"]
     params["train_batch_size"] = args.train_batch_size
-    args.train_batch_size *= params["n_clients_per_round"]
+    args.train_batch_size *= params["n_workers"]
 
     logging.basicConfig(level=logging.INFO)
     logger.info("Arguments: %s", pformat(args))
@@ -432,7 +423,7 @@ def train():
     model = model_class.from_pretrained(args.model_checkpoint)
     model.to(args.device)
     # Do logging now before we overwrite model
-    log_dir = make_logdir(args.model_checkpoint)
+    log_dir = make_logdir(params)
     writer = SummaryWriter(log_dir=log_dir)
     tokenizer.save_pretrained(log_dir)
     getattr(model, 'module', model).config.to_json_file(os.path.join(log_dir, CONFIG_NAME))
@@ -456,9 +447,8 @@ def train():
             [args.lr, 0.0])
     lambda_step = lambda x: lr_schedule(x)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=[lambda_step])
-    train_gpt2(model, optimizer, scheduler, train_loader, val_loader, params, logger=TableLogger(), timer=timer, writer=writer)
+    train_gpt2(model, optimizer, scheduler, train_loader, val_loader, params, log_dir, logger=TableLogger(), timer=timer, writer=writer)
 
-    model.save_pretrained(log_dir)
 
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")

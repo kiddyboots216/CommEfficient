@@ -1,4 +1,7 @@
 import torch
+from datetime import datetime
+import os
+import logging
 import numpy as np
 from csvec import CSVec
 import copy
@@ -10,8 +13,6 @@ import multiprocessing
 from multiprocessing.sharedctypes import RawArray
 from multiprocessing import Array
 #from multiprocessing import shared_memory
-
-GPUS_PER_MACHINE = 8
 
 GPUS_ALLOCATED = 1.0
 CPUS_ALLOCATED = 1
@@ -30,6 +31,20 @@ g_ps_weights_sm = None
 
 g_criterion = None
 g_accuracy = None
+
+def make_logdir(params: dict):
+    rows = params["num_rows"]
+    cols = params["num_cols"]
+    k = params["k"]
+    sketch = params["sketch"]
+    sketch_str = f"{rows} x {cols} : {k}" if sketch else "False"
+    workers = params["n_workers"]
+    clients = params["n_clients"]
+    clients_str = f"{workers}/{clients}"
+    current_time = datetime.now().strftime('%b%d_%H-%M-%S')
+    logdir = os.path.join(
+        'runs', current_time + '_' + clients_str + '_' + sketch_str)
+    return logdir
 
 def init_pool(worker_Sgrads_sm, client_weights_sm, ps_weights_sm):
     global gw_worker_Sgrads_sm, gw_client_weights_sm, gw_ps_weights_sm
@@ -112,7 +127,7 @@ class FedCommEffModel:
 
         # this shared memory block will hold the gradient sketches computed
         # by each worker in a round
-        n_workers = int(n_clients * participation)
+        n_workers = params["n_workers"]
         g_worker_Sgrads_sm = Array(
                 'f',
                 n_workers * params["num_rows"] * params["num_cols"],
@@ -124,7 +139,7 @@ class FedCommEffModel:
         worker_Sgrads[:] = 0
 
         self.process_pool = multiprocessing.Pool(
-                GPUS_PER_MACHINE,
+                n_workers,
                 initializer=init_pool,
                 initargs=(g_worker_Sgrads_sm, g_client_weights_sm,
                           g_ps_weights_sm)
@@ -140,7 +155,7 @@ class FedCommEffModel:
         global g_criterion
         global g_accuracy
         if self.training:
-            batches = [(x.cpu(), y.cpu()) for x,y in batches]
+            # batches = [(x.cpu(), y.cpu()) for x,y in batches]
             # update client state dicts
             #x = ray.put(accuracy)
             """
@@ -182,7 +197,7 @@ class FedCommEffModel:
             return outs, loss, acc
         else:
             # param server does validation
-            batches = [batches[0].cpu(), batches[1].cpu()]
+            # batches = [batches[0].cpu(), batches[1].cpu()]
             outs, loss, acc = forward(
                     self.model_cls, self.model_config,
                     *batches,
@@ -219,16 +234,8 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         momentum_copy = None
         n_errors = 1
         error_copy = None
-        """
-        if params['virtual_momentum']:
-            n_momentums = params['n_clients_per_round']
-            momentum_copy = torch.zeros(grad_size)
-        elif params['local_momentum']:
-            n_momentums = params['n_clients']
-            momentum_copy = torch.zeros(grad_size)
-        """
         if params['do_virtual_momentum_sketch']:
-            n_momentums = params['n_clients_per_round']
+            n_momentums = params['n_workers']
             momentum_copy = self.sketch
         elif params['do_local_momentum_sketch']:
             n_momentums = params['n_clients']
@@ -236,7 +243,7 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         self.momentums = [copy.deepcopy(momentum_copy) for _ in range(
             n_momentums)]
         if params['do_virtual_error_sketch']:
-            n_errors = params['n_clients_per_round']
+            n_errors = params['n_workers']
             error_copy = self.sketch
         elif params['do_local_error_sketch']:
             n_errors = params['n_clients']
@@ -342,13 +349,15 @@ def update_forward_grad(client_weights, client_error, curr_weights, model_cls,
             g_accuracy, params)
     return outs, loss, acc, grad, new_client_weights.cpu()
 
-def get_worker_device(device):
+def get_worker_device(params):
     # cpu => cpu; cuda => cuda:#
     # bad! relying on private _identity. Lazy!
+    device = params["device"]
+    n_workers = params["n_workers"]
     worker_id = multiprocessing.current_process()._identity[0]
     if device == "cuda":
-        #device = "cuda:{:d}".format(worker_id % GPUS_PER_MACHINE)
-        device = "cuda:{:d}".format((worker_id % 7) + 1)
+        #device = "cuda:{:d}".format(worker_id % n_workers)
+        device = "cuda:{:d}".format((worker_id % n_workers) + 1)
     return device
 
 def update_forward_grad_sketched(worker_id, client_id, model_cls,
@@ -370,7 +379,7 @@ def update_forward_grad_sketched(worker_id, client_id, model_cls,
     worker_weights = client_weights[client_id]
 
 
-    params["device"] = get_worker_device(params["device"])
+    params["device"] = get_worker_device(params)
     ps_weights = torch.from_numpy(ps_weights).to(params["device"])
     worker_weights = torch.from_numpy(worker_weights).to(params["device"])
 
@@ -677,7 +686,7 @@ def get_grad(model, weights, params, train=True, device='cpu'):
     if train:
         grad_vec = get_grad_vec(model)
         if params['weight_decay'] != 0:
-            grad_vec.add_(params['weight_decay']/params['n_clients_per_round'],
+            grad_vec.add_(params['weight_decay']/params['n_workers'],
                 weights)
         return grad_vec.to(device)
     else:
@@ -733,8 +742,6 @@ class FedCommEffModelGPT2:
         device = params['device']
         cpu = "cpu"
         self.model_cls = model_cls
-        if params.get('unit_test', False):
-            list(input_model.parameters())[0].data.zero_()
         self.model = input_model.to(device)
         param_vec = get_param_vec(self.model, cpu).numpy()
         grad_size = 0
@@ -769,7 +776,7 @@ class FedCommEffModelGPT2:
 
         # this shared memory block will hold the gradient sketches computed
         # by each worker in a round
-        n_workers = int(n_clients * participation)
+        n_workers = params['n_workers']
         g_worker_Sgrads_sm = Array(
                 'f',
                 n_workers * params["num_rows"] * params["num_cols"],
@@ -781,7 +788,7 @@ class FedCommEffModelGPT2:
         worker_Sgrads[:] = 0
 
         self.process_pool = multiprocessing.Pool(
-                GPUS_PER_MACHINE,
+                params['n_workers'],
                 initializer=init_pool,
                 initargs=(g_worker_Sgrads_sm, g_client_weights_sm,
                           g_ps_weights_sm)
@@ -853,10 +860,10 @@ def update_forward_grad_sketched_gpt2(worker_id, client_id, model,
     worker_weights = client_weights[client_id]
 
 
-    params["device"] = get_worker_device(params["device"])
+    params["device"] = get_worker_device(params)
     ps_weights = torch.from_numpy(ps_weights).to(params["device"])
     worker_weights = torch.from_numpy(worker_weights).to(params["device"])
-
+    model.to(params["device"])
 
     new_worker_weights = get_new_worker_weights(ps_weights,
                                                 worker_weights,
@@ -868,7 +875,7 @@ def update_forward_grad_sketched_gpt2(worker_id, client_id, model,
         )
 
     # write grad to the shared memory grad array in spot worker_id
-    n_workers = int(n_clients * participation)
+    n_workers = params["n_workers"]
     worker_Sgrads_shape = (n_workers, params["num_rows"], params["num_cols"])
     worker_Sgrads = sm2np(gw_worker_Sgrads_sm, worker_Sgrads_shape)
     worker_Sgrads[worker_id,:,:] = Sgrad.cpu().numpy()[:,:]
@@ -877,46 +884,49 @@ def update_forward_grad_sketched_gpt2(worker_id, client_id, model,
 
 def forward_grad_sketched_gpt2(model, weights, batch, params):
     device = params['device']
-    model.to(device)
+    #model.to(device)
     model.train()
-    weights = weights.to(device)
+    #weights = weights.to(device)
     set_param_vec(model, weights)
     mega_batch = batch
     grad_accum_steps = params['grad_accum_steps']
-    accum_grad = get_grad(model, weights, params, device=device)
     batch_size = params['batch_size']
-    #train_batch_size = params['train_batch_size']
+    train_batch_size = params['train_batch_size']
     #print(f"Real batch size: {mega_batch[3].size()[0]} from {train_batch_size} with {[b.size() for b in batch]}")
     train_batch_size = mega_batch[3].size()[0]
-    accum_loss = 0
+    accum_loss = None
     n_steps = train_batch_size // batch_size
     for i in range(n_steps):
         start = i * batch_size
         end = (i+1) * batch_size
         batch = [b[start:end] for b in mega_batch]
         batch = tuple(input_tensor.to(device) for input_tensor in batch)
-        #print(f"Batch size: {[b.size() for b in batch]}")
         input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids = batch
         (lm_loss), (mc_loss), *_ = model(
             input_ids, token_type_ids=token_type_ids, mc_token_ids=mc_token_ids,
             mc_labels=mc_labels, lm_labels=lm_labels
         )
-        loss = (lm_loss * params['lm_coef'] + mc_loss * params['mc_coef']) 
-        for p in model.parameters():
-            if p.grad is not None:
-                p.grad.detach_()
-                p.grad.zero_()
+        loss = (lm_loss * params['lm_coef'] + mc_loss * params['mc_coef']) / n_steps
+        #print(f"Loss: {loss} from {lm_loss} and {mc_loss}")
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(weights, params['max_norm'])
-        grad = get_grad(model, weights, params, device=device)
-        accum_grad += grad
-        accum_loss += loss.item()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), params['max_norm'])
+        if accum_loss is not None:
+            accum_loss += loss
+        else:
+            accum_loss = loss
+        #print(f"accum loss: {accum_loss} from {loss}")
+    #print(f"accum loss: {accum_loss}")
+    grad = get_grad(model, weights, params, device=device)
     sketch = CSVec(d=params['grad_size'], c=params['num_cols'],
         r=params['num_rows'], device=device,
         numBlocks=params['num_blocks'])
-    sketch.accumulateVec(accum_grad)
+    sketch.accumulateVec(grad)
     table = sketch.table.cpu()
-    return accum_loss/max(n_steps, 1), table
+    if accum_loss is not None:
+        loss = accum_loss.item()/max(n_steps, 1)
+    else:
+        loss = 0
+    return loss, table
 
 def forward_gpt2(model, batch, params, criterion):
     # pull PS weights out of the shared memory block
