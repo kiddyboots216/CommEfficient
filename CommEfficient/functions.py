@@ -220,11 +220,7 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         # helper for rest of __init__
         def initialize_helper(thing_type, base_thing, true_topk=False):
             if thing_type == "virtual":
-                if true_topk:
-                    n_things = 1
-                else:
-                    n_things = params["n_workers"]
-                return [copy.deepcopy(base_thing) for _ in range(n_things)]
+                return [copy.deepcopy(base_thing)]
             elif thing_type == "local":
                 return [copy.deepcopy(base_thing)
                         for _ in range(params["n_clients"])]
@@ -501,7 +497,7 @@ def _server_helper_true_topk(momentum_vecs, error_vecs, params, lr):
     global g_ps_weights_sm
     global g_worker_Sgrads_sm
     assert params["momentum_type"] == "virtual"
-    assert params["error_type"] == "none"
+    assert params["error_type"] == "virtual"
 
     device = torch.device(params['device'])
     momentum = params['momentum']
@@ -516,15 +512,14 @@ def _server_helper_true_topk(momentum_vecs, error_vecs, params, lr):
     for grad in worker_grads[1:]:
         grad_sum += torch.from_numpy(grad).to(device)
         del grad
-    """
-    worker_grads = [torch.from_numpy(g).to(device) for g in worker_grads]
-    grad_sum = sum(worker_grads)
-    """
     momentum_vec = momentum_vecs[0]
     momentum_vec = momentum * momentum_vec + grad_sum
-    update = _topk(momentum_vec, params["k"])
-    momentum_vec -= update
-    return (ps_weights - update * lr).cpu(), [momentum_vec], error_vecs
+    error_vec = error_vecs[0]
+    error_vec += momentum_vec
+    update = _topk(error_vec, params["k"])
+    momentum_vec[update.nonzero()] = 0
+    error_vec[update.nonzero()] = 0
+    return (ps_weights - update * lr).cpu(), [momentum_vec], [error_vec]
     """
     grad_sum = torch.from_numpy(worker_grads[0]).to(device)
     del worker_grads[0]

@@ -217,6 +217,7 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)")
     parser.add_argument("--fed", action="store_true")
     parser.add_argument("--DATA_LEN", type=int, default=50000)
+    parser.add_argument("--lr", type=float, default=0.4)
     args = parser.parse_args()
     args.workers = int(args.clients * args.participation)
 
@@ -272,7 +273,7 @@ if __name__ == "__main__":
     train_loader, val_loader = gen_data(args)
     loader_len = args.DATA_LEN // args.batch_size
     print('Initializing everything')
-    lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, 0.4, 0])
+    lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, args.lr, 0])
     if args.grad_reduce == "sum":
         lambda_step = lambda step: lr_schedule(step/loader_len)/args.batch_size
         criterion = torch.nn.CrossEntropyLoss(reduction='sum')
