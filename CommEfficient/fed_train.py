@@ -10,11 +10,13 @@ from minimal import Net, cifar10, Correct, union, PiecewiseLinear, \
         Timer, TableLogger, normalise, pad, transpose, \
         Crop, FlipLR, Cutout, Transform, Batches, TSVLogger
 from gen_data import gen_data
+"""
 from sketched_classes import SketchedModel, SketchedLoss, SketchedWorker, \
         SketchedOptimizer
 from fed_sketched_classes import FedSketchedModel, FedSketchedLoss, \
         FedSketchedOptimizer, FedSketchedWorker
 from fed_param_server import FedParamServer
+"""
 from functions import FedCommEffModel, FedCommEffOptimizer, \
         FedCommEffCriterion, FedCommEffAccuracy, make_logdir
 from data_utils import get_data_loaders, hp_default
@@ -117,14 +119,31 @@ def run_batches(model, opt, scheduler, loaders,
 
     else:
         for batch_idx, batch in enumerate(loaders):
-            idx = [0]
-            outs, loss, acc = model(batch, idx)
+            idx = np.arange(params["n_workers"])
+            inputs, targets = batch
+            minibatches = []
+            batch_len = targets.size()[0]
+            indices = []
+            for i, _ in enumerate(idx):
+                start = i * batch_size // n_workers
+                end = (i+1) * batch_size // n_workers
+                if end > batch_len:
+                    break
+                in_batch = inputs[start:end]
+                target_batch = targets[start:end]
+                minibatch = [in_batch, target_batch]
+                minibatches.append(minibatch)
+                indices.append(i)
+            #print(f"Batch sizes: {[m[1].size() for m in minibatches]}")
+            outs, loss, acc = model(minibatches, indices)
             batch_loss = loss
             batch_acc = acc
-            losses.append(batch_loss)
-            accs.append(batch_acc)
+            losses.append(np.mean(batch_loss))
+            accs.append(np.mean(batch_acc))
+            """
             if params['test']:
                 break
+            """
     return np.mean(losses), np.mean(accs)
 
 def run_batches_fed(model, opt, scheduler, loaders, 
@@ -170,34 +189,34 @@ def run_batches_fed(model, opt, scheduler, loaders,
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("-k", type=int, default=50000)
-    parser.add_argument("-p2", type=int, default=4)
-    parser.add_argument("-cols", type=int, default=500000)
-    parser.add_argument("-rows", type=int, default=5)
-    parser.add_argument("-num_blocks", type=int, default=20)
-    parser.add_argument("-batch_size", type=int, default=512)
-    parser.add_argument("-nesterov", action="store_true")
-    parser.add_argument("-momentum", type=float, default=0.9)
-    parser.add_argument("-epochs", type=int, default=24)
-    parser.add_argument("-test", action="store_true")
+    parser.add_argument("--k", type=int, default=50000)
+    parser.add_argument("--p2", type=int, default=4)
+    parser.add_argument("--cols", type=int, default=500000)
+    parser.add_argument("--rows", type=int, default=5)
+    parser.add_argument("--num_blocks", type=int, default=20)
+    parser.add_argument("--batch_size", type=int, default=512)
+    parser.add_argument("--nesterov", action="store_true")
+    parser.add_argument("--momentum", type=float, default=0.9)
+    parser.add_argument("--epochs", type=int, default=24)
+    parser.add_argument("--test", action="store_true")
     momentum_types = ["none", "local", "virtual"]
-    parser.add_argument("-momentum_type", choices=momentum_types,
+    parser.add_argument("--momentum_type", choices=momentum_types,
                         default="none")
     error_types = momentum_types
-    parser.add_argument("-error_type", choices=error_types,
+    parser.add_argument("--error_type", choices=error_types,
                         default="none")
-    parser.add_argument("-topk_down", action="store_true")
+    parser.add_argument("--topk_down", action="store_true")
     modes = ["sketch", "true_topk", "local_topk"]
-    parser.add_argument("-mode", choices=modes, default="sketch")
+    parser.add_argument("--mode", choices=modes, default="sketch")
     reductions = ["sum", "mean", "median"]
-    parser.add_argument("-grad_reduce", choices=reductions, default="sum")
-    parser.add_argument("-clients", type=int, default=1)
-    parser.add_argument("-participation", type=float, default=1.0)
-    parser.add_argument("-classes", type=int, default=10)
-    parser.add_argument("-balancedness", type=float, default=1.0)
+    parser.add_argument("--grad_reduce", choices=reductions, default="sum")
+    parser.add_argument("--clients", type=int, default=1)
+    parser.add_argument("--participation", type=float, default=1.0)
+    parser.add_argument("--classes", type=int, default=10)
+    parser.add_argument("--balancedness", type=float, default=1.0)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)")
-    parser.add_argument("-fed", action="store_true")
-    parser.add_argument("-DATA_LEN", type=int, default=50000)
+    parser.add_argument("--fed", action="store_true")
+    parser.add_argument("--DATA_LEN", type=int, default=50000)
     args = parser.parse_args()
     args.workers = int(args.clients * args.participation)
 

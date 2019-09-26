@@ -191,16 +191,22 @@ def run_batches(model, opt, scheduler, loader, params, timer, training, logger=N
         nlls, accs, ppls = [], [], []
         for batch_idx, batch in enumerate(loader):
             idx = np.arange(n_clients_to_select)
-            """
             minibatches = []
+            batch_len = batch[3].size()[0]
+            indices = []
+            batch_size = params["valid_batch_size"] 
             for i, _ in enumerate(idx):
                 start = i * batch_size // n_clients_to_select
                 end = (i+1) * batch_size // n_clients_to_select
+                if end > batch_len:
+                    break
                 minibatch = [b[start:end] for b in batch]
                 minibatches.append(minibatch)
-            nll, acc, ppl = model(minibatches, idx)
+                indices.append(i)
+            nll, acc, ppl = model(minibatches, indices)
             """
             nll, acc, ppl = model(batch, idx)
+            """
             nll = np.mean(nll)
             acc = np.mean(acc)
             ppl = np.mean(ppl)
@@ -340,15 +346,17 @@ def train():
     parser.add_argument("--nesterov", action="store_true")
     parser.add_argument("--momentum", type=float, default=0.9)
     parser.add_argument("--test", action="store_true")
-    parser.add_argument("--sketch", action="store_true")
-    parser.add_argument("--virtual_momentum_sketch", action="store_true")
-    parser.add_argument("--local_momentum_sketch", action="store_true")
-    parser.add_argument("--virtual_error_sketch", action="store_true")
-    parser.add_argument("--local_error_sketch", action="store_true")
+    momentum_types = ["none", "local", "virtual"]
+    parser.add_argument("--momentum_type", choices=momentum_types,
+                        default="none")
+    error_types = momentum_types
+    parser.add_argument("--error_type", choices=error_types,
+                        default="none")
     parser.add_argument("--topk_down", action="store_true")
-    parser.add_argument("--true_topk", action="store_true")
-    parser.add_argument("--local_topk", action="store_true")
-    parser.add_argument("--grad_reduce", choices=["sum", "mean", "median"], default="sum")
+    modes = ["sketch", "true_topk", "local_topk"]
+    parser.add_argument("--mode", choices=modes, default="sketch")
+    reductions = ["sum", "mean", "median"]
+    parser.add_argument("--grad_reduce", choices=reductions, default="sum")
     parser.add_argument("--clients", type=int, default=1)
     parser.add_argument("--participation", type=float, default=1.0)
     parser.add_argument("--n_dialogs", type=int, default=1)
@@ -356,7 +364,6 @@ def train():
     if args.test:
         args.train_batch_size = 2
         args.gradient_accumulation_steps = 2
-        args.clients = 6
         args.valid_batch_size = 2
         args.epochs = 1
         args.sketch = True
@@ -389,25 +396,22 @@ def train():
         "grad_reduce": args.grad_reduce,
         "weight_decay": 0,
         # algorithmic params
-        "sketch": args.sketch,
+        "mode": args.mode,
         "topk_down": args.topk_down,
-        "true_topk": args.true_topk,
-        "local_topk": args.local_topk,
-        "do_virtual_momentum_sketch": args.virtual_momentum_sketch,
-        "do_local_momentum_sketch": args.local_momentum_sketch,
-        "do_virtual_error_sketch": args.virtual_error_sketch,
-        "do_local_error_sketch": args.local_error_sketch,
+        "momentum_type": args.momentum_type,
+        "error_type": args.error_type,
         # GPT2 SPECIFIC
         "model_checkpoint": args.model_checkpoint,
         "max_norm": args.max_norm,
         "lm_coef": args.lm_coef,
         "mc_coef": args.mc_coef,
         "grad_accum_steps": args.gradient_accumulation_steps,
-        "valid_batch_size": args.valid_batch_size,
     }
     args.train_batch_size *= params["grad_accum_steps"]
     params["train_batch_size"] = args.train_batch_size
     args.train_batch_size *= params["n_workers"]
+    args.valid_batch_size *= params["n_workers"]
+    params["valid_batch_size"] = args.valid_batch_size
 
     logging.basicConfig(level=logging.INFO)
     logger.info("Arguments: %s", pformat(args))
