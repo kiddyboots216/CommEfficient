@@ -246,10 +246,8 @@ if __name__ == "__main__":
         # algorithmic params
         "mode": args.mode,
         "topk_down": args.topk_down,
-        "do_virtual_momentum_sketch": args.virtual_momentum_sketch,
-        "do_local_momentum_sketch": args.local_momentum_sketch,
-        "do_virtual_error_sketch": args.virtual_error_sketch,
-        "do_local_error_sketch": args.local_error_sketch,
+        "momentum_type": args.momentum_type,
+        "error_type": args.error_type,
     }
 
     train_loader, val_loader = gen_data(args)

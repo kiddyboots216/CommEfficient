@@ -37,7 +37,7 @@ def make_logdir(params: dict):
     rows = params["num_rows"]
     cols = params["num_cols"]
     k = params["k"]
-    sketch = params["sketch"]
+    sketch = params["mode"] == "sketch"
     sketch_str = f"{rows} x {cols} : {k}" if sketch else "False"
     workers = params["n_workers"]
     clients = params["n_clients"]
@@ -47,7 +47,8 @@ def make_logdir(params: dict):
         'runs', current_time + '_' + clients_str + '_' + sketch_str)
     return logdir
 
-def init_pool(worker_Sgrads_sm, client_weights_sm, ps_weights_sm):
+def init_pool(worker_Sgrads_sm, worker_grads_sm,
+              client_weights_sm, ps_weights_sm):
     global gw_ps_weights_sm
     global gw_client_weights_sm
     global gw_worker_Sgrads_sm
@@ -147,8 +148,8 @@ class FedCommEffModel:
         self.process_pool = multiprocessing.Pool(
                 n_workers,
                 initializer=init_pool,
-                initargs=(g_worker_Sgrads_sm, g_client_weights_sm,
-                          g_ps_weights_sm)
+                initargs=(g_worker_Sgrads_sm, g_worker_grads_sm,
+                          g_client_weights_sm, g_ps_weights_sm)
             )
 
     def train(self, training):
@@ -221,6 +222,8 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
                 msg = "{} is an invalid type"
                 raise ValueError(msg.format(thing_type))
 
+        # hack so there isn't a not defined error later...
+        self.base_sketch = None
         if params["mode"] == "sketch":
             sketch = CSVec(d=grad_size, c=params['num_cols'],
                            r=params['num_rows'], device=device,
@@ -239,7 +242,7 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
                 )
         elif params["mode"] in ["true_topk", "local_topk"]:
             # same as above but with vectors instead of sketches
-            zero_vec = torch.zeros(params["grad_size"])
+            zero_vec = torch.zeros(params["grad_size"]).to(device)
             self.momentums = initialize_helper(
                     params["momentum_type"], zero_vec
                 )
@@ -255,19 +258,27 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         # in this method we're agnostic as to whether we're sketched,
         # true topk, or local topk
         lr = self.get_lr()
-        if self.params['momentum_type'] == "virutal":
+        cur_momentums = None
+        if self.params['momentum_type'] == "virtual":
             cur_momentums = self.momentums
         elif self.params['momentum_type'] == "local":
             cur_momentums = [self.momentums[idx] for idx in indices]
         elif self.params["momentum_type"] == "none":
             cur_momentums = None
+        else:
+            msg = "invalid momentum type {}"
+            raise ValueError(msg.format(self.params["momentum_type"]))
 
+        cur_errors = None
         if self.params['error_type'] == "virtual":
             cur_errors = self.errors
         elif self.params['error_type'] == "local":
             cur_errors = [self.errors[idx] for idx in indices]
         elif self.params["error_type"] == "none":
             cur_errors = None
+        else:
+            msg = "invalid error type {}"
+            raise ValueError(msg.format(self.params["error_type"]))
 
         new_ps_weights, new_momentums, new_errors = get_updated_server(
                 cur_momentums,
@@ -364,11 +375,11 @@ def update_forward_grad(worker_id, client_id, model_cls,
     if params["mode"] == "sketch":
         worker_Sgrads_shape = (n_workers, params["num_rows"], params["num_cols"])
         worker_Sgrads = sm2np(gw_worker_Sgrads_sm, worker_Sgrads_shape)
-        worker_Sgrads[worker_id,:,:] = Sgrad.cpu().numpy()[:,:]
+        worker_Sgrads[worker_id,:,:] = g.cpu().numpy()[:,:]
     elif params["mode"] == "true_topk":
         worker_grads_shape = (n_workers, params["grad_size"])
         worker_grads = sm2np(gw_worker_grads_sm, worker_grads_shape)
-        worker_grads[worker_id,:] = grad.cpu().numpy()[:]
+        worker_grads[worker_id,:] = g.cpu().numpy()[:]
 
     return outs.numpy(), loss, acc
 
@@ -459,6 +470,9 @@ def _server_helper_true_topk(momentum_vecs, error_vecs, params, lr):
     global g_ps_weights_sm
     global g_worker_Sgrads_sm
 
+    device = torch.device(params['device'])
+    momentum = params['momentum']
+
     ps_weights = sm2np(g_ps_weights_sm, (params["grad_size"],),)
     ps_weights = torch.from_numpy(ps_weights).to(device)
 
@@ -474,13 +488,13 @@ def _server_helper_true_topk(momentum_vecs, error_vecs, params, lr):
     grad_sum = sum(worker_grads)
     # there's only one momentum vector for true topk + virtual momentum
     momentum_vec = momentum_vecs[0]
-    momentum_vec = 0.9 * momentum_vec + grad_sum
+    momentum_vec = momentum * momentum_vec + grad_sum
     update = _topk(momentum_vec, params["k"])
     momentum_vec -= update
 
     updated_weights = ps_weights - update * lr
 
-    return updated_weights, [momentum_vec], error_vec
+    return updated_weights.cpu(), [momentum_vec], error_vecs
 
 def _server_helper_sketched(momentum_sketches, error_sketches,
                             params, lr, sketch):
