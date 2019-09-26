@@ -512,14 +512,13 @@ def _server_helper_true_topk(momentum_vecs, error_vecs, params, lr):
     assert params["error_type"] == "none"
 
     #grad_sum = sum(worker_grads)
-    grad_sum = worker_grads[0]
     for grad in worker_grads[1:]:
-        grad_sum += grad
-    del worker_grads
+        worker_grads[0] += grad
+    del worker_grads[1:]
     # there's only one momentum vector for true topk + virtual momentum
     momentum_vec = momentum_vecs[0]
-    momentum_vec = momentum * momentum_vec + grad_sum
-    del grad_sum
+    momentum_vec = momentum * momentum_vec + worker_grads[0]
+    del worker_grads[0]
     update = _topk(momentum_vec, params["k"])
     momentum_vec -= update
 
