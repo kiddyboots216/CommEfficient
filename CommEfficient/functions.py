@@ -218,9 +218,13 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         device = params['device']
 
         # helper for rest of __init__
-        def initialize_helper(thing_type, base_thing):
+        def initialize_helper(thing_type, base_thing, true_topk=False):
             if thing_type == "virtual":
-                return [copy.deepcopy(base_thing) for _ in range(params["n_workers"])]
+                if true_topk:
+                    n_things = 1
+                else:
+                    n_things = params["n_workers"]
+                return [copy.deepcopy(base_thing) for _ in range(n_things)]
             elif thing_type == "local":
                 return [copy.deepcopy(base_thing)
                         for _ in range(params["n_clients"])]
@@ -251,8 +255,9 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         elif params["mode"] in ["true_topk", "local_topk"]:
             # same as above but with vectors instead of sketches
             zero_vec = torch.zeros(params["grad_size"]).to(device)
+            true_topk = params["mode"] == "true_topk"
             self.momentums = initialize_helper(
-                    params["momentum_type"], zero_vec
+                    params["momentum_type"], zero_vec, true_topk=true_topk
                 )
             self.errors = initialize_helper(
                     params["error_type"], zero_vec
@@ -495,6 +500,8 @@ def get_updated_server(momentums, errors, params, lr, sketch=None):
 def _server_helper_true_topk(momentum_vecs, error_vecs, params, lr):
     global g_ps_weights_sm
     global g_worker_Sgrads_sm
+    assert params["momentum_type"] == "virtual"
+    assert params["error_type"] == "none"
 
     device = torch.device(params['device'])
     momentum = params['momentum']
@@ -505,25 +512,45 @@ def _server_helper_true_topk(momentum_vecs, error_vecs, params, lr):
     n_workers = int(params["n_clients"] * params["participation"])
     worker_grads_shape = (n_workers, params["grad_size"])
     worker_grads = sm2np(g_worker_grads_sm, worker_grads_shape)
-    worker_grads = [torch.from_numpy(g).to(device)
-                    for g in worker_grads]
-
-    assert params["momentum_type"] == "virtual"
-    assert params["error_type"] == "none"
-
-    #grad_sum = sum(worker_grads)
+    grad_sum = torch.from_numpy(worker_grads[0]).to(device)
     for grad in worker_grads[1:]:
-        worker_grads[0] += grad
-    del worker_grads[1:]
-    # there's only one momentum vector for true topk + virtual momentum
+        grad_sum += torch.from_numpy(grad).to(device)
+        del grad
+    """
+    worker_grads = [torch.from_numpy(g).to(device) for g in worker_grads]
+    grad_sum = sum(worker_grads)
+    """
     momentum_vec = momentum_vecs[0]
-    momentum_vec = momentum * momentum_vec + worker_grads[0]
-    del worker_grads[0]
+    momentum_vec = momentum * momentum_vec + grad_sum
     update = _topk(momentum_vec, params["k"])
     momentum_vec -= update
+    return (ps_weights - update * lr).cpu(), [momentum_vec], error_vecs
+    """
+    grad_sum = torch.from_numpy(worker_grads[0]).to(device)
+    del worker_grads[0]
+    for grad in worker_grads:
+        grad_sum += torch.from_numpy(grad).to(device)
+        del grad
+    del worker_grads
+    del worker_grads[1:]
+    worker_grads = [torch.from_numpy(g).to(device)
+                    for g in worker_grads]
+    """
+
+
+    #grad_sum = sum(worker_grads)
+    # there's only one momentum vector for true topk + virtual momentum
+    """
+    momentum_vec = momentum_vecs[0]
+    momentum_vec = momentum * momentum_vec + grad_sum
+    del grad_sum
+    """
+    update = _topk(sum(momentum_vecs), params["k"])
+    for momentum_vec in momentum_vecs:
+        momentum_vec -= update
 
     #updated_weights = ps_weights - update * lr
-    return (ps_weights - update * lr).cpu(), [momentum_vec], error_vecs
+    return (ps_weights - update * lr).cpu(), momentum_vecs, error_vecs
 
     return updated_weights.cpu(), [momentum_vec], error_vecs
 
