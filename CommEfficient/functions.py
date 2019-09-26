@@ -220,7 +220,7 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         # helper for rest of __init__
         def initialize_helper(thing_type, base_thing):
             if thing_type == "virtual":
-                return [copy.deepcopy(base_thing)]
+                return [copy.deepcopy(base_thing) for _ in range(params["n_workers"])]
             elif thing_type == "local":
                 return [copy.deepcopy(base_thing)
                         for _ in range(params["n_clients"])]

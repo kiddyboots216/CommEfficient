@@ -168,7 +168,7 @@ def run_batches_fed(model, opt, scheduler, loaders,
             start_idx = start_idx % n_workers
             end_idx = start_idx + n_workers
             #print(f"Selecting randomly {idx}")
-            idx = np.arange(start_idx, end_idx)
+            #idx = np.arange(start_idx, end_idx)
             #print(f"Selecting in order {idx}")
             client_loaders = loaders[idx]
             minibatches = [loader.next_batch() for loader in client_loaders]
