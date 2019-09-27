@@ -169,6 +169,7 @@ class FedCommEffModel:
                     update_forward_grad,
                     args_tuples
                 )
+            return split_results(results, self.params["n_results_train"])
 
             outs = np.array([r[0] for r in results])
             loss = np.array([r[1] for r in results])
@@ -181,6 +182,7 @@ class FedCommEffModel:
                 for i, idx in enumerate(indices)]
             results = self.process_pool.starmap(forward_multiprocessed,
                     args_tuples)
+            return split_results(results, self.params["n_results_val"])
             outs = np.array([r[0] for r in results])
             loss = np.array([r[1] for r in results])
             acc = np.array([r[2] for r in results])
@@ -220,7 +222,7 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         # helper for rest of __init__
         def initialize_helper(thing_type, base_thing, true_topk=False):
             if thing_type == "virtual":
-                return [copy.deepcopy(base_thing) for _ in range(params["n_workers"])]
+                return [copy.deepcopy(base_thing)]
             elif thing_type == "local":
                 return [copy.deepcopy(base_thing)
                         for _ in range(params["n_clients"])]
@@ -331,17 +333,21 @@ class FedCommEffAccuracy:
         global g_accuracy
         out = g_accuracy(*args)
         return out
-
+class FedCommEffMetrics:
+    def __init__(self, params):
+        self.params = params
 
 def get_worker_device(params):
     # cpu => cpu; cuda => cuda:#
     # bad! relying on private _identity. Lazy!
     device = params["device"]
     n_workers = params["n_workers"]
+    large = params["model"] == "gpt2"
     worker_id = multiprocessing.current_process()._identity[0]
     if device == "cuda":
-        #device = "cuda:{:d}".format(worker_id % n_workers)
-        device = "cuda:{:d}".format((worker_id % n_workers) + 1)
+        device = "cuda:{:d}".format(worker_id % n_workers)
+        if large:
+            device = "cuda:{:d}".format((worker_id % n_workers) + 1)
     return device
 
 def update_forward_grad(worker_id, client_id, model_cls,
@@ -458,10 +464,8 @@ def forward_multiprocessed(model_cls, model_config, ins, targets,
     loss, acc = compute_loss(outs, targets, criterion, accuracy, train=False)
     return outs.cpu().detach().numpy(), loss, acc
 
-#@ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=3)
 def forward(model_cls, model_config, ins, targets,
         params):
-        #criterion, accuracy, params):
     global g_criterion
     global g_accuracy
 
@@ -508,6 +512,23 @@ def _server_helper_true_topk(momentum_vecs, error_vecs, params, lr):
     n_workers = int(params["n_clients"] * params["participation"])
     worker_grads_shape = (n_workers, params["grad_size"])
     worker_grads = sm2np(g_worker_grads_sm, worker_grads_shape)
+    large = params["model"] == "gpt2"
+    if large:
+        grad_sum = torch.from_numpy(worker_grads[0]).to(device)
+        for g in worker_grads[1:]:
+            grad_sum += torch.from_numpy(g).to(device)
+    else:
+        grad_sum = np.sum([torch.from_numpy(g).to(device) for g in worker_grads])
+    momentum_vec = momentum_vecs[0]
+    error_vec = error_vecs[0]
+    momentum_vec *= momentum
+    momentum_vec += grad_sum
+    error_vec += momentum_vec
+    update = _topk(error_vec, k=params["k"])
+    momentum_vec[update.nonzero()] = 0
+    error_vec[update.nonzero()] = 0
+    return (ps_weights - update * lr).cpu(), [momentum_vec], [error_vec]
+    """
     assert len(momentum_vecs) == len(error_vecs) == len(worker_grads)
     for g, u, v in zip(worker_grads, momentum_vecs, error_vecs):
         u *= momentum
@@ -522,6 +543,7 @@ def _server_helper_true_topk(momentum_vecs, error_vecs, params, lr):
         v[update.nonzero()] = 0
     #error_vec[update.nonzero()] = 0
     return (ps_weights - update * lr).cpu(), momentum_vecs, error_vecs
+    """
 
 def _server_helper_sketched(momentum_sketches, error_sketches,
                             params, lr, sketch):
@@ -543,23 +565,29 @@ def _server_helper_sketched(momentum_sketches, error_sketches,
     worker_Sgrads = [torch.from_numpy(Sg).to(device)
                      for Sg in worker_Sgrads]
 
-    momentum_sketch = momentum_sketches[0]
-    error_sketch = error_sketches[0]
     # turn Sgrads (raw tables) into CSVec objects
     worker_grad_sketches = [copy.deepcopy(sketch) for _ in worker_Sgrads]
     for S, csvec in zip(worker_Sgrads, worker_grad_sketches):
         csvec.zero()
         csvec.accumulateTable(S)
-    grad_sketch_sum = np.sum(worker_grad_sketches)
+    large = params["model"] == "gpt2"
+    if large:
+        grad_sketch_sum = worker_grad_sketches[0]
+        for S_g in worker_grad_sketches[1:]:
+            grad_sketch_sum += S_g
+    else:
+        grad_sketch_sum = np.sum(worker_grad_sketches)
+    momentum_sketch = momentum_sketches[0]
+    error_sketch = error_sketches[0]
     if params['momentum_type'] != "none":
         momentum_sketch *= momentum
         momentum_sketch += grad_sketch_sum
         if params["error_type"] != "none":
             error_sketch += momentum_sketch
-        elif params["error_type"] != "none":
-            error_sketch += grad_sketch_sum
-        else:
-            sketch += grad_sketch_sum
+    elif params["error_type"] != "none":
+        error_sketch += grad_sketch_sum
+    else:
+        sketch += grad_sketch_sum
     if params['error_type'] != "none":
         update = error_sketch.unSketch(k=k)
     elif params['momentum_type'] != "none":
@@ -578,19 +606,41 @@ def _server_helper_sketched(momentum_sketches, error_sketches,
     updated_weights = ps_weights - weight_update
     #print(f"{updated_weights} = {curr_weights} - {weight_update} ({update} * {lr}) from {grads}")
     return updated_weights.cpu(), [momentum_sketch], [error_sketch]
+    """
+    for grad_sketch, momentum_sketch, error_sketch in zip(worker_grad_sketches, momentum_sketches, error_sketches):
+        if params['momentum_type'] != "none":
+            momentum_sketch *= momentum
+            momentum_sketch += grad_sketch
+            if params['error_type'] != "none":
+                error_sketch += momentum_sketch
+        elif params["error_type"] != "none":
+            error_sketch += grad_sketch
+        else:
+            sketch += grad_sketch
+    if params['error_type'] != "none":
+        update = np.sum(error_sketches).unSketch(k=k)
+    else:
+        update = sketch.unSketch(k=k)
+    sketch.zero()
+    sketch.accumulateVec(update)
+    hh_coords = sketch.table.nonzero()
+    hh_0, hh_1 = hh_coords[:, 0], hh_coords[:, 1]
+    for momentum_sketch, error_sketch in zip(momentum_sketches, error_sketches):
+        if params["momentum_type"] != "none":
+            momentum_sketch.table[hh_0, hh_1] = 0
+        if params['error_type'] != "none":
+            error_sketch.table[hh_0, hh_1] = 0
+    weight_update = update * lr
+    updated_weights = ps_weights - weight_update
+    #print(f"{updated_weights} = {curr_weights} - {weight_update} ({update} * {lr}) from {grads}")
+    return updated_weights.cpu(), momentum_sketches, error_sketches
+    """
 
-#@ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=3)
+
 def server_update(indices, curr_weights,
         params, lr, grads, momentums, sketch):
     device = torch.device(params['device'])
-    #try:
-    #grads = ray_get_and_free(grads)
     grads = [ray.get(grad).to(device) for grad in grads]
-   # except:
-    #grads = [grad.to(device) for grad in grads]
-    #momentums = [ray.get(momentum).to(device) for momentum in momentums]
-    #curr_weights = ray.get(param_server_states[-1]).to(device)
-    #curr_weights = ray.get(curr_weights)
     curr_weights = curr_weights.to(device)
     k = params['k']
 
@@ -645,17 +695,13 @@ def server_update(indices, curr_weights,
                 u.mul_(params['momentum'])
                 u.add_(1,g)
             update = torch.sum(torch.stack(momentums), dim=0)
-            #grads = [u.mul_(params['momentum']).add_(
-            #    1, g) for g, u in zip(grads, momentum)]
             momentums = [u.cpu() for u in momentums]
         else:
             update = torch.sum(torch.stack(grads), dim=0)
     weight_update = update * lr
     updated_weights = curr_weights - weight_update
-    #print(f"{updated_weights} = {curr_weights} - {weight_update} from {grads}")
     for grad in grads:
         grad[weight_update.nonzero()] = 0
-    #grads = [ray.put(u.cpu()) for u in grads]
     grads = [u.cpu() for u in grads]
     if params['local_momentum']:
         momentums = [u.cpu() for u in momentums]
@@ -750,12 +796,11 @@ def set_param_vec(model, param_vec):
 
 # GPT2 FUNCTIONS
 class FedCommEffModelGPT2:
-    def __init__(self, input_model, model_config, params):
+    def __init__(self, input_model, params):
         n_clients = params['n_clients']
         participation = params["participation"]
         device = params['device']
         cpu = "cpu"
-        self.model_config = model_config
         if params.get('unit_test', False):
             list(input_model.parameters())[0].data.zero_()
         self.model = input_model.to(device)
@@ -816,8 +861,6 @@ class FedCommEffModelGPT2:
             worker_grads_shape = (n_workers, params["grad_size"])
             worker_grads = sm2np(g_worker_grads_sm, worker_grads_shape)
             worker_grads[:] = 0
-
-
         # process pool that parallelizes training
         self.process_pool = multiprocessing.Pool(
                 n_workers,
@@ -843,6 +886,7 @@ class FedCommEffModelGPT2:
                             for i, idx in enumerate(indices)]
             results = self.process_pool.starmap(update_forward_grad_gpt2,
                                                 args_tuples)
+            return split_results(results, self.params["n_results_train"])
             #loss = np.array([r[0] for r in results])
             return results
 
@@ -851,6 +895,7 @@ class FedCommEffModelGPT2:
             args_tuples = [(self.model, batches[i], self.params, g_criterion)
                             for i, idx in enumerate(indices)]
             results = self.process_pool.starmap(forward_multiprocessed_gpt2, args_tuples)
+            return split_results(results, self.params["n_results_val"])
             nlls = np.array([r[0] for r in results])
             accs = np.array([r[1] for r in results])
             ppls = np.array([r[2] for r in results])
@@ -868,6 +913,9 @@ class FedCommEffModelGPT2:
             curr_weights = curr_weights.to(self.params['device'])
             set_param_vec(self.model, curr_weights)
             return getattr(self.model, name)
+
+def split_results(results, n_results):
+    return [np.array([r[i] for r in results]) for i in range(n_results)]    
 
 def update_forward_grad_sketched_gpt2(worker_id, client_id, model,
                                  batch, params):
@@ -942,7 +990,9 @@ def update_forward_grad_gpt2(worker_id, client_id, model,
             model, new_worker_weights,
             batch, params
         )
-
+    """
+    g, *results = forward_grad(model, new_worker_weights, batch, params)
+    """
     # write g to the shared memory grad array in spot worker_id
     n_workers = int(n_clients * participation)
     if params["mode"] == "sketch":
@@ -954,7 +1004,7 @@ def update_forward_grad_gpt2(worker_id, client_id, model,
         worker_grads = sm2np(gw_worker_grads_sm, worker_grads_shape)
         worker_grads[worker_id,:] = g.cpu().numpy()[:]
 
-    return loss
+    return [loss]
 
 def forward_grad_gpt2(model, weights, batch, params):
     device = params['device']

@@ -17,7 +17,7 @@ from fed_sketched_classes import FedSketchedModel, FedSketchedLoss, \
         FedSketchedOptimizer, FedSketchedWorker
 from fed_param_server import FedParamServer
 """
-from functions import FedCommEffModel, FedCommEffOptimizer, \
+from functions import FedCommEffModel,FedCommEffModelGPT2, FedCommEffOptimizer, \
         FedCommEffCriterion, FedCommEffAccuracy, make_logdir
 from data_utils import get_data_loaders, hp_default
 import multiprocessing
@@ -239,10 +239,12 @@ if __name__ == "__main__":
                 'channels': {'prep': 64, 'layer1': 128,
                 'layer2': 256, 'layer3': 512},
         }
+    model = model_cls(**model_config)
 
     params = {
         "device": args.device,
         "test": args.test,
+        "model": "resnet9",
         # sketching params
         "k": args.k,
         "p2": args.p2,
@@ -268,6 +270,9 @@ if __name__ == "__main__":
         "topk_down": args.topk_down,
         "momentum_type": args.momentum_type,
         "error_type": args.error_type,
+        # model params
+        "n_results_train": 3,
+        "n_results_val": 3,
     }
 
     train_loader, val_loader = gen_data(args)
@@ -283,16 +288,14 @@ if __name__ == "__main__":
     criterion = FedCommEffCriterion(criterion, params)
     accuracy = Correct()
     accuracy = FedCommEffAccuracy(accuracy, params)
+    #model = FedCommEffModel(model_cls, model_config, params)
     model = FedCommEffModel(model_cls, model_config, params)
     opt = torch.optim.SGD(model.parameters(), lr=1)
     opt = FedCommEffOptimizer(opt, params)
     scheduler = optim.lr_scheduler.LambdaLR(opt, lr_lambda=[lambda_step])
-
     log_dir = make_logdir(params)
     writer = SummaryWriter(log_dir=log_dir)
     print('Finished initializing in {:.2f} seconds'.format(timer()))
-    tsv = TSVLogger()
     train(model, opt, scheduler, 
         train_loader, val_loader, params, writer,
-        loggers=(TableLogger(), tsv), timer=timer)
-    print(str(tsv))
+        loggers=(TableLogger(),), timer=timer)

@@ -361,23 +361,19 @@ def train():
     parser.add_argument("--participation", type=float, default=1.0)
     parser.add_argument("--n_dialogs", type=int, default=1)
     args = parser.parse_args()
-    """
     if args.test:
         args.train_batch_size = 2
         args.gradient_accumulation_steps = 2
         args.valid_batch_size = 2
         args.epochs = 1
-        args.sketch = True
-        args.virtual_error_sketch = True
-        args.virtual_momentum_sketch = True
         args.participation = 1.0
-    """
 
     args.workers = int(args.clients * args.participation)
 
     params = {
         "device": args.device,
         "test": args.test,
+        "model": "gpt2",
         # sketching params
         "k": args.k,
         "p2": args.p2,
@@ -408,6 +404,9 @@ def train():
         "lm_coef": args.lm_coef,
         "mc_coef": args.mc_coef,
         "grad_accum_steps": args.gradient_accumulation_steps,
+        # model outs
+        "n_results_train": 1,
+        "n_results_val": 3,
     }
     args.train_batch_size *= params["grad_accum_steps"]
     params["train_batch_size"] = args.train_batch_size
@@ -444,7 +443,7 @@ def train():
 
     logger.info('Finished in {:.2f} seconds'.format(timer()))
     logger.info("Initializing everything")
-    model = FedCommEffModelGPT2(model, model_class, params)
+    model = FedCommEffModelGPT2(model, params)
     optimizer = FedCommEffOptimizer(optimizer, params)
     criterion = torch.nn.CrossEntropyLoss(ignore_index=-1)
     criterion = FedCommEffCriterion(criterion, params)
