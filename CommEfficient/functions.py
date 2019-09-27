@@ -595,10 +595,10 @@ def _server_helper_sketched(momentum_sketches, error_sketches,
         momentum_sketch.table[hh_0, hh_1] = 0
     if params['error_type'] != "none":
         error_sketch.table[hh_0, hh_1] = 0
-    weight_update = update * lr
-    updated_weights = ps_weights - weight_update
+    #weight_update = update * lr
+    #updated_weights = ps_weights - weight_update
     #print(f"{updated_weights} = {curr_weights} - {weight_update} ({update} * {lr}) from {grads}")
-    return updated_weights.cpu(), [momentum_sketch], [error_sketch]
+    return (ps_weights - update * lr).cpu(), [momentum_sketch], [error_sketch]
     """
     for grad_sketch, momentum_sketch, error_sketch in zip(worker_grad_sketches, momentum_sketches, error_sketches):
         if params['momentum_type'] != "none":
