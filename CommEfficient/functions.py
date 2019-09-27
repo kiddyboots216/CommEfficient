@@ -566,17 +566,10 @@ def _server_helper_sketched(momentum_sketches, error_sketches,
                      for Sg in worker_Sgrads]
 
     # turn Sgrads (raw tables) into CSVec objects
-    worker_grad_sketches = [copy.deepcopy(sketch) for _ in worker_Sgrads]
-    for S, csvec in zip(worker_Sgrads, worker_grad_sketches):
-        csvec.zero()
-        csvec.accumulateTable(S)
-    large = params["model"] == "gpt2"
-    if large:
-        grad_sketch_sum = worker_grad_sketches[0]
-        for S_g in worker_grad_sketches[1:]:
-            grad_sketch_sum += S_g
-    else:
-        grad_sketch_sum = np.sum(worker_grad_sketches)
+    grad_sketch_sum = sketch
+    grad_sketch_sum.zero()
+    for S in worker_Sgrads:
+        grad_sketch_sum.accumulateTable(S)
     momentum_sketch = momentum_sketches[0]
     error_sketch = error_sketches[0]
     if params['momentum_type'] != "none":
@@ -738,7 +731,7 @@ def _topk(vec, k):
     # on a gpu, sorting is faster than pytorch's topk method
     #topkIndices = torch.sort(vec**2)[1][-k:]
     # however, torch.topk is more space efficient
-    topkIndices = torch.topk(vec**2, k)[1]
+    topkIndices = torch.topk(vec**2, k, sorted=False)[1]
     ret[topkIndices] = vec[topkIndices]
     return ret
 
