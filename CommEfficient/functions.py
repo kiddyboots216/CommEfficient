@@ -220,7 +220,7 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         # helper for rest of __init__
         def initialize_helper(thing_type, base_thing, true_topk=False):
             if thing_type == "virtual":
-                return [copy.deepcopy(base_thing)]
+                return [copy.deepcopy(base_thing) for _ in range(params["n_workers"])]
             elif thing_type == "local":
                 return [copy.deepcopy(base_thing)
                         for _ in range(params["n_clients"])]
@@ -508,46 +508,20 @@ def _server_helper_true_topk(momentum_vecs, error_vecs, params, lr):
     n_workers = int(params["n_clients"] * params["participation"])
     worker_grads_shape = (n_workers, params["grad_size"])
     worker_grads = sm2np(g_worker_grads_sm, worker_grads_shape)
-    grad_sum = torch.from_numpy(worker_grads[0]).to(device)
-    for grad in worker_grads[1:]:
-        grad_sum += torch.from_numpy(grad).to(device)
-        del grad
-    momentum_vec = momentum_vecs[0]
-    momentum_vec = momentum * momentum_vec + grad_sum
-    error_vec = error_vecs[0]
-    error_vec += momentum_vec
+    assert len(momentum_vecs) == len(error_vecs) == len(worker_grads)
+    for g, u, v in zip(worker_grads, momentum_vecs, error_vecs):
+        u *= momentum
+        u += torch.from_numpy(g).to(device)
+        v += u
+    error_vec = sum(error_vecs)
     update = _topk(error_vec, params["k"])
-    momentum_vec[update.nonzero()] = 0
-    error_vec[update.nonzero()] = 0
-    return (ps_weights - update * lr).cpu(), [momentum_vec], [error_vec]
-    """
-    grad_sum = torch.from_numpy(worker_grads[0]).to(device)
-    del worker_grads[0]
-    for grad in worker_grads:
-        grad_sum += torch.from_numpy(grad).to(device)
-        del grad
-    del worker_grads
-    del worker_grads[1:]
-    worker_grads = [torch.from_numpy(g).to(device)
-                    for g in worker_grads]
-    """
-
-
-    #grad_sum = sum(worker_grads)
-    # there's only one momentum vector for true topk + virtual momentum
-    """
-    momentum_vec = momentum_vecs[0]
-    momentum_vec = momentum * momentum_vec + grad_sum
-    del grad_sum
-    """
-    update = _topk(sum(momentum_vecs), params["k"])
-    for momentum_vec in momentum_vecs:
-        momentum_vec -= update
-
-    #updated_weights = ps_weights - update * lr
+    #momentum_vec[update.nonzero()] = 0
+    for u in momentum_vecs:
+        u[update.nonzero()] = 0
+    for v in error_vecs:
+        v[update.nonzero()] = 0
+    #error_vec[update.nonzero()] = 0
     return (ps_weights - update * lr).cpu(), momentum_vecs, error_vecs
-
-    return updated_weights.cpu(), [momentum_vec], error_vecs
 
 def _server_helper_sketched(momentum_sketches, error_sketches,
                             params, lr, sketch):
@@ -569,39 +543,41 @@ def _server_helper_sketched(momentum_sketches, error_sketches,
     worker_Sgrads = [torch.from_numpy(Sg).to(device)
                      for Sg in worker_Sgrads]
 
+    momentum_sketch = momentum_sketches[0]
+    error_sketch = error_sketches[0]
     # turn Sgrads (raw tables) into CSVec objects
     worker_grad_sketches = [copy.deepcopy(sketch) for _ in worker_Sgrads]
     for S, csvec in zip(worker_Sgrads, worker_grad_sketches):
         csvec.zero()
         csvec.accumulateTable(S)
-
-    for grad_sketch, momentum_sketch, error_sketch in zip(worker_grad_sketches, momentum_sketches, error_sketches):
-        if params['momentum_type'] != "none":
-            momentum_sketch *= momentum
-            momentum_sketch += grad_sketch
-            if params['error_type'] != "none":
-                error_sketch += momentum_sketch
+    grad_sketch_sum = np.sum(worker_grad_sketches)
+    if params['momentum_type'] != "none":
+        momentum_sketch *= momentum
+        momentum_sketch += grad_sketch_sum
+        if params["error_type"] != "none":
+            error_sketch += momentum_sketch
         elif params["error_type"] != "none":
-            error_sketch += grad_sketch
+            error_sketch += grad_sketch_sum
         else:
-            sketch += grad_sketch
+            sketch += grad_sketch_sum
     if params['error_type'] != "none":
-        update = np.sum(error_sketches).unSketch(k=k)
+        update = error_sketch.unSketch(k=k)
+    elif params['momentum_type'] != "none":
+        update = momentum_sketch.unSketch(k=k)
     else:
         update = sketch.unSketch(k=k)
     sketch.zero()
     sketch.accumulateVec(update)
     hh_coords = sketch.table.nonzero()
     hh_0, hh_1 = hh_coords[:, 0], hh_coords[:, 1]
-    for momentum_sketch, error_sketch in zip(momentum_sketches, error_sketches):
-        if params["momentum_type"] != "none":
-            momentum_sketch.table[hh_0, hh_1] = 0
-        if params['error_type'] != "none":
-            error_sketch.table[hh_0, hh_1] = 0
+    if params["momentum_type"] != "none":
+        momentum_sketch.table[hh_0, hh_1] = 0
+    if params['error_type'] != "none":
+        error_sketch.table[hh_0, hh_1] = 0
     weight_update = update * lr
     updated_weights = ps_weights - weight_update
     #print(f"{updated_weights} = {curr_weights} - {weight_update} ({update} * {lr}) from {grads}")
-    return updated_weights.cpu(), momentum_sketches, error_sketches
+    return updated_weights.cpu(), [momentum_sketch], [error_sketch]
 
 #@ray.remote(num_gpus=GPUS_ALLOCATED, num_return_vals=3)
 def server_update(indices, curr_weights,
