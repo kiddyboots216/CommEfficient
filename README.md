@@ -1,13 +1,8 @@
 # CommEfficient
-Ray framework for benchmarking communication-efficient distributed SGD optimization algorithms
+This branch uses Python multiprocessing in a functional implementation of federated learning. 
 
-Use conda to install the environment.
+It comes with two experimental setups; a ResNet9 on CIFAR10 (`fed_train.py`) and GPT2 on ConvAI (`gpt2_train.py`). 
 
-To run basic federated learning:
-python train_sanity.py
+There are a variety of command-line args which are best examined by looking at the argparser for either of the above files. 
 
-To run sketched learning:
-python minimal.py
-
-To run federated learning with sketching:
-python train_fed.py
+All functions are in `functions.py`
