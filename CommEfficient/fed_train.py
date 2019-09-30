@@ -48,7 +48,6 @@ def train(model, opt, scheduler, train_loader, val_loader,
             'train_time': train_time,
             'train_loss': train_loss,
             'train_acc': train_acc,
-            'test_time': val_time,
             'test_loss': val_loss,
             'test_acc': val_acc,
             'total_time': timer.total_time,
@@ -105,7 +104,7 @@ def run_batches(model, opt, scheduler, loaders,
                 target_batch = targets[start:end]
                 minibatch = [in_batch, target_batch]
                 minibatches.append(minibatch)
-            outs, loss, acc = model(minibatches, idx)
+            loss, acc = model(minibatches, idx)
             scheduler.step()
             opt.step(idx)
             batch_loss = loss
@@ -135,7 +134,7 @@ def run_batches(model, opt, scheduler, loaders,
                 minibatches.append(minibatch)
                 indices.append(i)
             #print(f"Batch sizes: {[m[1].size() for m in minibatches]}")
-            outs, loss, acc = model(minibatches, indices)
+            loss, acc = model(minibatches, indices)
             batch_loss = loss
             batch_acc = acc
             losses.append(np.mean(batch_loss))
@@ -172,7 +171,7 @@ def run_batches_fed(model, opt, scheduler, loaders,
             #print(f"Selecting in order {idx}")
             client_loaders = loaders[idx]
             minibatches = [loader.next_batch() for loader in client_loaders]
-            outs, loss, acc = model(minibatches, idx)
+            loss, acc = model(minibatches, idx)
             scheduler.step()
             opt.step(idx)
             batch_loss = loss
@@ -271,8 +270,9 @@ if __name__ == "__main__":
         "momentum_type": args.momentum_type,
         "error_type": args.error_type,
         # model params
-        "n_results_train": 3,
-        "n_results_val": 3,
+        "n_results_train": 2,
+        "n_results_val": 2,
+        "supervised": True,
     }
 
     train_loader, val_loader = gen_data(args)
@@ -288,8 +288,7 @@ if __name__ == "__main__":
     criterion = FedCommEffCriterion(criterion, params)
     accuracy = Correct()
     accuracy = FedCommEffAccuracy(accuracy, params)
-    #model = FedCommEffModel(model_cls, model_config, params)
-    model = FedCommEffModel(model_cls, model_config, params)
+    model = FedCommEffModel(model, params)
     opt = torch.optim.SGD(model.parameters(), lr=1)
     opt = FedCommEffOptimizer(opt, params)
     scheduler = optim.lr_scheduler.LambdaLR(opt, lr_lambda=[lambda_step])

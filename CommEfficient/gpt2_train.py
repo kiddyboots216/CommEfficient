@@ -99,7 +99,7 @@ class AttrDict(dict):
         self.__dict__ = self
 
 # FedSketched imports
-from CommEfficient.functions import FedCommEffOptimizer, FedCommEffCriterion, FedCommEffModelGPT2, make_logdir
+from CommEfficient.functions import FedCommEffOptimizer, FedCommEffCriterion, make_logdir, FedCommEffModel, FedCommEffMetric
 from CommEfficient.minimal import PiecewiseLinear, TableLogger, TSVLogger, Timer, union
 from torch.optim import SGD
 from torch.utils.tensorboard import SummaryWriter
@@ -127,6 +127,9 @@ def train_gpt2(model, opt, scheduler, train_loader, val_loader, params, log_dir,
             'val_time': val_time,
             'total_time': timer.total_time,
         }
+        writer.add_scalar('validation/nll', nll)
+        writer.add_scalar('validation/acc', acc)
+        writer.add_scalar('validation/ppl', ppl)
         logger = TableLogger()
         lr = scheduler.get_lr()[0]
         summary = union({'epoch': epoch+1,
@@ -443,10 +446,11 @@ def train():
 
     logger.info('Finished in {:.2f} seconds'.format(timer()))
     logger.info("Initializing everything")
-    model = FedCommEffModelGPT2(model, params)
+    model = FedCommEffModel(model, params)
     optimizer = FedCommEffOptimizer(optimizer, params)
     criterion = torch.nn.CrossEntropyLoss(ignore_index=-1)
     criterion = FedCommEffCriterion(criterion, params)
+    metric = FedCommEffMetric(None, params)
     lr_schedule = PiecewiseLinear(
             [0, args.n_epochs * len(train_loader)], 
             [args.lr, 0.0])
