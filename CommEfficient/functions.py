@@ -36,15 +36,16 @@ def make_logdir(params: dict):
     rows = params["num_rows"]
     cols = params["num_cols"]
     k = params["k"]
-    sketch = params["mode"] == "sketch"
-    sketch_str = f"sketch: {rows} x {cols}" if sketch else "False"
-    k_str = f"k: {k}"
+    mode = params["mode"]
+    local_iters = params["n_local_iters"]
+    sketch_str = f"{mode}: {rows} x {cols}" if mode == "sketch" else "{mode}"
+    k_str = f"k: {k}" if mode in ["sketch", "true_topk", "local_topk"] else f"local_iters: {local_iters}"
     workers = params["n_workers"]
     clients = params["n_clients"]
     clients_str = f"{workers}/{clients}"
     current_time = datetime.now().strftime('%b%d_%H-%M-%S')
     logdir = os.path.join(
-        'runs', current_time + '_' + clients_str + '_' + k_str + '_' + sketch_str)
+        'runs', current_time + '_' + clients_str + '_' + sketch_str + '_' + k_str)
     return logdir
 
 def init_pool(worker_Sgrads_sm, worker_grads_sm,

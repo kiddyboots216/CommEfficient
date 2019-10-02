@@ -105,7 +105,11 @@ def run_batches(model, opt, scheduler, loaders,
                 minibatch = [in_batch, target_batch]
                 minibatches.append(minibatch)
             loss, acc = model(minibatches, idx)
-            scheduler.step()
+            if params["local_sched"]:
+                for _ in range(params["n_local_iters"]):
+                    scheduler.step()
+            else:
+                scheduler.step()
             opt.step(idx)
             batch_loss = loss
             #print("batch_loss", batch_loss.mean())
@@ -174,7 +178,11 @@ def run_batches_fed(model, opt, scheduler, loaders,
             client_loaders = loaders[idx]
             minibatches = [loader.next_batch() for loader in client_loaders]
             loss, acc = model(minibatches, idx)
-            scheduler.step()
+            if params["local_sched"]:
+                for _ in range(params["n_local_iters"]):
+                    scheduler.step()
+            else:
+                scheduler.step()
             opt.step(idx)
             batch_loss = loss
             #print("batch_loss", batch_loss.mean())
@@ -221,6 +229,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=0.4)
     parser.add_argument("--pivot_epoch", type=int, default=5)
     parser.add_argument("--local_iters", type=int, default=1)
+    parser.add_argument("--local_scheduler", action="store_true")
     args = parser.parse_args()
     args.workers = int(args.clients * args.participation)
 
@@ -268,7 +277,9 @@ if __name__ == "__main__":
         "batch_size": args.batch_size,
         "grad_reduce": args.grad_reduce,
         "DATA_LEN": args.DATA_LEN,
+        # localSGD params
         "n_local_iters": args.local_iters,
+        "local_sched": args.local_scheduler,
         # algorithmic params
         "mode": args.mode,
         "topk_down": args.topk_down,
