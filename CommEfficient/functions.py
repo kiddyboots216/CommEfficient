@@ -175,6 +175,8 @@ class FedCommEffModel:
         global g_criterion
         global g_metric
         if self.training:
+            global lr
+            self.params["lr"] = lr
             args_tuples = [(i, idx, self.model,
                             batches[i], self.params,
                             g_criterion, g_metric)
@@ -260,8 +262,10 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
                 )
 
     def get_lr(self):
-        lr = get_lr(self.param_groups)
-        return lr
+        new_lr = get_lr(self.param_groups)
+        global lr
+        lr = new_lr
+        return new_lr
 
     def step(self, indices):
         # in this method we're agnostic as to whether we're sketched,
@@ -378,6 +382,12 @@ def update_forward_grad(worker_id, client_id, model,
             model, new_worker_weights,
             batch, criterion, metric, params
         )
+    """
+    g, grad, results = f(
+            model, new_worker_weights,
+            batch, criterion, metric, params
+        )
+    """
     # write g to the shared memory grad array in spot worker_id
     n_workers = int(n_clients * participation)
     if params["mode"] == "sketch":
@@ -385,6 +395,8 @@ def update_forward_grad(worker_id, client_id, model,
         worker_Sgrads = sm2np(gw_worker_Sgrads_sm, worker_Sgrads_shape)
         worker_Sgrads[worker_id,:,:] = g.cpu().numpy()[:,:]
     elif params["mode"] == "true_topk":
+    #if params["mode"] == "true_topk":
+        #g = grad
         worker_grads_shape = (n_workers, params["grad_size"])
         worker_grads = sm2np(gw_worker_grads_sm, worker_grads_shape)
         worker_grads[worker_id,:] = g.cpu().numpy()[:]
@@ -442,6 +454,14 @@ def forward_grad(model, weights, batch,
         g = grad
     elif params["mode"] == "local_topk":
         g = _topk(grad, k=params["k"])
+    elif params["mode"] == "localSGD":
+        grad *= params["lr"]
+        weights -= grad
+        params["n_local_iters"] -= 1
+        g_recursive, results_recursive = forward_grad(model, weights, batch,
+                criterion, metric, params)
+        g = grad + g_recursive
+        results = [(r + r_recursive for (r, r_recursive) in zip(results, results_recursive)]
 
     return g, results
 
@@ -469,8 +489,7 @@ def forward_multiprocessed(model, batch,
         lm_labels, mc_labels = labels
         nll = criterion(lm_logits, lm_labels).detach().cpu().numpy()
         acc = accuracy(mc_logits, mc_labels)
-        ppl = np.exp(nll)
-        results = nll, acc, ppl
+        results = nll, acc
     return results
 
 def get_updated_server(momentums, errors, params, lr, sketch=None):
@@ -557,7 +576,8 @@ def _server_helper_sketched(momentum_sketches, error_sketches,
     error_type = params['error_type']
     local = momentum_type == 'local' and error_type == 'local'
     virtual = momentum_type == 'virtual' and error_type == 'virtual'
-    assert local or virtual
+    none = momentum_type == 'none' and error_type == 'none'
+    assert local or virtual or none
 
     global g_ps_weights_sm
     global g_worker_Sgrads_sm
@@ -630,26 +650,19 @@ def _server_helper_sketched(momentum_sketches, error_sketches,
             error_sketch.table[hh_0, hh_1] = 0
         momentum_sketches = [momentum_sketch]
         error_sketches = [error_sketch]
+    
+    elif none:
+        global g_worker_grads_sm
+        worker_grads_shape = (n_workers, params["grad_size"])
+        worker_grads = sm2np(g_worker_grads_sm, worker_grads_shape)
+        grad_sum = np.sum(worker_grads)
+        grad_sketch_sum = sketch
+        grad_sketch_sum.zero()
+        for S in worker_Sgrads:
+            grad_sketch_sum.accumulateTable(S)
+        update = grad_sketch_sum.unSketch(k=k)
+        print(f"Reconstruction error: {(update - grad_sum).norm()}")
     return (ps_weights - update * lr).cpu(), momentum_sketches, error_sketches
-
-def get_weights(client_weights, idx):
-    retval = client_weights[idx][WEIGHT_ID]
-    return retval
-
-def get_error(client_weights, idx):
-    retval = client_weights[idx][ERROR_ID]
-    return retval
-
-def get_errors(client_weights, indices):
-    return [client_weights[idx][ERROR_ID] for idx in indices]
-
-def get_params(indices, idx):
-    return [client_weights[index][idx] for index in indices]
-
-def update_params(client_weights, client_indices, vecs, vec_idx):
-    for i, idx in enumerate(client_indices):
-        client_weights[idx][vec_idx] = vecs[i]
-    return client_weights
 
 def get_lr(optimizer_param_groups):
     if len(optimizer_param_groups) == 1:
@@ -767,7 +780,6 @@ def forward_grad_gpt2(model, weights, batch, criterion,
             numBlocks=params['num_blocks'])
         sketch.accumulateVec(grad)
         g = sketch.table.cpu()
-        del sketch
     elif params["mode"] == "true_topk":
         g = grad
     elif params["mode"] == "local_topk":
@@ -777,6 +789,7 @@ def forward_grad_gpt2(model, weights, batch, criterion,
     else:
         loss = 0
     return g, [loss]
+    return g, grad, [loss]
 
 def accuracy(y_pred, y):
     y_pred, y = _check_shape(y_pred, y)

@@ -206,16 +206,17 @@ def run_batches(model, opt, scheduler, loader, params, timer, training, logger=N
                 minibatch = [b[start:end] for b in batch]
                 minibatches.append(minibatch)
                 indices.append(i)
-            nll, acc, ppl = model(minibatches, indices)
+            nll, acc = model(minibatches, indices)
             """
-            nll, acc, ppl = model(batch, idx)
+            nll, acc, ppl = model(minibatches, indices)
+            ppl = np.mean(ppl)
+            ppls.append(ppl)
             """
             nll = np.mean(nll)
             acc = np.mean(acc)
-            ppl = np.mean(ppl)
             nlls.append(nll)
             accs.append(acc)
-            ppls.append(ppl)
+            """
             val_time = timer()
             batch_stats = {
                 'test_time': val_time,
@@ -226,7 +227,8 @@ def run_batches(model, opt, scheduler, loader, params, timer, training, logger=N
             }
             summary = union({'batch_idx': batch_idx+1, }, batch_stats)
             logger.append(summary)
-        return np.mean(nlls), np.mean(accs), np.mean(ppls)
+            """
+        return np.mean(nlls), np.mean(accs), np.exp(np.mean(ppls))
 
 
 SPECIAL_TOKENS = ["<bos>", "<eos>", "<speaker1>", "<speaker2>", "<pad>"]
@@ -409,7 +411,7 @@ def train():
         "grad_accum_steps": args.gradient_accumulation_steps,
         # model outs
         "n_results_train": 1,
-        "n_results_val": 3,
+        "n_results_val": 2,
     }
     args.train_batch_size *= params["grad_accum_steps"]
     params["train_batch_size"] = args.train_batch_size

@@ -134,11 +134,12 @@ def run_batches(model, opt, scheduler, loaders,
                 minibatches.append(minibatch)
                 indices.append(i)
             #print(f"Batch sizes: {[m[1].size() for m in minibatches]}")
-            loss, acc = model(minibatches, indices)
-            batch_loss = loss
-            batch_acc = acc
-            losses.append(batch_loss)
-            accs.append(batch_acc)
+            if len(minibatches) > 0:
+                loss, acc = model(minibatches, indices)
+                batch_loss = loss
+                batch_acc = acc
+                losses.append(np.mean(batch_loss))
+                accs.append(np.mean(batch_acc))
             """
             if params['test']:
                 break
@@ -205,7 +206,7 @@ if __name__ == "__main__":
     parser.add_argument("--error_type", choices=error_types,
                         default="none")
     parser.add_argument("--topk_down", action="store_true")
-    modes = ["sketch", "true_topk", "local_topk"]
+    modes = ["sketch", "true_topk", "local_topk", "localSGD"]
     parser.add_argument("--mode", choices=modes, default="sketch")
     reductions = ["sum", "mean", "median"]
     parser.add_argument("--grad_reduce", choices=reductions, default="sum")
@@ -218,6 +219,7 @@ if __name__ == "__main__":
     parser.add_argument("--DATA_LEN", type=int, default=50000)
     parser.add_argument("--lr", type=float, default=0.4)
     parser.add_argument("--pivot_epoch", type=int, default=5)
+    parser.add_argument("--local_iters", type=int, default=1)
     args = parser.parse_args()
     args.workers = int(args.clients * args.participation)
 
@@ -265,6 +267,7 @@ if __name__ == "__main__":
         "batch_size": args.batch_size,
         "grad_reduce": args.grad_reduce,
         "DATA_LEN": args.DATA_LEN,
+        "n_local_iters": args.local_iters,
         # algorithmic params
         "mode": args.mode,
         "topk_down": args.topk_down,
