@@ -37,7 +37,6 @@ class TableLogger():
             self.keys = output.keys()
             print(*('{:>12s}'.format(k) for k in self.keys))
         filtered = [output[k] for k in self.keys]
-        #import pdb; pdb.set_trace()
         print(*('{:12.4f}'.format(v)
                  if isinstance(v, np.float) or isinstance(v, np.float32) else '{:12}'.format(v)
                 for v in filtered))

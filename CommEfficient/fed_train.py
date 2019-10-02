@@ -17,8 +17,8 @@ from fed_sketched_classes import FedSketchedModel, FedSketchedLoss, \
         FedSketchedOptimizer, FedSketchedWorker
 from fed_param_server import FedParamServer
 """
-from functions import FedCommEffModel,FedCommEffModelGPT2, FedCommEffOptimizer, \
-        FedCommEffCriterion, FedCommEffAccuracy, make_logdir
+from functions import FedCommEffModel, FedCommEffOptimizer, \
+        FedCommEffCriterion, FedCommEffMetric, make_logdir
 from data_utils import get_data_loaders, hp_default
 import multiprocessing
 if __name__ == "__main__":
@@ -126,7 +126,7 @@ def run_batches(model, opt, scheduler, loaders,
             for i, _ in enumerate(idx):
                 start = i * batch_size // n_workers
                 end = (i+1) * batch_size // n_workers
-                if end > batch_len:
+                if start > batch_len:
                     break
                 in_batch = inputs[start:end]
                 target_batch = targets[start:end]
@@ -137,8 +137,8 @@ def run_batches(model, opt, scheduler, loaders,
             loss, acc = model(minibatches, indices)
             batch_loss = loss
             batch_acc = acc
-            losses.append(np.mean(batch_loss))
-            accs.append(np.mean(batch_acc))
+            losses.append(batch_loss)
+            accs.append(batch_acc)
             """
             if params['test']:
                 break
@@ -217,6 +217,7 @@ if __name__ == "__main__":
     parser.add_argument("--fed", action="store_true")
     parser.add_argument("--DATA_LEN", type=int, default=50000)
     parser.add_argument("--lr", type=float, default=0.4)
+    parser.add_argument("--pivot_epoch", type=int, default=5)
     args = parser.parse_args()
     args.workers = int(args.clients * args.participation)
 
@@ -278,7 +279,7 @@ if __name__ == "__main__":
     train_loader, val_loader = gen_data(args)
     loader_len = args.DATA_LEN // args.batch_size
     print('Initializing everything')
-    lr_schedule = PiecewiseLinear([0, 5, args.epochs], [0, args.lr, 0])
+    lr_schedule = PiecewiseLinear([0, args.pivot_epoch, args.epochs], [0, args.lr, 0])
     if args.grad_reduce == "sum":
         lambda_step = lambda step: lr_schedule(step/loader_len)/args.batch_size
         criterion = torch.nn.CrossEntropyLoss(reduction='sum')
@@ -287,7 +288,7 @@ if __name__ == "__main__":
         criterion = torch.nn.CrossEntropyLoss(reduction='sum')
     criterion = FedCommEffCriterion(criterion, params)
     accuracy = Correct()
-    accuracy = FedCommEffAccuracy(accuracy, params)
+    accuracy = FedCommEffMetric(accuracy, params)
     model = FedCommEffModel(model, params)
     opt = torch.optim.SGD(model.parameters(), lr=1)
     opt = FedCommEffOptimizer(opt, params)
