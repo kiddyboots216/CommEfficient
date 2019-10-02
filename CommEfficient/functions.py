@@ -26,7 +26,6 @@ MOMENTUM_ID = 2
 
 g_worker_Sgrads_sm = None
 g_worker_grads_sm = None
-g_worker_topk_sm = None
 g_client_weights_sm = None
 g_ps_weights_sm = None
 
@@ -48,19 +47,17 @@ def make_logdir(params: dict):
         'runs', current_time + '_' + clients_str + '_' + k_str + '_' + sketch_str)
     return logdir
 
-def init_pool(worker_Sgrads_sm, worker_grads_sm, worker_topk_sm,
+def init_pool(worker_Sgrads_sm, worker_grads_sm,
               client_weights_sm, ps_weights_sm):
     global gw_ps_weights_sm
     global gw_client_weights_sm
     global gw_worker_Sgrads_sm
     global gw_worker_grads_sm
-    global gw_worker_topk_sm
 
     gw_ps_weights_sm = ps_weights_sm
     gw_client_weights_sm = client_weights_sm
     gw_worker_Sgrads_sm = worker_Sgrads_sm
     gw_worker_grads_sm = worker_grads_sm
-    gw_worker_topk_sm = worker_topk_sm
 
 def sm2np(sm, shape, dtype=ctypes.c_float):
     # convert from shared memory object/buffer to numpy array
@@ -97,7 +94,6 @@ class FedCommEffModel:
         global g_client_weights_sm
         global g_worker_Sgrads_sm
         global g_worker_grads_sm
-        global g_worker_topk_sm
 
         # ps_weights needs to be in shared memory so the workers can
         # update themselves with (possibly an approximation of) the
@@ -134,7 +130,7 @@ class FedCommEffModel:
                                    params["num_cols"])
             worker_Sgrads = sm2np(g_worker_Sgrads_sm, worker_Sgrads_shape)
             worker_Sgrads[:] = 0
-        elif params["mode"] == "true_topk":
+        elif params["mode"] in ["true_topk", "local_topk", "localSGD"]:
             g_worker_grads_sm = Array(
                     'f',
                     n_workers * params["grad_size"],
@@ -143,21 +139,12 @@ class FedCommEffModel:
             worker_grads_shape = (n_workers, params["grad_size"])
             worker_grads = sm2np(g_worker_grads_sm, worker_grads_shape)
             worker_grads[:] = 0
-        elif params["mode"] == "local_topk":
-            g_worker_topk_sm = Array(
-                    'f',
-                    n_workers * params["grad_size"],
-                    lock=False
-                )
-            worker_grads_shape = (n_workers, params["grad_size"])
-            worker_topk = sm2np(g_worker_topk_sm, worker_grads_shape)
-            worker_topk[:] = 0
 
         # process pool that parallelizes training
         self.process_pool = multiprocessing.Pool(
                 n_workers,
                 initializer=init_pool,
-                initargs=(g_worker_Sgrads_sm, g_worker_grads_sm, g_worker_topk_sm,
+                initargs=(g_worker_Sgrads_sm, g_worker_grads_sm, 
                           g_client_weights_sm, g_ps_weights_sm)
             )
 
@@ -174,8 +161,8 @@ class FedCommEffModel:
     def __call__(self, batches, indices):
         global g_criterion
         global g_metric
+        global lr
         if self.training:
-            global lr
             self.params["lr"] = lr
             args_tuples = [(i, idx, self.model,
                             batches[i], self.params,
@@ -220,7 +207,7 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         device = params['device']
 
         # helper for rest of __init__
-        def initialize_helper(thing_type, base_thing, true_topk=False):
+        def initialize_helper(thing_type, base_thing):
             if thing_type == "virtual":
                 return [copy.deepcopy(base_thing)]
             elif thing_type == "local":
@@ -253,13 +240,15 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         elif params["mode"] in ["true_topk", "local_topk"]:
             # same as above but with vectors instead of sketches
             zero_vec = torch.zeros(params["grad_size"]).to(device)
-            true_topk = params["mode"] == "true_topk"
             self.momentums = initialize_helper(
-                    params["momentum_type"], zero_vec, true_topk=true_topk
+                    params["momentum_type"], zero_vec
                 )
             self.errors = initialize_helper(
                     params["error_type"], zero_vec
                 )
+        elif params["mode"] == "localSGD":
+            self.momentums = initialize_helper("none", None)
+            self.errors = initialize_helper("none", None)
 
     def get_lr(self):
         new_lr = get_lr(self.param_groups)
@@ -267,10 +256,12 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         lr = new_lr
         return new_lr
 
-    def step(self, indices):
+    def step(self, indices, ret=False):
         # in this method we're agnostic as to whether we're sketched,
         # true topk, or local topk
         lr = self.get_lr()
+        if ret:
+            return
         cur_momentums = None
         if self.params['momentum_type'] == "virtual":
             cur_momentums = self.momentums
@@ -361,7 +352,6 @@ def update_forward_grad(worker_id, client_id, model,
     global gw_client_weights_sm
     global gw_worker_Sgrads_sm
     global gw_worker_grads_sm
-    global gw_worker_topk_sm
 
     ps_weights = sm2np(gw_ps_weights_sm, (grad_size,))
     client_weights = sm2np(gw_client_weights_sm, (n_clients, grad_size))
@@ -394,16 +384,10 @@ def update_forward_grad(worker_id, client_id, model,
         worker_Sgrads_shape = (n_workers, params["num_rows"], params["num_cols"])
         worker_Sgrads = sm2np(gw_worker_Sgrads_sm, worker_Sgrads_shape)
         worker_Sgrads[worker_id,:,:] = g.cpu().numpy()[:,:]
-    elif params["mode"] == "true_topk":
-    #if params["mode"] == "true_topk":
-        #g = grad
+    elif params["mode"] in ["true_topk", "local_topk", "localSGD"]:
         worker_grads_shape = (n_workers, params["grad_size"])
         worker_grads = sm2np(gw_worker_grads_sm, worker_grads_shape)
         worker_grads[worker_id,:] = g.cpu().numpy()[:]
-    elif params["mode"] == "local_topk":
-        worker_grads_shape = (n_workers, params["grad_size"])
-        worker_topk = sm2np(gw_worker_topk_sm, worker_grads_shape)
-        worker_topk[worker_id, :] = g.cpu().numpy()[:]
 
     return results
 
@@ -458,10 +442,13 @@ def forward_grad(model, weights, batch,
         grad *= params["lr"]
         weights -= grad
         params["n_local_iters"] -= 1
-        g_recursive, results_recursive = forward_grad(model, weights, batch,
-                criterion, metric, params)
-        g = grad + g_recursive
-        results = [(r + r_recursive for (r, r_recursive) in zip(results, results_recursive)]
+        if params["n_local_iters"] > 0:
+            g_recursive, results_recursive = forward_grad(model, weights, batch,
+                    criterion, metric, params)
+            g = grad + g_recursive
+            results = [r + r_recursive for (r, r_recursive) in zip(results, results_recursive)]
+        else:
+            g = grad
 
     return g, results
 
@@ -500,8 +487,29 @@ def get_updated_server(momentums, errors, params, lr, sketch=None):
         return _server_helper_local_topk(momentums, errors, params, lr)
     elif params["mode"] == "true_topk":
         return _server_helper_true_topk(momentums, errors, params, lr)
+    elif params["mode"] == "localSGD":
+        return _server_helper_localSGD(momentums, errors, params, lr)
     else:
         assert False, "invalid mode {}".format(params["mode"])
+
+def _server_helper_localSGD(momentum_vecs, error_vecs, params, lr):
+    global ps_weights_sm
+    global p_worker_grads_sm
+    device = torch.device(params['device'])
+    ps_weights = sm2np(g_ps_weights_sm, (params["grad_size"],),)
+    ps_weights = torch.from_numpy(ps_weights).to(device)
+    n_workers = int(params["n_clients"] * params["participation"])
+    worker_grads_shape = (n_workers, params["grad_size"])
+    worker_grads = sm2np(g_worker_grads_sm, worker_grads_shape)
+    large = params["model"] == "gpt2"
+    if large:
+        grad_sum = torch.from_numpy(worker_grads[0]).to(device)
+        for g in worker_grads[1:]:
+            grad_sum += torch.from_numpy(g).to(device)
+    else:
+        grad_sum = np.sum([torch.from_numpy(g).to(device) for g in worker_grads])
+    update = grad_sum
+    return (ps_weights - update).cpu(), momentum_vecs, error_vecs
 
 def _server_helper_true_topk(momentum_vecs, error_vecs, params, lr):
     global g_ps_weights_sm
@@ -537,7 +545,7 @@ def _server_helper_true_topk(momentum_vecs, error_vecs, params, lr):
 
 def _server_helper_local_topk(momentum_vecs, error_vecs, params, lr):
     global g_ps_weights_sm
-    global g_worker_topk_sm
+    global g_worker_grads_sm
     assert params["momentum_type"] == "virtual"
     assert params["error_type"] == "virtual"
 
@@ -549,7 +557,7 @@ def _server_helper_local_topk(momentum_vecs, error_vecs, params, lr):
 
     n_workers = int(params["n_clients"] * params["participation"])
     worker_grads_shape = (n_workers, params["grad_size"])
-    worker_grads = sm2np(g_worker_topk_sm, worker_grads_shape)
+    worker_grads = sm2np(g_worker_grads_sm, worker_grads_shape)
     large = params["model"] == "gpt2"
     if large:
         grad_sum = torch.from_numpy(worker_grads[0]).to(device)
