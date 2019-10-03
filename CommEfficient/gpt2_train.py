@@ -409,6 +409,7 @@ def train():
         "lm_coef": args.lm_coef,
         "mc_coef": args.mc_coef,
         "grad_accum_steps": args.gradient_accumulation_steps,
+        "mean_grads": True,
         # model outs
         "n_results_train": 1,
         "n_results_val": 2,

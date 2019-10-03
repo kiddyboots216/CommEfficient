@@ -37,7 +37,7 @@ def make_logdir(params: dict):
     cols = params["num_cols"]
     k = params["k"]
     mode = params["mode"]
-    local_iters = params["n_local_iters"]
+    local_iters = params.get("n_local_iters", None)
     sketch_str = f"{mode}: {rows} x {cols}" if mode == "sketch" else "{mode}"
     k_str = f"k: {k}" if mode in ["sketch", "true_topk", "local_topk"] else f"local_iters: {local_iters}"
     workers = params["n_workers"]
@@ -162,9 +162,9 @@ class FedCommEffModel:
     def __call__(self, batches, indices):
         global g_criterion
         global g_metric
-        global lr
+        #global lr
         if self.training:
-            self.params["lr"] = lr
+            #self.params["lr"] = lr
             args_tuples = [(i, idx, self.model,
                             batches[i], self.params,
                             g_criterion, g_metric)
@@ -253,6 +253,8 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
 
     def get_lr(self):
         new_lr = get_lr(self.param_groups)
+        if self.params["mean_grads"]:
+            new_lr = new_lr / self.params["n_workers"]
         global lr
         lr = new_lr
         return new_lr
@@ -797,8 +799,11 @@ def forward_grad_gpt2(model, weights, batch, criterion,
         loss = accum_loss.item()/max(n_steps, 1)
     else:
         loss = 0
+    """
+    if params["mean_grads"]:
+        g = g / params["n_workers"]
+    """
     return g, [loss]
-    return g, grad, [loss]
 
 def accuracy(y_pred, y):
     y_pred, y = _check_shape(y_pred, y)
