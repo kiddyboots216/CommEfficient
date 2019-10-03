@@ -48,13 +48,21 @@ def make_logdir(params: dict):
         'runs', current_time + '_' + clients_str + '_' + sketch_str + '_' + k_str)
     return logdir
 
-def init_pool(worker_Sgrads_sm, worker_grads_sm,
+def init_pool(input_model, device, n_workers,
+              worker_Sgrads_sm, worker_grads_sm,
               client_weights_sm, ps_weights_sm):
+    global model
     global gw_ps_weights_sm
     global gw_client_weights_sm
     global gw_worker_Sgrads_sm
     global gw_worker_grads_sm
 
+    if torch.cuda.is_available():
+        worker_id = multiprocessing.current_process()._identity[0]
+        torch.cuda.set_device(worker_id % n_workers)
+
+    model = copy.deepcopy(input_model)
+    model.to(device)
     gw_ps_weights_sm = ps_weights_sm
     gw_client_weights_sm = client_weights_sm
     gw_worker_Sgrads_sm = worker_Sgrads_sm
@@ -82,7 +90,7 @@ class FedCommEffModel:
         cpu = "cpu"
         if params.get('unit_test', False):
             list(input_model.parameters())[0].data.zero_()
-        self.model = input_model.to(device)
+        self.model = input_model
         param_vec = get_param_vec(self.model, cpu).numpy()
         grad_size = 0
         for p in self.model.parameters():
@@ -145,9 +153,11 @@ class FedCommEffModel:
         self.process_pool = multiprocessing.Pool(
                 n_workers,
                 initializer=init_pool,
-                initargs=(g_worker_Sgrads_sm, g_worker_grads_sm, 
+                initargs=(self.model, device, n_workers,
+                          g_worker_Sgrads_sm, g_worker_grads_sm,
                           g_client_weights_sm, g_ps_weights_sm)
             )
+
 
     def train(self, training):
         self.training = training
@@ -156,7 +166,6 @@ class FedCommEffModel:
         ps_weights = sm2np(g_ps_weights_sm,
                            (self.params["grad_size"],))
         curr_weights = torch.from_numpy(ps_weights)
-        curr_weights = curr_weights.to(self.params['device'])
         set_param_vec(self.model, curr_weights)
         self.model.save_pretrained(log_dir)
     def __call__(self, batches, indices):
@@ -165,7 +174,7 @@ class FedCommEffModel:
         #global lr
         if self.training:
             #self.params["lr"] = lr
-            args_tuples = [(i, idx, self.model,
+            args_tuples = [(i, idx,
                             batches[i], self.params,
                             g_criterion, g_metric)
                            for i, idx in enumerate(indices)]
@@ -177,9 +186,8 @@ class FedCommEffModel:
             return split_results(results, self.params["n_results_train"])
 
         else:
-            args_tuples = [(self.model,
-                batches[i], self.params, g_criterion, g_metric)
-                for i, idx in enumerate(indices)]
+            args_tuples = [(batches[i], self.params, g_criterion, g_metric)
+                           for i, idx in enumerate(indices)]
             results = self.process_pool.starmap(forward_multiprocessed,
                     args_tuples)
             return split_results(results, self.params["n_results_val"])
@@ -191,7 +199,6 @@ class FedCommEffModel:
             ps_weights = sm2np(g_ps_weights_sm,
                                (self.params["grad_size"],))
             curr_weights = torch.from_numpy(ps_weights)
-            curr_weights = curr_weights.to(self.params['device'])
             set_param_vec(self.model, curr_weights)
             return getattr(self.model, name)
 
@@ -330,20 +337,7 @@ class FedCommEffMetric:
         out = g_metric(*args)
         return out
 
-def get_worker_device(params):
-    # cpu => cpu; cuda => cuda:#
-    # bad! relying on private _identity. Lazy!
-    device = params["device"]
-    n_workers = params["n_workers"]
-    large = params["model"] == "gpt2"
-    worker_id = multiprocessing.current_process()._identity[0]
-    if device == "cuda":
-        device = "cuda:{:d}".format(worker_id % n_workers)
-        if large:
-            device = "cuda:{:d}".format((worker_id % n_workers) + 1)
-    return device
-
-def update_forward_grad(worker_id, client_id, model,
+def update_forward_grad(worker_id, client_id,
                         batch, params, criterion, metric):
 
     # pull PS and client weights out of the shared memory block
@@ -351,6 +345,7 @@ def update_forward_grad(worker_id, client_id, model,
     n_clients = params["n_clients"]
     participation = params["participation"]
 
+    global model
     global gw_ps_weights_sm
     global gw_client_weights_sm
     global gw_worker_Sgrads_sm
@@ -359,7 +354,6 @@ def update_forward_grad(worker_id, client_id, model,
     ps_weights = sm2np(gw_ps_weights_sm, (grad_size,))
     client_weights = sm2np(gw_client_weights_sm, (n_clients, grad_size))
     worker_weights = client_weights[client_id]
-    params["device"] = get_worker_device(params)
     ps_weights = torch.from_numpy(ps_weights).to(params["device"])
     worker_weights = torch.from_numpy(worker_weights).to(params["device"])
 
@@ -455,12 +449,11 @@ def forward_grad(model, weights, batch,
 
     return g, results
 
-def forward_multiprocessed(model, batch,
-        params, criterion, metric):
+def forward_multiprocessed(batch, params, criterion, metric):
     grad_size = params["grad_size"]
+    global model
     global gw_ps_weights_sm
     ps_weights = sm2np(gw_ps_weights_sm, (grad_size,))
-    params["device"] = get_worker_device(params)
     device = params["device"]
     ps_weights = torch.from_numpy(ps_weights).to(params["device"])
     model = model.to(device)

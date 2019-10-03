@@ -289,6 +289,7 @@ if __name__ == "__main__":
         "n_results_train": 2,
         "n_results_val": 2,
         "supervised": True,
+        "mean_grads": False,
     }
 
     train_loader, val_loader = gen_data(args)
