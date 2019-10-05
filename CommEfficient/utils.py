@@ -2,6 +2,8 @@ import os
 import argparse
 import torch
 from datetime import datetime
+import ctypes
+import numpy as np
 
 def make_logdir(args: dict):
     rows = args.num_rows
@@ -21,7 +23,7 @@ def make_logdir(args: dict):
 
 def parse_args(default_lr):
     parser = argparse.ArgumentParser()
-    
+
     # meta-args
     parser.add_argument("--test", action="store_true", dest="do_test")
     modes = ["sketch", "true_topk", "local_topk", "localSGD"]
@@ -129,3 +131,61 @@ def parse_args(default_lr):
 
     return args
 
+def _topk(vec, k):
+    """ Return the largest k elements (by magnitude) of vec"""
+    ret = torch.zeros_like(vec)
+    # on a gpu, sorting is faster than pytorch's topk method
+    #topkIndices = torch.sort(vec**2)[1][-k:]
+    # however, torch.topk is more space efficient
+    topkIndices = torch.topk(vec**2, k, sorted=False)[1]
+    ret[topkIndices] = vec[topkIndices]
+    return ret
+
+def get_grad(model, weights, args, train=True, device='cpu'):
+    if train:
+        grad_vec = get_grad_vec(model)
+        if args.weight_decay != 0:
+            grad_vec.add_(args.weight_decay / args.num_workers, weights)
+        return grad_vec.to(device)
+    else:
+        return 0
+
+def get_grad_vec(model):
+    grad_vec = []
+    with torch.no_grad():
+        # flatten
+        for p in model.parameters():
+            if p.grad is None:
+                grad_vec.append(torch.zeros_like(p.data.view(-1)))
+            else:
+                grad_vec.append(p.grad.data.view(-1).float())
+        # concat into a single vector
+        grad_vec = torch.cat(grad_vec)
+    return grad_vec
+
+def zero_grad(model):
+    for p in model.parameters():
+        if p.grad is not None:
+            p.grad.detach_()
+            p.grad.zero_()
+
+def get_param_vec(model, device):
+    return torch.cat([p.data.view(-1) for p in model.parameters()]).to(device)
+    param_vec = []
+    for p in model.parameters():
+        param_vec.append(p.data.view(-1))
+    return torch.cat(param_vec).to(device)
+
+def set_param_vec(model, param_vec):
+    start = 0
+    for p in model.parameters():
+        end = start + p.numel()
+        p.data.zero_()
+        p.data.add_(param_vec[start:end].view(p.size()))
+        start = end
+
+def sm2np(sm, shape, dtype=ctypes.c_float):
+    # convert from shared memory object/buffer to numpy array
+    nparray = np.ndarray(shape, dtype=dtype, buffer=sm)
+    assert(nparray.base is sm)
+    return nparray

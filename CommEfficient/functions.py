@@ -12,6 +12,9 @@ import ctypes
 import multiprocessing
 from multiprocessing import Array
 
+import functions_worker as worker
+from utils import sm2np, get_param_vec, set_param_vec, get_grad, _topk
+
 #from mpi4py import MPI
 #comm = MPI.COMM_WORLD
 #rank = comm.Get_rank()
@@ -25,34 +28,8 @@ g_ps_weights_sm = None
 g_criterion = None
 g_accuracy = None
 
-def init_pool(input_model, device, num_workers,
-              worker_Sgrads_sm, worker_grads_sm,
-              client_weights_sm, ps_weights_sm):
-    global model
-    global gw_ps_weights_sm
-    global gw_client_weights_sm
-    global gw_worker_Sgrads_sm
-    global gw_worker_grads_sm
-
-    if torch.cuda.is_available():
-        worker_id = multiprocessing.current_process()._identity[0]
-        torch.cuda.set_device(worker_id % num_workers)
-
-    model = copy.deepcopy(input_model)
-    model.to(device)
-    gw_ps_weights_sm = ps_weights_sm
-    gw_client_weights_sm = client_weights_sm
-    gw_worker_Sgrads_sm = worker_Sgrads_sm
-    gw_worker_grads_sm = worker_grads_sm
-
-def sm2np(sm, shape, dtype=ctypes.c_float):
-    # convert from shared memory object/buffer to numpy array
-    nparray = np.ndarray(shape, dtype=dtype, buffer=sm)
-    assert(nparray.base is sm)
-    return nparray
-
 def profile_helper(*args):
-    cProfile.runctx("update_forward_grad(*args)",
+    cProfile.runctx("worker.update_forward_grad(*args)",
                     globals(), locals(),
                     "profile/init{:d}.prof".format(
                         multiprocessing.current_process()._identity[0]
@@ -127,7 +104,7 @@ class FedCommEffModel:
         # process pool that parallelizes training
         self.process_pool = multiprocessing.Pool(
                 num_workers,
-                initializer=init_pool,
+                initializer=worker.init_pool,
                 initargs=(self.model, device, num_workers,
                           g_worker_Sgrads_sm, g_worker_grads_sm,
                           g_client_weights_sm, g_ps_weights_sm)
@@ -155,7 +132,7 @@ class FedCommEffModel:
                            for i, idx in enumerate(indices)]
             results = self.process_pool.starmap(
                     #profile_helper,
-                    update_forward_grad,
+                    worker.update_forward_grad,
                     args_tuples
                 )
             return split_results(results, self.args.num_results_train)
@@ -163,8 +140,10 @@ class FedCommEffModel:
         else:
             args_tuples = [(batches[i], self.args, g_criterion, g_metric)
                            for i, idx in enumerate(indices)]
-            results = self.process_pool.starmap(forward_multiprocessed,
-                    args_tuples)
+            results = self.process_pool.starmap(
+                            worker.forward_multiprocessed,
+                            args_tuples
+                        )
             return split_results(results, self.args.num_results_val)
 
     def __getattr__(self, name):
@@ -309,144 +288,6 @@ class FedCommEffMetric:
         global g_metric
         out = g_metric(*args)
         return out
-
-def update_forward_grad(worker_id, client_id,
-                        batch, args, criterion, metric):
-
-    # pull PS and client weights out of the shared memory block
-    grad_size = args.grad_size
-    num_clients = args.num_clients
-    participation = args.participation
-
-    global model
-    global gw_ps_weights_sm
-    global gw_client_weights_sm
-    global gw_worker_Sgrads_sm
-    global gw_worker_grads_sm
-
-    ps_weights = sm2np(gw_ps_weights_sm, (grad_size,))
-    client_weights = sm2np(gw_client_weights_sm, (num_clients, grad_size))
-    worker_weights = client_weights[client_id]
-    ps_weights = torch.from_numpy(ps_weights).to(args.device)
-    worker_weights = torch.from_numpy(worker_weights).to(args.device)
-
-    new_worker_weights = get_new_worker_weights(ps_weights,
-                                                worker_weights,
-                                                args)
-
-    # g is a (possibly compressed) gradient
-    f = forward_grad
-    if args.model == "gpt2":
-        f = forward_grad_gpt2
-    g, results = f(
-            model, new_worker_weights,
-            batch, criterion, metric, args
-        )
-    """
-    g, grad, results = f(
-            model, new_worker_weights,
-            batch, criterion, metric, args
-        )
-    """
-    # write g to the shared memory grad array in spot worker_id
-    num_workers = int(num_clients * participation)
-    if args.mode == "sketch":
-        worker_Sgrads_shape = (num_workers, args.num_rows, args.num_cols)
-        worker_Sgrads = sm2np(gw_worker_Sgrads_sm, worker_Sgrads_shape)
-        worker_Sgrads[worker_id,:,:] = g.cpu().numpy()[:,:]
-    elif args.mode in ["true_topk", "local_topk", "localSGD"]:
-        worker_grads_shape = (num_workers, args.grad_size)
-        worker_grads = sm2np(gw_worker_grads_sm, worker_grads_shape)
-        worker_grads[worker_id,:] = g.cpu().numpy()[:]
-
-    return results
-
-def get_new_worker_weights(ps_weights, worker_weights, args):
-    device = args.device
-
-    ps_weights = ps_weights.to(device)
-    worker_weights = worker_weights.to(device)
-
-    # we'll update the old worker_weights with a possibly compressed
-    # version of diff_vec
-    diff_vec = ps_weights - worker_weights
-    if args.do_topk_down:
-        weight_update = _topk(diff_vec, k=args.k)
-    else:
-        weight_update = diff_vec
-
-    new_worker_weights = worker_weights + weight_update
-    #print(f"{torch.norm(weight_update, 2)}")
-    #print(f"{updated_vec} = {client_weights} + {weight_update}")
-    return new_worker_weights
-
-def forward_grad(model, weights, batch,
-                 criterion, metric, args):
-    device = args.device
-    model = model.to(device)
-    model.train()
-    weights = weights.to(device)
-    set_param_vec(model, weights)
-    batch = tuple(input_tensor.to(device) for input_tensor in batch)
-    criterion = criterion.to(device)
-    metric = metric.to(device)
-    if args.is_supervised:
-        ins, targets = batch
-        outs = model(ins)
-        results = compute_loss(outs, targets, criterion, metric, train=True)
-    grad = get_grad(model, weights, args, train=True, device=device)
-
-    # compress the gradient if needed
-    if args.mode == "sketch":
-        sketch = CSVec(d=args.grad_size, c=args.num_cols,
-            r=args.num_rows, device=device,
-            numBlocks=args.num_blocks)
-        sketch.accumulateVec(grad)
-        g = sketch.table.cpu()
-        del sketch
-    elif args.mode == "true_topk":
-        g = grad
-    elif args.mode == "local_topk":
-        g = _topk(grad, k=args.k)
-    elif args.mode == "localSGD":
-        grad *= args.lr_scale
-        weights -= grad
-        args.num_local_iters -= 1
-        if args.num_local_iters > 0:
-            g_recursive, results_recursive = forward_grad(model, weights, batch,
-                    criterion, metric, args)
-            g = grad + g_recursive
-            results = [r + r_recursive for (r, r_recursive) in zip(results, results_recursive)]
-        else:
-            g = grad
-
-    return g, results
-
-def forward_multiprocessed(batch, args, criterion, metric):
-    grad_size = args.grad_size
-    global model
-    global gw_ps_weights_sm
-    ps_weights = sm2np(gw_ps_weights_sm, (grad_size,))
-    device = args.device
-    ps_weights = torch.from_numpy(ps_weights).to(args.device)
-    model = model.to(device)
-    model.eval()
-    set_param_vec(model, ps_weights)
-    batch = tuple(input_tensor.to(device) for input_tensor in batch)
-    if args.is_supervised:
-        criterion = criterion.to(device)
-        metric = metric.to(device)
-        ins, targets = batch
-        outs = model(ins)
-        results = compute_loss(outs, targets, criterion, metric, train=False)
-    else:
-        logits, labels = inference(model, batch, args)
-        lm_logits, mc_logits = logits
-        lm_labels, mc_labels = labels
-        nll = criterion(lm_logits, lm_labels).detach().cpu().numpy()
-        acc = accuracy(mc_logits, mc_labels)
-        results = nll, acc
-    return results
 
 def get_updated_server(momentums, errors, args, lr, sketch=None):
     if args.mode == "sketch":
@@ -627,7 +468,7 @@ def _server_helper_sketched(momentum_sketches, error_sketches,
             error_sketch.table[hh_0, hh_1] = 0
         momentum_sketches = [momentum_sketch]
         error_sketches = [error_sketch]
-    
+
     elif none:
         global g_worker_grads_sm
         worker_grads_shape = (num_workers, args.grad_size)
@@ -647,162 +488,5 @@ def get_lr(optimizer_param_groups):
         #print(f"Lr is {lr}")
         return lr
 
-def _topk(vec, k):
-    """ Return the largest k elements (by magnitude) of vec"""
-    ret = torch.zeros_like(vec)
-    # on a gpu, sorting is faster than pytorch's topk method
-    #topkIndices = torch.sort(vec**2)[1][-k:]
-    # however, torch.topk is more space efficient
-    topkIndices = torch.topk(vec**2, k, sorted=False)[1]
-    ret[topkIndices] = vec[topkIndices]
-    return ret
-
-def get_grad(model, weights, args, train=True, device='cpu'):
-    if train:
-        grad_vec = get_grad_vec(model)
-        if args.weight_decay != 0:
-            grad_vec.add_(args.weight_decay / args.num_workers, weights)
-        return grad_vec.to(device)
-    else:
-        return 0
-
-def compute_loss(outs, targets, criterion, metric, train):
-    loss = criterion(outs, targets)
-    if train:
-        loss.backward()
-    batch_loss = loss.mean().cpu().detach().numpy()
-    acc = metric(outs, targets).float().mean().cpu().detach().numpy()
-    return batch_loss, acc
-
-def get_grad_vec(model):
-    grad_vec = []
-    with torch.no_grad():
-        # flatten
-        for p in model.parameters():
-            if p.grad is None:
-                grad_vec.append(torch.zeros_like(p.data.view(-1)))
-            else:
-                grad_vec.append(p.grad.data.view(-1).float())
-        # concat into a single vector
-        grad_vec = torch.cat(grad_vec)
-    return grad_vec
-
-def zero_grad(model):
-    for p in model.parameters():
-        if p.grad is not None:
-            p.grad.detach_()
-            p.grad.zero_()
-
-def get_param_vec(model, device):
-    return torch.cat([p.data.view(-1) for p in model.parameters()]).to(device)
-    param_vec = []
-    for p in model.parameters():
-        param_vec.append(p.data.view(-1))
-    return torch.cat(param_vec).to(device)
-
-def set_param_vec(model, param_vec):
-    start = 0
-    for p in model.parameters():
-        end = start + p.numel()
-        p.data.zero_()
-        p.data.add_(param_vec[start:end].view(p.size()))
-        start = end
-
 def split_results(results, n_results):
-    return [np.array([r[i] for r in results]) for i in range(n_results)]    
-
-# GPT2 SPECIFIC FUNCTIONS
-
-def forward_grad_gpt2(model, weights, batch, criterion,
-        metric, args):
-    device = args.device
-    model.to(device)
-    model.train()
-    weights = weights.to(device)
-    set_param_vec(model, weights)
-    batch = tuple(input_tensor.to(device) for input_tensor in batch)
-    mega_batch = batch
-    grad_accum_steps = args.grad_accum_steps
-    batch_size = args.batch_size
-    train_batch_size = args.train_batch_size
-    #print(f"Real batch size: {mega_batch[3].size()[0]} from {train_batch_size} with {[b.size() for b in batch]}")
-    train_batch_size = mega_batch[3].size()[0]
-    accum_loss = None
-    n_steps = train_batch_size // batch_size
-    for i in range(n_steps):
-        start = i * batch_size
-        end = (i+1) * batch_size
-        batch = [b[start:end] for b in mega_batch]
-        input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids = batch
-        (lm_loss), (mc_loss), *_ = model(
-            input_ids, token_type_ids=token_type_ids, mc_token_ids=mc_token_ids,
-            mc_labels=mc_labels, lm_labels=lm_labels
-        )
-        loss = (lm_loss * args.lm_coef + mc_loss * args.mc_coef) / n_steps
-        #print(f"Loss: {loss} from {lm_loss} and {mc_loss}")
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_norm)
-        if accum_loss is not None:
-            accum_loss += loss
-        else:
-            accum_loss = loss
-        #print(f"accum loss: {accum_loss} from {loss}")
-    #print(f"accum loss: {accum_loss}")
-    grad = get_grad(model, weights, args, device=device)
-    # compress the gradient if needed
-    if args.mode == "sketch":
-        sketch = CSVec(d=args.grad_size, c=args.num_cols,
-            r=args.num_rows, device=device,
-            numBlocks=args.num_blocks)
-        sketch.accumulateVec(grad)
-        g = sketch.table.cpu()
-    elif args.mode == "true_topk":
-        g = grad
-    elif args.mode == "local_topk":
-        g = _topk(grad, k=args.k)
-    if accum_loss is not None:
-        loss = accum_loss.item()/max(n_steps, 1)
-    else:
-        loss = 0
-    return g, [loss]
-
-def accuracy(y_pred, y):
-    y_pred, y = _check_shape(y_pred, y)
-    indices = torch.argmax(y_pred, dim=1)
-    correct = torch.eq(indices, y).view(-1)
-    _num_correct, _num_examples = 0, 0
-    _num_correct += torch.sum(correct).item()
-    _num_examples += correct.shape[0]
-    acc = _num_correct/_num_examples
-    return acc
-
-def _check_shape(y_pred, y):
-    if y.ndimension() > 1 and y.shape[1] == 1:
-        # (N, 1, ...) -> (N, ...)
-        y = y.squeeze(dim=1)
-    if y_pred.ndimension() > 1 and y_pred.shape[1] == 1:
-        # (N, 1, ...) -> (N, ...)
-        y_pred = y_pred.squeeze(dim=1)
-    if not (y.ndimension() == y_pred.ndimension() or y.ndimension() + 1 == y_pred.ndimension()):
-        raise ValueError("y must have shape of (batch_size, ...) and y_pred must have "
-             "shape of (batch_size, num_categories, ...) or (batch_size, ...), "
-             "but given {} vs {}.".format(y.shape, y_pred.shape))
-    y_shape = y.shape
-    y_pred_shape = y_pred.shape
-    if y.ndimension() + 1 == y_pred.ndimension():
-        y_pred_shape = (y_pred_shape[0],) + y_pred_shape[2:]
-    if not (y_shape == y_pred_shape):
-        raise ValueError("y and y_pred must have compatible shapes.")
-    return y_pred, y
-
-def inference(model, batch, args):
-    model.eval()
-    with torch.no_grad():
-        input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids = batch
-        model_outputs = model(input_ids, mc_token_ids, token_type_ids=token_type_ids)
-        lm_logits, mc_logits, *_ = model(
-            input_ids, token_type_ids=token_type_ids, mc_token_ids=mc_token_ids,
-        )
-        lm_logits_flat_shifted = lm_logits[..., :-1, :].contiguous().view(-1, lm_logits.size(-1))
-        lm_labels_flat_shifted = lm_labels[..., 1:].contiguous().view(-1)
-        return (lm_logits_flat_shifted, mc_logits), (lm_labels_flat_shifted, mc_labels)
+    return [np.array([r[i] for r in results]) for i in range(n_results)]
