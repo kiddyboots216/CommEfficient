@@ -99,24 +99,27 @@ class AttrDict(dict):
         self.__dict__ = self
 
 # FedSketched imports
-from CommEfficient.functions import FedCommEffOptimizer, FedCommEffCriterion, make_logdir, FedCommEffModel, FedCommEffMetric
+from CommEfficient.functions import FedCommEffOptimizer, FedCommEffCriterion, FedCommEffModel, FedCommEffMetric
+from utils import make_logdir
 from CommEfficient.minimal import PiecewiseLinear, TableLogger, TSVLogger, Timer, union
 from torch.optim import SGD
 from torch.utils.tensorboard import SummaryWriter
+from utils import parse_args
+
 import numpy as np
 import multiprocessing
 
 global start_idx
 start_idx = 0
 
-def train_gpt2(model, opt, scheduler, train_loader, val_loader, params, log_dir, logger=None, timer=None, writer=None):
+def train_gpt2(model, opt, scheduler, train_loader, val_loader, args, log_dir, logger=None, timer=None, writer=None):
     timer = timer or Timer()
-    epochs = params["epochs"]
+    epochs = args.num_epochs
     for epoch in range(epochs):
-        train_loss = run_batches(model, opt, scheduler, train_loader, params, timer, training=True, logger=logger, writer=writer)
+        train_loss = run_batches(model, opt, scheduler, train_loader, args, timer, training=True, logger=logger, writer=writer)
         train_time = timer()
         model.save_pretrained(log_dir)
-        nll, acc, ppl = run_batches(model, None, None, val_loader, params, timer, training=False, logger=TableLogger(), writer=writer)
+        nll, acc, ppl = run_batches(model, None, None, val_loader, args, timer, training=False, logger=TableLogger(), writer=writer)
         val_time = timer()
         epoch_stats = {
             'train_time': train_time,
@@ -137,13 +140,14 @@ def train_gpt2(model, opt, scheduler, train_loader, val_loader, params, log_dir,
         logger.append(summary)
         return summary
 
-def run_batches(model, opt, scheduler, loader, params, timer, training, logger=None, writer=None):
-    participation = params['participation']
-    n_clients = params['n_clients']
-    device = params['device']
-    batch_size = params['train_batch_size']
-    clients = np.arange(n_clients)
-    n_clients_to_select = int(n_clients * participation)
+def run_batches(model, opt, scheduler, loader, args, timer, training, logger=None, writer=None):
+    participation = args.participation
+    num_clients = args.num_clients
+    device = args.device
+    train_batch_shard_size = args.batch_size // args.num_train_batch_shards
+    val_batch_shard_size = args.batch_size // args.num_train_batch_shards
+    clients = np.arange(num_clients)
+    num_workers = int(num_clients * participation)
     model.train(training)
 
     if training:
@@ -151,17 +155,17 @@ def run_batches(model, opt, scheduler, loader, params, timer, training, logger=N
         global start_idx
         for batch_idx, batch in enumerate(loader):
             #print(f"Batch size: {[b.size() for b in batch]}")
-            start_idx = start_idx % n_clients
-            end_idx = start_idx + n_clients_to_select
-            idx = np.random.choice(clients, 
-                n_clients_to_select, replace=False)
+            start_idx = start_idx % num_clients
+            end_idx = start_idx + num_workers
+            idx = np.random.choice(clients,
+                num_workers, replace=False)
             #print(f"Selecting randomly {idx}")
             idx = np.arange(start_idx, end_idx)
             #print(f"Selecting in order {idx}")
             minibatches = []
             for i, _ in enumerate(idx):
-                start = i * batch_size 
-                end = (i+1) * batch_size 
+                start = i * train_batch_shard_size
+                end = (i+1) * train_batch_shard_size
                 minibatch = [b[start:end] for b in batch]
                 minibatches.append(minibatch)
             loss = model(minibatches, idx)
@@ -185,7 +189,7 @@ def run_batches(model, opt, scheduler, loader, params, timer, training, logger=N
                 'lr': lr}, batch_stats)
             logger.append(summary)
             """
-            if params['test']:
+            if args.do_test:
                 break
             """
         return np.mean(losses)
@@ -193,14 +197,13 @@ def run_batches(model, opt, scheduler, loader, params, timer, training, logger=N
     else:
         nlls, accs, ppls = [], [], []
         for batch_idx, batch in enumerate(loader):
-            idx = np.arange(n_clients_to_select)
+            idx = np.arange(num_workers)
             minibatches = []
             batch_len = batch[3].size()[0]
             indices = []
-            batch_size = params["valid_batch_size"] 
             for i, _ in enumerate(idx):
-                start = i * batch_size // n_clients_to_select
-                end = (i+1) * batch_size // n_clients_to_select
+                start = i * val_batch_shard_size // num_workers
+                end = (i+1) * val_batch_shard_size // num_workers
                 if end > batch_len:
                     break
                 minibatch = [b[start:end] for b in batch]
@@ -295,9 +298,9 @@ def get_data_loaders(args, tokenizer, test=False):
                         for input_name, input_array in instance.items():
                             datasets[dataset_name][input_name].append(input_array)
                     datasets[dataset_name]["mc_labels"].append(num_candidates - 1)
-                    datasets[dataset_name]["n_candidates"] = num_candidates
+                    datasets[dataset_name]["num_candidates"] = num_candidates
                 persona = [persona[-1]] + persona[:-1]  # permuted personalities
-            if test and dialogs_processed > args.n_dialogs:
+            if test and dialogs_processed > args.num_dialogs:
                 break
 
     logger.info("Pad inputs and convert to Tensor")
@@ -307,15 +310,15 @@ def get_data_loaders(args, tokenizer, test=False):
         for input_name in MODEL_INPUTS:
             tensor = torch.tensor(dataset[input_name])
             if input_name != "mc_labels":
-                tensor = tensor.view((-1, datasets[dataset_name]["n_candidates"]) + tensor.shape[1:])
+                tensor = tensor.view((-1, datasets[dataset_name]["num_candidates"]) + tensor.shape[1:])
             tensor_datasets[dataset_name].append(tensor)
 
     logger.info("Build train and validation dataloaders")
     train_dataset, valid_dataset = TensorDataset(*tensor_datasets["train"]), TensorDataset(*tensor_datasets["valid"])
     train_sampler = None
     valid_sampler = None
-    train_loader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, shuffle=(True))
-    valid_loader = DataLoader(valid_dataset, sampler=valid_sampler, batch_size=args.valid_batch_size, shuffle=False)
+    train_loader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.batch_size, shuffle=(True))
+    valid_loader = DataLoader(valid_dataset, sampler=valid_sampler, batch_size=args.batch_size, shuffle=False)
 
     logger.info("Train dataset (Batch, Candidates, Seq length): {}".format(train_dataset.tensors[0].shape))
     logger.info("Valid dataset (Batch, Candidates, Seq length): {}".format(valid_dataset.tensors[0].shape))
@@ -323,102 +326,14 @@ def get_data_loaders(args, tokenizer, test=False):
 
 
 def train():
-    parser = ArgumentParser()
-    parser.add_argument("--dataset_path", type=str, default="", help="Path or url of the dataset. If empty download from S3.")
-    parser.add_argument("--dataset_cache", type=str, default='./dataset_cache', help="Path or url of the dataset cache")
-    parser.add_argument("--model_checkpoint", type=str, default="gpt2", help="Path, url or short name of the model")
-    parser.add_argument("--num_candidates", type=int, default=2, help="Number of candidates for training")
-    parser.add_argument("--max_history", type=int, default=2, help="Number of previous exchanges to keep in history")
-    parser.add_argument("--train_batch_size", type=int, default=4, help="Batch size for training")
-    parser.add_argument("--valid_batch_size", type=int, default=4, help="Batch size for validation")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=8, help="Accumulate gradients on several steps")
-    parser.add_argument("--lr", type=float, default=4e-2, help="Learning rate")
-    parser.add_argument("--lm_coef", type=float, default=1.0, help="LM loss coefficient")
-    parser.add_argument("--mc_coef", type=float, default=1.0, help="Multiple-choice loss coefficient")
-    parser.add_argument("--max_norm", type=float, default=1.0, help="Clipping gradient norm")
-    parser.add_argument("--n_epochs", type=int, default=3, help="Number of training epochs")
-    parser.add_argument("--personality_permutations", type=int, default=1, help="Number of permutations of personality sentences")
-    parser.add_argument("--eval_before_start", action='store_true', help="If true start with a first evaluation before training")
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)")
-    parser.add_argument("--fp16", type=str, default="", help="Set to O0, O1, O2 or O3 for fp16 training (see apex documentation)")
+    args = parse_args(default_lr=4e-2)
 
-    # FedSketched args
-    parser.add_argument("--k", type=int, default=50000)
-    parser.add_argument("--p2", type=int, default=4)
-    parser.add_argument("--cols", type=int, default=500000)
-    parser.add_argument("--rows", type=int, default=5)
-    parser.add_argument("--num_blocks", type=int, default=20)
-    parser.add_argument("--nesterov", action="store_true")
-    parser.add_argument("--momentum", type=float, default=0.9)
-    parser.add_argument("--test", action="store_true")
-    momentum_types = ["none", "local", "virtual"]
-    parser.add_argument("--momentum_type", choices=momentum_types,
-                        default="none")
-    error_types = momentum_types
-    parser.add_argument("--error_type", choices=error_types,
-                        default="none")
-    parser.add_argument("--topk_down", action="store_true")
-    modes = ["sketch", "true_topk", "local_topk"]
-    parser.add_argument("--mode", choices=modes, default="sketch")
-    reductions = ["sum", "mean", "median"]
-    parser.add_argument("--grad_reduce", choices=reductions, default="sum")
-    parser.add_argument("--clients", type=int, default=1)
-    parser.add_argument("--participation", type=float, default=1.0)
-    parser.add_argument("--n_dialogs", type=int, default=1)
-    args = parser.parse_args()
-    if args.test:
-        args.train_batch_size = 2
-        args.gradient_accumulation_steps = 2
-        args.valid_batch_size = 2
-        args.epochs = 1
+    if args.do_test:
+        args.batch_size = 2
+        args.num_batch_shards = 2
+        args.num_epochs = 1
         args.participation = 1.0
 
-    args.workers = int(args.clients * args.participation)
-
-    params = {
-        "device": args.device,
-        "test": args.test,
-        "model": "gpt2",
-        # sketching params
-        "k": args.k,
-        "p2": args.p2,
-        "num_cols": args.cols,
-        "num_rows": args.rows,
-        "batch_size": args.train_batch_size,
-        "num_blocks": args.num_blocks,
-        # federation params
-        "n_clients": args.clients,
-        "participation": args.participation, 
-        "n_workers": args.workers,
-        # optimizer params
-        "lr": 1, #assumes scheduler accounts for this lr
-        "momentum": args.momentum,
-        "nesterov": args.nesterov,
-        "dampening": 0,
-        "epochs": args.n_epochs,
-        "grad_reduce": args.grad_reduce,
-        "weight_decay": 0,
-        # algorithmic params
-        "mode": args.mode,
-        "topk_down": args.topk_down,
-        "momentum_type": args.momentum_type,
-        "error_type": args.error_type,
-        # GPT2 SPECIFIC
-        "model_checkpoint": args.model_checkpoint,
-        "max_norm": args.max_norm,
-        "lm_coef": args.lm_coef,
-        "mc_coef": args.mc_coef,
-        "grad_accum_steps": args.gradient_accumulation_steps,
-        "mean_grads": True,
-        # model outs
-        "n_results_train": 1,
-        "n_results_val": 2,
-    }
-    args.train_batch_size *= params["grad_accum_steps"]
-    params["train_batch_size"] = args.train_batch_size
-    args.train_batch_size *= params["n_workers"]
-    args.valid_batch_size *= params["n_workers"]
-    params["valid_batch_size"] = args.valid_batch_size
 
     logging.basicConfig(level=logging.INFO)
     logger.info("Arguments: %s", pformat(args))
@@ -428,38 +343,38 @@ def train():
     tokenizer_class = GPT2Tokenizer if "gpt2" in args.model_checkpoint else OpenAIGPTTokenizer
     tokenizer = tokenizer_class.from_pretrained(args.model_checkpoint)
     # SKETCHED
-    params["len_tokenizer"] = len(tokenizer)
+    args.len_tokenizer = len(tokenizer)
 
     model_class = GPT2DoubleHeadsModel if "gpt2" in args.model_checkpoint else OpenAIGPTDoubleHeadsModel
     model = model_class.from_pretrained(args.model_checkpoint)
     model.to(args.device)
     # Do logging now before we overwrite model
-    log_dir = make_logdir(params)
+    log_dir = make_logdir(args)
     writer = SummaryWriter(log_dir=log_dir)
     tokenizer.save_pretrained(log_dir)
     getattr(model, 'module', model).config.to_json_file(os.path.join(log_dir, CONFIG_NAME))
     # Add special tokens if they are not already added
     add_special_tokens_(model, tokenizer)
     # HAVE TO USE SGD FOR FED
-    optimizer = SGD(model.parameters(), lr=params["lr"], momentum=params["momentum"])
+    optimizer = SGD(model.parameters(), lr=args.lr_scale, momentum=args.momentum)
 
     logger.info('Finished in {:.2f} seconds'.format(timer()))
     logger.info("Prepare datasets")
-    train_loader, val_loader, train_sampler, valid_sampler = get_data_loaders(args, tokenizer, params['test'])
+    train_loader, val_loader, train_sampler, valid_sampler = get_data_loaders(args, tokenizer, args.do_test)
 
     logger.info('Finished in {:.2f} seconds'.format(timer()))
     logger.info("Initializing everything")
-    model = FedCommEffModel(model, params)
-    optimizer = FedCommEffOptimizer(optimizer, params)
+    model = FedCommEffModel(model, args)
+    optimizer = FedCommEffOptimizer(optimizer, args)
     criterion = torch.nn.CrossEntropyLoss(ignore_index=-1)
-    criterion = FedCommEffCriterion(criterion, params)
-    metric = FedCommEffMetric(None, params)
+    criterion = FedCommEffCriterion(criterion, args)
+    metric = FedCommEffMetric(None, args)
     lr_schedule = PiecewiseLinear(
-            [0, args.n_epochs * len(train_loader)], 
-            [args.lr, 0.0])
+            [0, args.num_epochs * len(train_loader)],
+            [args.lr_scale, 0.0])
     lambda_step = lambda x: lr_schedule(x)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=[lambda_step])
-    train_gpt2(model, optimizer, scheduler, train_loader, val_loader, params, log_dir, logger=TableLogger(), timer=timer, writer=writer)
+    train_gpt2(model, optimizer, scheduler, train_loader, val_loader, args, log_dir, logger=TableLogger(), timer=timer, writer=writer)
 
 
 if __name__ == "__main__":
