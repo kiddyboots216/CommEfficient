@@ -25,9 +25,14 @@ def gen_data(args):
     print('Finished in {:.2f} seconds'.format(timer()))
     if args.static_datasets:
         print('Preprocessing divided data')
-        batch_size = args.batch_size // args.workers
-        batch_size = min(batch_size, args.DATA_LEN // args.clients)
-        split = split_image_data(x_train, y_train, n_clients=args.clients, classes_per_client=args.num_classes, balancedness=args.balancedness, verbose=True)
+        batch_size = args.batch_size // args.num_workers
+        batch_size = min(batch_size, args.num_data // args.num_clients)
+        split = split_image_data(x_train,
+                                 y_train,
+                                 n_clients=args.num_clients,
+                                 classes_per_client=args.num_classes,
+                                 balancedness=args.balancedness,
+                                 verbose=True)
         train_datasets = [list(zip(transpose(normalise(pad(x, 4))), y)) for x, y in split] 
         client_train_loaders = [Batches(Transform(client_train_set, train_transforms), batch_size, shuffle=True, set_random_choices=True, drop_last=True) for client_train_set in train_datasets]
         print('Finished in {:.2f} seconds'.format(timer()))

@@ -173,6 +173,7 @@ def run_batches_fed(model, opt, lr_scheduler, loaders, training, args):
             else:
                 lr_scheduler.step()
             opt.step(idx)
+            model.zero_grad()
             batch_loss = loss
             #print("batch_loss", batch_loss.mean())
             batch_acc = acc

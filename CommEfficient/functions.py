@@ -156,6 +156,11 @@ class FedCommEffModel:
             set_param_vec(self.model, curr_weights)
             return getattr(self.model, name)
 
+    def zero_grad(self):
+        self.process_pool.starmap(worker.zero_grad,
+                              [() for _ in range(self.args.num_workers)])
+        self.model.zero_grad()
+
 class FedCommEffOptimizer(torch.optim.Optimizer):
     def __init__(self, optimizer, args):
         #global grad_size

@@ -24,6 +24,10 @@ def init_pool(input_model, device, num_workers,
     gw_worker_Sgrads_sm = worker_Sgrads_sm
     gw_worker_grads_sm = worker_grads_sm
 
+def zero_grad():
+    global model
+    model.zero_grad()
+
 def update_forward_grad(worker_id, client_id,
                         batch, args, criterion, metric):
 
