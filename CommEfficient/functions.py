@@ -253,8 +253,10 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
 
     def get_lr(self):
         new_lr = get_lr(self.param_groups)
+        """
         if self.params["mean_grads"]:
             new_lr = new_lr / self.params["n_workers"]
+        """
         global lr
         lr = new_lr
         return new_lr
@@ -774,6 +776,8 @@ def forward_grad_gpt2(model, weights, batch, criterion,
             mc_labels=mc_labels, lm_labels=lm_labels
         )
         loss = (lm_loss * params['lm_coef'] + mc_loss * params['mc_coef']) / n_steps
+        if params["mean_grads"]:
+            loss = loss / params["n_workers"]
         #print(f"Loss: {loss} from {lm_loss} and {mc_loss}")
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), params['max_norm'])
@@ -800,8 +804,6 @@ def forward_grad_gpt2(model, weights, batch, criterion,
     else:
         loss = 0
     """
-    if params["mean_grads"]:
-        g = g / params["n_workers"]
     """
     return g, [loss]
 
