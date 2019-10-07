@@ -1,5 +1,6 @@
 from data_utils import *
 from minimal import Timer, normalise, pad, transpose, Crop, FlipLR, Cutout, Transform, Batches, cifar10
+from utils import parse_args
 DATA_DIR = "sample_data"
 
 def gen_data(args):
@@ -22,11 +23,16 @@ def gen_data(args):
     test_set = list(zip(transpose(normalise(x_test)), y_test))
     val_loader = Batches(test_set, args.batch_size, shuffle=False, drop_last=False)
     print('Finished in {:.2f} seconds'.format(timer()))
-    if args.fed:
+    if args.static_datasets:
         print('Preprocessing divided data')
-        batch_size = args.batch_size // args.workers
-        batch_size = min(batch_size, args.DATA_LEN // args.clients)
-        split = split_image_data(x_train, y_train, n_clients=args.clients, classes_per_client=args.classes, balancedness=args.balancedness, verbose=True)
+        batch_size = args.batch_size // args.num_workers
+        batch_size = min(batch_size, args.num_data // args.num_clients)
+        split = split_image_data(x_train,
+                                 y_train,
+                                 n_clients=args.num_clients,
+                                 classes_per_client=args.num_classes,
+                                 balancedness=args.balancedness,
+                                 verbose=True)
         train_datasets = [list(zip(transpose(normalise(pad(x, 4))), y)) for x, y in split] 
         client_train_loaders = [Batches(Transform(client_train_set, train_transforms), batch_size, shuffle=True, set_random_choices=True, drop_last=True) for client_train_set in train_datasets]
         print('Finished in {:.2f} seconds'.format(timer()))
@@ -58,15 +64,5 @@ def test_weird(weird):
         print(f"iter {i}")
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-clients", type=int, default=1)
-    parser.add_argument("-participation", type=float, default=1.0)
-    parser.add_argument("-classes", type=int, default=10)
-    parser.add_argument("-balancedness", type=float, default=1.0)
-    parser.add_argument("-batch_size", type=int, default=512)
-    parser.add_argument("-fed", action="store_true")
-    parser.add_argument("-DATA_LEN", type=int, default=50000)
-    args = parser.parse_args()
-    args.workers = int(args.clients * args.participation)
+    args = parse_args(default_lr=0)
     gen_data(args)
