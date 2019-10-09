@@ -42,10 +42,7 @@ def train(model, opt, lr_scheduler, train_loader, val_loader,
             'total_time': timer.total_time,
         }
         lr = lr_scheduler.get_lr()[0]
-        if args.grad_reduction == "sum":
-            lr = lr * batch_size
-        elif args.grad_reduction in ["median", "mean"]:
-            lr = lr * (batch_size / args.num_workers)
+        #lr = lr * batch_size
         summary = union({'epoch': epoch+1,
             'lr': lr},
             epoch_stats)
@@ -190,6 +187,7 @@ if __name__ == "__main__":
     timer = Timer()
 
     # model class and config
+    torch.random.manual_seed(21)
     model_cls = Net
     model_config = {}
     if args.do_test:
@@ -219,19 +217,15 @@ if __name__ == "__main__":
     # grad_reduction only controlls how gradients from different
     # workers are combined
     # so the lr is multiplied by num_workers for mean and median
-    if args.grad_reduction == "sum":
-        lambda_step = lambda step: (lr_schedule(step / loader_len)
-                                    / args.batch_size)
-    else:
-        lambda_step = lambda step: (lr_schedule(step / loader_len)
-                                    / args.batch_size
-                                    * args.num_workers)
+    lambda_step = lambda step: (lr_schedule(step / loader_len)
+           # / args.batch_size
+            ) 
 
     # instantiate ALL the things
     model = model_cls(**model_config)
     opt = optim.SGD(model.parameters(), lr=1)
     # even for median or mean, each worker still sums gradients locally
-    criterion = torch.nn.CrossEntropyLoss(reduction='sum')
+    criterion = torch.nn.CrossEntropyLoss(reduction='mean')
     accuracy = Correct()
 
     # FedComm-ify everything

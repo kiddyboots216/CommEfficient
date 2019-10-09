@@ -68,10 +68,10 @@ def parse_args(default_lr):
     error_types = momentum_types
     parser.add_argument("--error_type", choices=error_types,
                         default="none")
-    reductions = ["sum", "mean", "median"]
+    reductions = ["mean", "median"]
     parser.add_argument("--grad_reduction",
                         choices=reductions,
-                        default="sum",
+                        default="mean",
                         help="How to combine gradients from workers")
     parser.add_argument("--lr_scale", type=float, default=default_lr)
     parser.add_argument("--pivot_epoch", type=int, default=5)
@@ -113,7 +113,7 @@ def parse_args(default_lr):
     parser.add_argument("--mc_coef", type=float, default=1.0,
                         help="Multiple-choice loss coefficient")
     parser.add_argument("--max_norm", type=float, default=1.0,
-                        help="Clipping gradient norm")
+                        help="Clipping gradient norm, is per-worker")
     parser.add_argument("--personality_permutations", type=int, default=1,
                         help=("Number of permutations of personality"
                               " sentences"))
@@ -127,7 +127,7 @@ def parse_args(default_lr):
 
     args = parser.parse_args()
     args.num_workers = int(args.num_clients * args.participation)
-    args.weight_decay = args.weight_decay * args.batch_size
+    args.weight_decay = args.weight_decay
 
     return args
 

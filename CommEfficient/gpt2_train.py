@@ -144,33 +144,30 @@ def run_batches(model, opt, scheduler, loader, args, timer, training, logger=Non
     participation = args.participation
     num_clients = args.num_clients
     device = args.device
-    train_batch_shard_size = args.batch_size // args.num_train_batch_shards
-    val_batch_shard_size = args.batch_size // args.num_train_batch_shards
     clients = np.arange(num_clients)
-    num_workers = int(num_clients * participation)
     model.train(training)
 
     if training:
         losses = []
         global start_idx
         for batch_idx, batch in enumerate(loader):
-            #print(f"Batch size: {[b.size() for b in batch]}")
             start_idx = start_idx % num_clients
-            end_idx = start_idx + num_workers
-            idx = np.random.choice(clients,
-                num_workers, replace=False)
-            #print(f"Selecting randomly {idx}")
-            idx = np.arange(start_idx, end_idx)
-            #print(f"Selecting in order {idx}")
+            end_idx = start_idx + args.num_workers
+            indices = np.random.choice(clients,
+                args.num_workers, replace=False)
             minibatches = []
-            for i, _ in enumerate(idx):
-                start = i * train_batch_shard_size
-                end = (i+1) * train_batch_shard_size
+            batch_len = batch[3].size()[0]
+            for i, idx in enumerate(indices):
+                start = i * args.batch_size // args.num_workers
+                if start >= batch_len:
+                    break
+                end = (i+1) * args.batch_size // args.num_workers
                 minibatch = [b[start:end] for b in batch]
                 minibatches.append(minibatch)
-            loss = model(minibatches, idx)
+            indices = indices[:len(minibatches)]
+            loss = model(minibatches, indices)
             scheduler.step()
-            opt.step(idx)
+            opt.step(indices)
             loss = np.mean(loss)
             losses.append(loss)
             start_idx = end_idx
@@ -197,18 +194,17 @@ def run_batches(model, opt, scheduler, loader, args, timer, training, logger=Non
     else:
         nlls, accs, ppls = [], [], []
         for batch_idx, batch in enumerate(loader):
-            idx = np.arange(num_workers)
+            indices = np.arange(args.num_workers)
             minibatches = []
             batch_len = batch[3].size()[0]
-            indices = []
-            for i, _ in enumerate(idx):
-                start = i * val_batch_shard_size // num_workers
-                end = (i+1) * val_batch_shard_size // num_workers
-                if end > batch_len:
+            for i, _ in enumerate(indices):
+                start = i * args.batch_size // args.num_workers
+                if start >= batch_len:
                     break
+                end = (i+1) * args.batch_size // args.num_workers
                 minibatch = [b[start:end] for b in batch]
                 minibatches.append(minibatch)
-                indices.append(i)
+            indices = indices[:len(minibatches)]
             nll, acc = model(minibatches, indices)
             """
             nll, acc, ppl = model(minibatches, indices)
@@ -329,7 +325,7 @@ def train():
     args = parse_args(default_lr=4e-2)
 
     if args.do_test:
-        args.batch_size = 2
+        args.batch_size = 12
         args.num_batch_shards = 2
         args.num_epochs = 1
         args.participation = 1.0
@@ -366,8 +362,8 @@ def train():
     model = FedCommEffModel(model, args)
     optimizer = FedCommEffOptimizer(optimizer, args)
     criterion = torch.nn.CrossEntropyLoss(ignore_index=-1)
+    metric = FedCommEffMetric(criterion, args)
     criterion = FedCommEffCriterion(criterion, args)
-    metric = FedCommEffMetric(None, args)
     lr_schedule = PiecewiseLinear(
             [0, args.num_epochs * len(train_loader)],
             [args.lr_scale, 0.0])

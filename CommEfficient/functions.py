@@ -78,15 +78,14 @@ class FedCommEffModel:
 
         # this shared memory block will hold the gradients
         # (or gradient sketches) computed by each worker in a round
-        num_workers = args.num_workers
         if args.mode == "sketch":
             g_worker_Sgrads_sm = Array(
                     'f',
-                    num_workers * args.num_rows * args.num_cols,
+                    args.num_workers * args.num_rows * args.num_cols,
                     lock=False
                 )
             # and zero out worker_Sgrads to start
-            worker_Sgrads_shape = (num_workers,
+            worker_Sgrads_shape = (args.num_workers,
                                    args.num_rows,
                                    args.num_cols)
             worker_Sgrads = sm2np(g_worker_Sgrads_sm, worker_Sgrads_shape)
@@ -94,18 +93,18 @@ class FedCommEffModel:
         elif args.mode in ["true_topk", "local_topk", "localSGD"]:
             g_worker_grads_sm = Array(
                     'f',
-                    num_workers * args.grad_size,
+                    args.num_workers * args.grad_size,
                     lock=False
                 )
-            worker_grads_shape = (num_workers, args.grad_size)
+            worker_grads_shape = (args.num_workers, args.grad_size)
             worker_grads = sm2np(g_worker_grads_sm, worker_grads_shape)
             worker_grads[:] = 0
 
         # process pool that parallelizes training
         self.process_pool = multiprocessing.Pool(
-                num_workers,
+                args.num_workers,
                 initializer=worker.init_pool,
-                initargs=(self.model, device, num_workers,
+                initargs=(self.model, device, args.num_workers,
                           g_worker_Sgrads_sm, g_worker_grads_sm,
                           g_client_weights_sm, g_ps_weights_sm)
             )
@@ -117,7 +116,7 @@ class FedCommEffModel:
         global g_ps_weights_sm
         ps_weights = sm2np(g_ps_weights_sm,
                            (self.args.grad_size,))
-        curr_weights = torch.from_numpy(ps_weights)
+        curr_weights = torch.from_numpy(ps_weights).cuda()
         set_param_vec(self.model, curr_weights)
         self.model.save_pretrained(log_dir)
     def __call__(self, batches, indices):
@@ -313,8 +312,7 @@ def _server_helper_localSGD(momentum_vecs, error_vecs, args, lr):
     device = torch.device(args.device)
     ps_weights = sm2np(g_ps_weights_sm, (args.grad_size,),)
     ps_weights = torch.from_numpy(ps_weights).to(device)
-    num_workers = int(args.num_clients * args.participation)
-    worker_grads_shape = (num_workers, args.grad_size)
+    worker_grads_shape = (args.num_workers, args.grad_size)
     worker_grads = sm2np(g_worker_grads_sm, worker_grads_shape)
     large = args.model == "gpt2"
     if large:
@@ -338,16 +336,20 @@ def _server_helper_true_topk(momentum_vecs, error_vecs, args, lr):
     ps_weights = sm2np(g_ps_weights_sm, (args.grad_size,),)
     ps_weights = torch.from_numpy(ps_weights).to(device)
 
-    num_workers = int(args.num_clients * args.participation)
-    worker_grads_shape = (num_workers, args.grad_size)
+    worker_grads_shape = (args.num_workers, args.grad_size)
     worker_grads = sm2np(g_worker_grads_sm, worker_grads_shape)
     large = args.model == "gpt2"
-    if large:
-        grad_sum = torch.from_numpy(worker_grads[0]).to(device)
-        for g in worker_grads[1:]:
-            grad_sum += torch.from_numpy(g).to(device)
-    else:
-        grad_sum = np.sum([torch.from_numpy(g).to(device) for g in worker_grads])
+    if args.grad_reduction == "mean":
+        if large:
+            grad_sum = torch.from_numpy(worker_grads[0]).to(device)
+            for g in worker_grads[1:]:
+                grad_sum += torch.from_numpy(g).to(device)
+            grad_sum /= args.num_workers
+        else:
+            grad_sum = np.sum([torch.from_numpy(g).to(device) for g in worker_grads])
+            grad_sum /= args.num_workers
+    if args.grad_reduction == "median":
+        grad_agg = np.median([torch.from_numpy(g).to(device) for g in worker_grads])
     momentum_vec = momentum_vecs[0]
     error_vec = error_vecs[0]
     momentum_vec *= momentum
@@ -356,6 +358,7 @@ def _server_helper_true_topk(momentum_vecs, error_vecs, args, lr):
     update = _topk(error_vec, k=args.k)
     momentum_vec[update.nonzero()] = 0
     error_vec[update.nonzero()] = 0
+    #print(f"Updating {ps_weights.mean()} with {update.mean()} * {lr}")
     return (ps_weights - update * lr).cpu(), [momentum_vec], [error_vec]
 
 def _server_helper_local_topk(momentum_vecs, error_vecs, args, lr):
@@ -370,8 +373,7 @@ def _server_helper_local_topk(momentum_vecs, error_vecs, args, lr):
     ps_weights = sm2np(g_ps_weights_sm, (args.grad_size,),)
     ps_weights = torch.from_numpy(ps_weights).to(device)
 
-    num_workers = int(args.num_clients * args.participation)
-    worker_grads_shape = (num_workers, args.grad_size)
+    worker_grads_shape = (args.num_workers, args.grad_size)
     worker_grads = sm2np(g_worker_grads_sm, worker_grads_shape)
     large = args.model == "gpt2"
     if large:
@@ -408,8 +410,7 @@ def _server_helper_sketched(momentum_sketches, error_sketches,
     ps_weights = sm2np(g_ps_weights_sm, (args.grad_size,),)
     ps_weights = torch.from_numpy(ps_weights).to(device)
 
-    num_workers = int(args.num_clients * args.participation)
-    worker_Sgrads_shape = (num_workers,
+    worker_Sgrads_shape = (args.num_workers,
                            args.num_rows,
                            args.num_cols)
     worker_Sgrads = sm2np(g_worker_Sgrads_sm, worker_Sgrads_shape)
@@ -441,22 +442,30 @@ def _server_helper_sketched(momentum_sketches, error_sketches,
                 error_sketch.table[hh_0, hh_1] = 0
 
     elif virtual:
-        grad_sketch_sum = sketch
-        grad_sketch_sum.zero()
-        for S in worker_Sgrads:
-            grad_sketch_sum.accumulateTable(S)
+        if args.grad_reduction == "mean":
+            grad_sketch_agg = sketch
+            grad_sketch_agg.zero()
+            for S in worker_Sgrads:
+                grad_sketch_agg.accumulateTable(S)
+            grad_sketch_agg /= args.num_workers
+        elif args.grad_reduction == "median":
+            sketch.zero()
+            csvecs = [copy.deepcopy(sketch) for _ in worker_Sgrads]
+            for csvec, S in zip(csvecs, worker_Sgrads):
+                csvec.accumulateTable(S)
+            grad_sketch_agg = csvec.median(csvecs)
 
         momentum_sketch = momentum_sketches[0]
         error_sketch = error_sketches[0]
         if args.momentum_type != "none":
             momentum_sketch *= momentum
-            momentum_sketch += grad_sketch_sum
+            momentum_sketch += grad_sketch_agg
             if args.error_type != "none":
                 error_sketch += momentum_sketch
         elif args.error_type != "none":
-            error_sketch += grad_sketch_sum
+            error_sketch += grad_sketch_agg
         else:
-            sketch += grad_sketch_sum
+            sketch += grad_sketch_agg
         if args.error_type != "none":
             update = error_sketch.unSketch(k=k)
         elif args.momentum_type != "none":
@@ -476,14 +485,14 @@ def _server_helper_sketched(momentum_sketches, error_sketches,
 
     elif none:
         global g_worker_grads_sm
-        worker_grads_shape = (num_workers, args.grad_size)
+        worker_grads_shape = (args.num_workers, args.grad_size)
         worker_grads = sm2np(g_worker_grads_sm, worker_grads_shape)
         grad_sum = np.sum(worker_grads)
-        grad_sketch_sum = sketch
-        grad_sketch_sum.zero()
+        grad_sketch_agg = sketch
+        grad_sketch_agg.zero()
         for S in worker_Sgrads:
-            grad_sketch_sum.accumulateTable(S)
-        update = grad_sketch_sum.unSketch(k=k)
+            grad_sketch_agg.accumulateTable(S)
+        update = grad_sketch_agg.unSketch(k=k)
         print(f"Reconstruction error: {(update - grad_sum).norm()}")
     return (ps_weights - update * lr).cpu(), momentum_sketches, error_sketches
 

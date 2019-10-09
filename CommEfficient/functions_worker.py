@@ -3,6 +3,7 @@ import numpy as np
 from utils import sm2np, get_param_vec, set_param_vec, get_grad, _topk
 import copy
 import multiprocessing
+from csvec import CSVec
 
 def init_pool(input_model, device, num_workers,
               worker_Sgrads_sm, worker_grads_sm,
@@ -67,13 +68,12 @@ def update_forward_grad(worker_id, client_id,
         )
     """
     # write g to the shared memory grad array in spot worker_id
-    num_workers = int(num_clients * participation)
     if args.mode == "sketch":
-        worker_Sgrads_shape = (num_workers, args.num_rows, args.num_cols)
+        worker_Sgrads_shape = (args.num_workers, args.num_rows, args.num_cols)
         worker_Sgrads = sm2np(gw_worker_Sgrads_sm, worker_Sgrads_shape)
         worker_Sgrads[worker_id,:,:] = g.cpu().numpy()[:,:]
     elif args.mode in ["true_topk", "local_topk", "localSGD"]:
-        worker_grads_shape = (num_workers, args.grad_size)
+        worker_grads_shape = (args.num_workers, args.grad_size)
         worker_grads = sm2np(gw_worker_grads_sm, worker_grads_shape)
         worker_grads[worker_id,:] = g.cpu().numpy()[:]
 
@@ -111,7 +111,7 @@ def forward_grad(model, weights, batch,
     if args.is_supervised:
         ins, targets = batch
         outs = model(ins)
-        results = compute_loss(outs, targets, criterion, metric, train=True)
+        results = compute_loss(outs, targets, criterion, metric, True, args)
     grad = get_grad(model, weights, args, train=True, device=device)
 
     # compress the gradient if needed
@@ -127,6 +127,7 @@ def forward_grad(model, weights, batch,
     elif args.mode == "local_topk":
         g = _topk(grad, k=args.k)
     elif args.mode == "localSGD":
+        # TODO: scheduling LR doesn't work
         grad *= args.lr_scale
         weights -= grad
         args.num_local_iters -= 1
@@ -156,7 +157,7 @@ def forward_multiprocessed(batch, args, criterion, metric):
         metric = metric.to(device)
         ins, targets = batch
         outs = model(ins)
-        results = compute_loss(outs, targets, criterion, metric, train=False)
+        results = compute_loss(outs, targets, criterion, metric, False, args)
     else:
         logits, labels = inference(model, batch, args)
         lm_logits, mc_logits = logits
@@ -166,11 +167,14 @@ def forward_multiprocessed(batch, args, criterion, metric):
         results = nll, acc
     return results
 
-def compute_loss(outs, targets, criterion, metric, train):
+def compute_loss(outs, targets, criterion, metric, train, args):
+    num_clients = args.num_clients
+    participation = args.participation
+    n_workers = int(num_clients * participation)
     loss = criterion(outs, targets)
     if train:
         loss.backward()
-    batch_loss = loss.mean().cpu().detach().numpy()
+    batch_loss = loss.cpu().detach().numpy()
     acc = metric(outs, targets).float().mean().cpu().detach().numpy()
     return batch_loss, acc
 
@@ -184,31 +188,24 @@ def forward_grad_gpt2(model, weights, batch, criterion,
     weights = weights.to(device)
     set_param_vec(model, weights)
     batch = tuple(input_tensor.to(device) for input_tensor in batch)
-    mega_batch = batch
-    grad_accum_steps = args.grad_accum_steps
-    batch_size = args.batch_size
-    train_batch_size = args.train_batch_size
+    microbatch_size = args.batch_size // (args.num_workers * args.num_train_batch_shards)
     #print(f"Real batch size: {mega_batch[3].size()[0]} from {train_batch_size} with {[b.size() for b in batch]}")
-    train_batch_size = mega_batch[3].size()[0]
+    train_batch_size = batch[3].size()[0]
     accum_loss = None
-    n_steps = train_batch_size // batch_size
-    num_clients = args.num_clients
-    participation = args.participation
-    n_workers = int(num_clients * participation)
-    for i in range(n_steps):
-        start = i * batch_size
-        end = (i+1) * batch_size
-        batch = [b[start:end] for b in mega_batch]
-        input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids = batch
+    for i in range(args.num_train_batch_shards):
+        start = i * microbatch_size
+        end = (i+1) * microbatch_size
+        microbatch = [b[start:end] for b in batch]
+        input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids = microbatch
         (lm_loss), (mc_loss), *_ = model(
             input_ids, token_type_ids=token_type_ids, mc_token_ids=mc_token_ids,
             mc_labels=mc_labels, lm_labels=lm_labels
         )
-        loss = (lm_loss * args.lm_coef + mc_loss * args.mc_coef) / n_steps
-        loss = loss / n_workers
+        loss = (lm_loss * args.lm_coef + mc_loss * args.mc_coef) / args.num_train_batch_shards
         #print(f"Loss: {loss} from {lm_loss} and {mc_loss}")
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_norm)
+        # TODO: Make sure this is ok for GPT2
+        torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_norm * args.num_workers)
         if accum_loss is not None:
             accum_loss += loss
         else:
@@ -228,7 +225,7 @@ def forward_grad_gpt2(model, weights, batch, criterion,
     elif args.mode == "local_topk":
         g = _topk(grad, k=args.k)
     if accum_loss is not None:
-        loss = accum_loss.item()/max(n_steps, 1)
+        loss = accum_loss.item()/max(args.num_train_batch_shards, 1)
     else:
         loss = 0
     return g, [loss]
