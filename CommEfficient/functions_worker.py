@@ -16,7 +16,9 @@ def init_pool(input_model, device, num_workers,
 
     if torch.cuda.is_available():
         worker_id = multiprocessing.current_process()._identity[0]
-        torch.cuda.set_device(worker_id % num_workers)
+        # don't use the zeroth device
+        device_id = (worker_id % num_workers) + 1
+        torch.cuda.set_device(device_id)
 
     model = copy.deepcopy(input_model)
     model.to(device)
