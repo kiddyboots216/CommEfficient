@@ -110,6 +110,10 @@ class FedCommEffModel:
             )
 
 
+    def __del__(self):
+        self.process_pool.close()
+        self.process_pool.join()
+
     def train(self, training):
         self.training = training
     def save_pretrained(self, log_dir):
