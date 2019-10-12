@@ -1,4 +1,4 @@
-from data_utils import *
+from data_utils import split_image_data, get_cifar10
 from minimal import Timer, normalise, pad, transpose, Crop, FlipLR, Cutout, Transform, Batches, cifar10
 from utils import parse_args
 DATA_DIR = "sample_data"
@@ -33,16 +33,29 @@ def gen_data(args):
                                  classes_per_client=args.num_classes,
                                  balancedness=args.balancedness,
                                  verbose=True)
-        train_datasets = [list(zip(transpose(normalise(pad(x, 4))), y)) for x, y in split] 
-        client_train_loaders = [Batches(Transform(client_train_set, train_transforms), batch_size, shuffle=True, set_random_choices=True, drop_last=True) for client_train_set in train_datasets]
+        train_datasets = [list(zip(transpose(normalise(pad(x, 4))), y))
+                          for x, y in split]
+        client_train_loaders = [Batches(Transform(client_train_set,
+                                                  train_transforms),
+                                        batch_size,
+                                        shuffle=True,
+                                        set_random_choices=True,
+                                        drop_last=True)
+                                for client_train_set in train_datasets]
         print('Finished in {:.2f} seconds'.format(timer()))
-        client_weird_loaders = [Weird(batch) for batch in client_train_loaders]
+        client_weird_loaders = [Weird(batch)
+                                for batch in client_train_loaders]
         #[test_weird(weird) for weird in client_weird_loaders]
         client_weird_loaders = np.array(client_weird_loaders)
         return client_weird_loaders, val_loader
     else:
-        train_set = list(zip(transpose(normalise(pad(x_train, 4))), y_train))
-        train_loader = Batches(Transform(train_set, train_transforms), args.batch_size, shuffle=True, set_random_choices=True, drop_last=True)
+        train_set = list(zip(transpose(normalise(pad(x_train, 4))),
+                             y_train))
+        train_loader = Batches(Transform(train_set, train_transforms),
+                               args.batch_size,
+                               shuffle=True,
+                               set_random_choices=True,
+                               drop_last=True)
         #test_weird(Weird(train_loader))
         return train_loader, val_loader
 

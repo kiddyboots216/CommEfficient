@@ -60,9 +60,6 @@ def pad(x, border=4):
     return np.pad(x, [(0, 0), (border, border), (border, border), (0, 0)],
                   mode='reflect')
 
-def transpose(x, source='NHWC', target='NCHW'):
-    return x.transpose([source.index(d) for d in target])
-
 #####################
 ## data augmentation
 #####################
