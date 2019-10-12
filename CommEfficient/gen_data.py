@@ -1,5 +1,6 @@
-from data_utils import split_image_data, get_cifar10
-from minimal import Timer, normalise, pad, transpose, Crop, FlipLR, Cutout, Transform, Batches, cifar10
+from data_utils import split_image_data, get_cifar10, transpose
+from minimal import Timer, normalise, pad, Crop, FlipLR, Cutout, Transform, Batches, cifar10
+import numpy as np
 from utils import parse_args
 DATA_DIR = "sample_data"
 

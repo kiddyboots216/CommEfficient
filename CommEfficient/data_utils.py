@@ -51,14 +51,14 @@ def split_image_data(data, labels, n_clients=10, classes_per_client=10,
     n_labels = np.max(labels) + 1
 
     if balancedness >= 1.0:
-        data_per_client = [n_data // n_clients]*n_clients
+        data_per_client = [n_data // n_clients] * n_clients
         n_per_client_per_class = data_per_client[0] // classes_per_client
-        data_per_client_per_class = [n]*n_clients
+        data_per_client_per_class = [n_per_client_per_class] * n_clients
     else:
         fracs = balancedness**np.linspace(0,n_clients-1, n_clients)
         fracs /= np.sum(fracs)
         fracs = 0.1/n_clients + (1-0.1)*fracs
-        data_per_client = [np.floor(frac*n_data).astype('int')
+        data_per_client = [np.floor(frac * n_data).astype('int')
                            for frac in fracs]
 
         data_per_client = data_per_client[::-1]
