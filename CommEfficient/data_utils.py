@@ -52,16 +52,19 @@ def split_image_data(data, labels, n_clients=10, classes_per_client=10,
 
     if balancedness >= 1.0:
         data_per_client = [n_data // n_clients]*n_clients
-        data_per_client_per_class = [data_per_client[0] // classes_per_client]*n_clients
+        n_per_client_per_class = data_per_client[0] // classes_per_client
+        data_per_client_per_class = [n]*n_clients
     else:
         fracs = balancedness**np.linspace(0,n_clients-1, n_clients)
         fracs /= np.sum(fracs)
         fracs = 0.1/n_clients + (1-0.1)*fracs
-        data_per_client = [np.floor(frac*n_data).astype('int') for frac in fracs]
+        data_per_client = [np.floor(frac*n_data).astype('int')
+                           for frac in fracs]
 
         data_per_client = data_per_client[::-1]
 
-        data_per_client_per_class = [np.maximum(1,nd // classes_per_client) for nd in data_per_client]
+        data_per_client_per_class = [np.maximum(1,nd // classes_per_client)
+                                     for nd in data_per_client]
 
     if sum(data_per_client) > n_data:
         print("Impossible Split")
@@ -83,7 +86,9 @@ def split_image_data(data, labels, n_clients=10, classes_per_client=10,
         budget = data_per_client[i]
         c = np.random.randint(n_labels)
         while budget > 0:
-            take = min(data_per_client_per_class[i], len(data_idcs[c]), budget)
+            take = min(data_per_client_per_class[i],
+                       len(data_idcs[c]),
+                       budget)
 
             client_idcs += data_idcs[c][:take]
             data_idcs[c] = data_idcs[c][take:]
@@ -96,8 +101,9 @@ def split_image_data(data, labels, n_clients=10, classes_per_client=10,
     def print_split(clients_split):
         print("Data split:")
         for i, client in enumerate(clients_split):
-                split = np.sum(client[1].reshape(1,-1)==np.arange(n_labels).reshape(-1,1), axis=1)
-                print(" - Client {}: {}".format(i,split))
+            label_range = np.arange(n_labels).reshape(-1,1)
+            split = np.sum(client[1].reshape(1, -1) == label_range, axis=1)
+            print(" - Client {}: {}".format(i,split))
         print()
 
     if verbose:
