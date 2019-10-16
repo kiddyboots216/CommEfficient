@@ -103,7 +103,7 @@ class FedCommEffModel:
 
         # process pool that parallelizes training
         self.process_pool = multiprocessing.Pool(
-                args.num_workers,
+                args.num_devices-1,
                 initializer=worker.init_pool,
                 initargs=(self.model, device, args.num_devices-1,
                           g_worker_Sgrads_sm, g_worker_grads_sm,
@@ -132,6 +132,7 @@ class FedCommEffModel:
         args = self.args
         if self.training:
             #self.args.lr = lr
+            """
             all_indices = []
             n_rows = math.ceil(len(indices)/args.num_devices)
             for n_row in range(n_rows):
@@ -152,6 +153,16 @@ class FedCommEffModel:
                         args_tuples
                     )
                 all_results.extend(results)
+            """
+            args_tuples = [(i, idx,
+                            batches[i], self.args,
+                            g_criterion, g_metric)
+                           for i, idx in enumerate(indices)]
+            results = self.process_pool.starmap(
+                    #profile_helper,
+                    worker.update_forward_grad,
+                    args_tuples
+                )
             return split_results(results, self.args.num_results_train)
 
         else:
