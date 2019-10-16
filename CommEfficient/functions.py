@@ -105,7 +105,7 @@ class FedCommEffModel:
         self.process_pool = multiprocessing.Pool(
                 args.num_workers,
                 initializer=worker.init_pool,
-                initargs=(self.model, device, args.num_devices,
+                initargs=(self.model, device, args.num_devices-1,
                           g_worker_Sgrads_sm, g_worker_grads_sm,
                           g_client_weights_sm, g_ps_weights_sm)
             )
