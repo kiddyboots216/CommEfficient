@@ -177,7 +177,7 @@ if __name__ == "__main__":
     # model class and config
     torch.random.manual_seed(21)
     model_cls = Net
-    model_config = {}
+    model_config = {"iid": args.iid}
     if args.do_test:
         model_config = {
             'channels': {'prep': 1, 'layer1': 1,
