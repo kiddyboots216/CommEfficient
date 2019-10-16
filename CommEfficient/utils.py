@@ -47,7 +47,6 @@ def parse_args(default_lr):
 
     # compression args
     parser.add_argument("--k", type=int, default=50000)
-    parser.add_argument("--p2", type=int, default=4)
     parser.add_argument("--num_cols", type=int, default=500000)
     parser.add_argument("--num_rows", type=int, default=5)
     parser.add_argument("--num_blocks", type=int, default=20)

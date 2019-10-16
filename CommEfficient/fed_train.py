@@ -60,13 +60,7 @@ def train(model, opt, lr_scheduler, train_loader, val_loader,
 
 def run_batches(model, opt, lr_scheduler, loaders,
                 training, args):
-    participation = args.participation
-    num_data = args.num_data
-    num_clients = args.num_clients
-    device = args.device
-    clients = np.arange(num_clients)
-    batch_size = args.batch_size
-    num_workers = args.num_workers
+    clients = np.arange(args.num_clients)
     model.train(training)
     losses = []
     accs = []
@@ -78,14 +72,14 @@ def run_batches(model, opt, lr_scheduler, loaders,
             start_idx = start_idx % num_clients
             end_idx = start_idx + num_workers
             idx = np.random.choice(clients,
-                num_workers, replace=False)
+                args.num_workers, replace=False)
             #print(f"Selecting randomly {idx}")
             #idx = np.arange(start_idx, end_idx)
             #print(f"Selecting in order {idx}")
             minibatches = []
             for i, _ in enumerate(idx):
-                start = i * batch_size // num_workers
-                end = (i+1) * batch_size // num_workers
+                start = i * args.batch_size // args.num_workers
+                end = (i+1) * args.batch_size // args.num_workers
                 in_batch = inputs[start:end]
                 target_batch = targets[start:end]
                 minibatch = [in_batch, target_batch]
@@ -108,14 +102,14 @@ def run_batches(model, opt, lr_scheduler, loaders,
 
     else:
         for batch_idx, batch in enumerate(loaders):
-            idx = np.arange(num_workers)
+            idx = np.arange(args.num_devices)
             inputs, targets = batch
             minibatches = []
             batch_len = targets.size()[0]
             indices = []
             for i, _ in enumerate(idx):
-                start = i * batch_size // num_workers
-                end = (i+1) * batch_size // num_workers
+                start = i * args.batch_size // args.num_workers
+                end = (i+1) * args.batch_size // args.num_workers
                 if start > batch_len:
                     break
                 in_batch = inputs[start:end]
@@ -138,14 +132,8 @@ def run_batches(model, opt, lr_scheduler, loaders,
 
 #@profile
 def run_batches_fed(model, opt, lr_scheduler, loaders, training, args):
-    participation = args.participation
-    num_data = args.num_data
-    num_clients = args.num_clients
-    device = args.device
-    clients = np.arange(num_clients)
-    batch_size = args.batch_size
-    num_workers = args.num_workers
-    n_iters = num_data // batch_size
+    clients = np.arange(args.num_clients)
+    n_iters = args.num_data // args.batch_size
     model.train(training)
     losses = []
     accs = []
@@ -155,9 +143,9 @@ def run_batches_fed(model, opt, lr_scheduler, loaders, training, args):
         opt.step(None, True)
         for batch_idx in range(n_iters):
             idx = np.random.choice(clients,
-                num_workers, replace=False)
-            start_idx = start_idx % num_workers
-            end_idx = start_idx + num_workers
+                args.num_workers, replace=False)
+            start_idx = start_idx % args.num_workers
+            end_idx = start_idx + args.num_workers
             #print(f"Selecting randomly {idx}")
             #idx = np.arange(start_idx, end_idx)
             #print(f"Selecting in order {idx}")
