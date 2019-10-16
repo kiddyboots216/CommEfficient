@@ -5,6 +5,7 @@ import numpy as np
 from csvec import CSVec
 import copy
 import time
+import math
 
 import cProfile
 
@@ -104,7 +105,7 @@ class FedCommEffModel:
         self.process_pool = multiprocessing.Pool(
                 args.num_workers,
                 initializer=worker.init_pool,
-                initargs=(self.model, device, args.num_workers,
+                initargs=(self.model, device, args.num_devices,
                           g_worker_Sgrads_sm, g_worker_grads_sm,
                           g_client_weights_sm, g_ps_weights_sm)
             )
@@ -123,21 +124,34 @@ class FedCommEffModel:
         curr_weights = torch.from_numpy(ps_weights).cuda()
         set_param_vec(self.model, curr_weights)
         self.model.save_pretrained(log_dir)
+
     def __call__(self, batches, indices):
         global g_criterion
         global g_metric
         #global lr
+        args = self.args
         if self.training:
             #self.args.lr = lr
-            args_tuples = [(i, idx,
-                            batches[i], self.args,
-                            g_criterion, g_metric)
-                           for i, idx in enumerate(indices)]
-            results = self.process_pool.starmap(
-                    #profile_helper,
-                    worker.update_forward_grad,
-                    args_tuples
-                )
+            all_indices = []
+            n_rows = math.ceil(len(indices)/args.num_devices)
+            for n_row in range(n_rows):
+                all_indices.append([])
+                for num_device in range(args.num_devices):
+                    num = n_row * args.num_devices + num_device
+                    if num < len(indices):
+                        all_indices[n_row].append(indices[num])
+            all_results = []
+            for gpu_indices in all_indices:
+                args_tuples = [(i, idx,
+                                batches[i], self.args,
+                                g_criterion, g_metric)
+                               for i, idx in enumerate(gpu_indices)]
+                results = self.process_pool.starmap(
+                        #profile_helper,
+                        worker.update_forward_grad,
+                        args_tuples
+                    )
+                all_results.extend(results)
             return split_results(results, self.args.num_results_train)
 
         else:

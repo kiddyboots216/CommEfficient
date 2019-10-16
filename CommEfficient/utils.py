@@ -84,6 +84,9 @@ def parse_args(default_lr):
     parser.add_argument("--device", type=str,
                         default=default_device,
                         help="Device (cuda or cpu)")
+    parser.add_argument("--num_devices", type=int,
+                        default=1,
+                        help="Number of gpus")
     parser.add_argument("--num_local_iters", type=int, default=1)
     parser.add_argument("--local_sched", action="store_true", dest="use_local_sched")
 
