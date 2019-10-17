@@ -336,7 +336,6 @@ def train():
 
     model_class = GPT2DoubleHeadsModel if "gpt2" in args.model_checkpoint else OpenAIGPTDoubleHeadsModel
     model = model_class.from_pretrained(args.model_checkpoint)
-    model.to(args.device)
     # Do logging now before we overwrite model
     log_dir = make_logdir(args)
     writer = SummaryWriter(log_dir=log_dir)

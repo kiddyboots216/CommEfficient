@@ -15,9 +15,9 @@ def init_pool(input_model, device, num_gpus,
     global gw_worker_grads_sm
 
     if torch.cuda.is_available():
-        worker_id = multiprocessing.current_process()._identity[0]
-        # don't use the zeroth device
-        device_id = (worker_id % num_gpus) + 1
+        process_id = multiprocessing.current_process()._identity[0]
+        # just in case the process_ids aren't zero-indexed
+        device_id = process_id % num_gpus
         torch.cuda.set_device(device_id)
 
     model = copy.deepcopy(input_model)
@@ -51,9 +51,12 @@ def update_forward_grad(worker_id, client_id,
     ps_weights = torch.from_numpy(ps_weights).to(args.device)
     worker_weights = torch.from_numpy(worker_weights).to(args.device)
 
-    new_worker_weights = get_new_worker_weights(ps_weights,
-                                                worker_weights,
-                                                args)
+    if args.do_topk_down:
+        new_worker_weights = get_new_worker_weights(ps_weights,
+                                                    worker_weights,
+                                                    args)
+    else:
+        new_worker_weights = ps_weights
 
     # g is a (possibly compressed) gradient
     f = forward_grad
