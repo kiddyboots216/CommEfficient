@@ -163,10 +163,11 @@ def forward_multiprocessed(batch, args, criterion, metric):
     else:
         batch = tuple(input_tensor.to(device) for input_tensor in batch)
         microbatch_size = args.batch_size // (args.num_workers * args.num_train_batch_shards)
-        train_batch_size = batch[3].size()[0]
         accum_loss = None
         accum_acc = None
-        for i in range(args.num_train_batch_shards):
+        val_batch_size = batch[3].size()[0]
+        n_iters = val_batch_size // microbatch_size
+        for i in range(n_iters):
             start = i * microbatch_size
             end = (i+1) * microbatch_size
             microbatch = [b[start:end] for b in batch]
@@ -210,7 +211,8 @@ def forward_grad_gpt2(model, weights, batch, criterion,
     microbatch_size = args.batch_size // (args.num_workers * args.num_train_batch_shards)
     train_batch_size = batch[3].size()[0]
     accum_loss = None
-    for i in range(args.num_train_batch_shards):
+    n_iters = train_batch_size // microbatch_size
+    for i in range(n_iters):
         start = i * microbatch_size
         end = (i+1) * microbatch_size
         microbatch = [b[start:end] for b in batch]
