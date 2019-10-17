@@ -5,7 +5,7 @@ import copy
 import multiprocessing
 from csvec import CSVec
 
-def init_pool(input_model, device, num_workers,
+def init_pool(input_model, device, num_gpus,
               worker_Sgrads_sm, worker_grads_sm,
               client_weights_sm, ps_weights_sm):
     global model
@@ -17,7 +17,7 @@ def init_pool(input_model, device, num_workers,
     if torch.cuda.is_available():
         worker_id = multiprocessing.current_process()._identity[0]
         # don't use the zeroth device
-        device_id = (worker_id % num_workers) + 1
+        device_id = (worker_id % num_gpus) + 1
         torch.cuda.set_device(device_id)
 
     model = copy.deepcopy(input_model)
@@ -161,12 +161,29 @@ def forward_multiprocessed(batch, args, criterion, metric):
         outs = model(ins)
         results = compute_loss(outs, targets, criterion, metric, False, args)
     else:
-        logits, labels = inference(model, batch, args)
-        lm_logits, mc_logits = logits
-        lm_labels, mc_labels = labels
-        nll = criterion(lm_logits, lm_labels).detach().cpu().numpy()
-        acc = accuracy(mc_logits, mc_labels)
-        results = nll, acc
+        batch = tuple(input_tensor.to(device) for input_tensor in batch)
+        microbatch_size = args.batch_size // (args.num_workers * args.num_train_batch_shards)
+        train_batch_size = batch[3].size()[0]
+        accum_loss = None
+        accum_acc = None
+        for i in range(args.num_train_batch_shards):
+            start = i * microbatch_size
+            end = (i+1) * microbatch_size
+            microbatch = [b[start:end] for b in batch]
+            logits, labels = inference(model, microbatch, args)
+            lm_logits, mc_logits = logits
+            lm_labels, mc_labels = labels
+            nll = criterion(lm_logits, lm_labels).detach().cpu().numpy()
+            acc = accuracy(mc_logits, mc_labels)
+            if accum_loss is not None:
+                accum_loss += nll 
+            else:
+                accum_loss = nll 
+            if accum_acc is not None:
+                accum_acc += acc 
+            else:
+                accum_acc = acc
+        results = accum_loss, accum_acc
     return results
 
 def compute_loss(outs, targets, criterion, metric, train, args):
@@ -191,7 +208,6 @@ def forward_grad_gpt2(model, weights, batch, criterion,
     set_param_vec(model, weights)
     batch = tuple(input_tensor.to(device) for input_tensor in batch)
     microbatch_size = args.batch_size // (args.num_workers * args.num_train_batch_shards)
-    #print(f"Real batch size: {mega_batch[3].size()[0]} from {train_batch_size} with {[b.size() for b in batch]}")
     train_batch_size = batch[3].size()[0]
     accum_loss = None
     for i in range(args.num_train_batch_shards):

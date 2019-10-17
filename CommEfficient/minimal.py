@@ -263,6 +263,7 @@ class Net(nn.Module):
         super().__init__()
         channels = channels or {'prep': 64, 'layer1': 128,
                                 'layer2': 256, 'layer3': 512}
+        print(f"Using BatchNorm: {iid}")
         self.n = BasicNet(iid, channels, weight, pool, **kw)
         #for layer in res_layers:
         #    n[layer]['residual'] = residual(channels[layer], **kw)

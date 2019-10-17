@@ -324,12 +324,6 @@ def get_data_loaders(args, tokenizer, test=False):
 def train():
     args = parse_args(default_lr=4e-2)
 
-    if args.do_test:
-        args.batch_size = 12
-        args.num_batch_shards = 2
-        args.num_epochs = 1
-        args.participation = 1.0
-
     logging.basicConfig(level=logging.INFO)
     logger.info("Arguments: %s", pformat(args))
 
