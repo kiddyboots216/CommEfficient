@@ -27,7 +27,7 @@ def parse_args(default_lr):
     # meta-args
     parser.add_argument("--test", action="store_true", dest="do_test")
     modes = ["sketch", "true_topk", "local_topk", "localSGD"]
-    parser.add_argument("--mode", choices=modes, default="sketch")
+    parser.add_argument("--mode", choices=modes, default="localSGD")
 
     # data/model args
     parser.add_argument("--static_datasets", action="store_true")
@@ -123,6 +123,14 @@ def parse_args(default_lr):
     parser.add_argument("--fp16", type=str, default="",
                         help=("Set to O0, O1, O2 or O3 for fp16 training"
                               " (see apex documentation)"))
+
+    #attack args
+    parser.add_argument("--malicious", action="store_true",
+                        dest="is_malicious")
+    parser.add_argument("--mal_targets", type=int, default=1,
+                        help=("Number of data samples targeted"))
+    parser.add_argument("--mal_boost", type=float, default=10.0,
+                        help=("Boosting malicious gradient"))
 
 
     args = parser.parse_args()
