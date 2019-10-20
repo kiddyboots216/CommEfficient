@@ -3,7 +3,7 @@ import numpy as np
 from utils import sm2np, get_param_vec, set_param_vec, get_grad, _topk
 import copy
 import multiprocessing
-from csvec import CSVec
+# from csvec import CSVec
 
 def init_pool(input_model, device, num_workers,
               worker_Sgrads_sm, worker_grads_sm,
@@ -18,6 +18,7 @@ def init_pool(input_model, device, num_workers,
         worker_id = multiprocessing.current_process()._identity[0]
         # don't use the zeroth device
         device_id = (worker_id % num_workers) + 1
+        print(device_id)
         torch.cuda.set_device(device_id)
 
     model = copy.deepcopy(input_model)
@@ -45,6 +46,10 @@ def update_forward_grad(worker_id, client_id,
     global gw_worker_Sgrads_sm
     global gw_worker_grads_sm
 
+    mal_update_flag = False
+    if client_id == 0:
+        mal_update_flag = True
+
     ps_weights = sm2np(gw_ps_weights_sm, (grad_size,))
     client_weights = sm2np(gw_client_weights_sm, (num_clients, grad_size))
     worker_weights = client_weights[client_id]
@@ -61,7 +66,7 @@ def update_forward_grad(worker_id, client_id,
         f = forward_grad_gpt2
     g, results = f(
             model, new_worker_weights,
-            batch, criterion, metric, args
+            batch, criterion, metric, args, mal_update_flag
         )
     """
     g, grad, results = f(
@@ -101,7 +106,7 @@ def get_new_worker_weights(ps_weights, worker_weights, args):
     return new_worker_weights
 
 def forward_grad(model, weights, batch,
-                 criterion, metric, args):
+                 criterion, metric, args, mal_update_flag):
     device = args.device
     model = model.to(device)
     model.train()
@@ -140,6 +145,8 @@ def forward_grad(model, weights, batch,
             results = [r + r_recursive for (r, r_recursive) in zip(results, results_recursive)]
         else:
             g = grad
+        if mal_update_flag:
+            g *= args.mal_boost
 
     return g, results
 
