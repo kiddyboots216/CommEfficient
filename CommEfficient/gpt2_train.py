@@ -324,12 +324,6 @@ def get_data_loaders(args, tokenizer, test=False):
 def train():
     args = parse_args(default_lr=4e-2)
 
-    if args.do_test:
-        args.batch_size = 12
-        args.num_batch_shards = 2
-        args.num_epochs = 1
-        args.participation = 1.0
-
     logging.basicConfig(level=logging.INFO)
     logger.info("Arguments: %s", pformat(args))
 
@@ -342,7 +336,6 @@ def train():
 
     model_class = GPT2DoubleHeadsModel if "gpt2" in args.model_checkpoint else OpenAIGPTDoubleHeadsModel
     model = model_class.from_pretrained(args.model_checkpoint)
-    model.to(args.device)
     # Do logging now before we overwrite model
     log_dir = make_logdir(args)
     writer = SummaryWriter(log_dir=log_dir)
@@ -351,7 +344,7 @@ def train():
     # Add special tokens if they are not already added
     add_special_tokens_(model, tokenizer)
     # HAVE TO USE SGD FOR FED
-    optimizer = SGD(model.parameters(), lr=args.lr_scale, momentum=args.momentum)
+    optimizer = SGD(model.parameters(), lr=1, momentum=args.momentum)
 
     logger.info('Finished in {:.2f} seconds'.format(timer()))
     logger.info("Prepare datasets")

@@ -11,7 +11,7 @@ def make_logdir(args: dict):
     k = args.k
     mode = args.mode
     num_local_iters = args.num_local_iters
-    sketch_str = f"{mode}: {rows} x {cols}" if mode == "sketch" else "{mode}"
+    sketch_str = f"{mode}: {rows} x {cols}" if mode == "sketch" else f"{mode}"
     k_str = f"k: {k}" if mode in ["sketch", "true_topk", "local_topk"] else f"num_local_iters: {num_local_iters}"
     workers = args.num_workers
     clients = args.num_clients
@@ -47,7 +47,6 @@ def parse_args(default_lr):
 
     # compression args
     parser.add_argument("--k", type=int, default=50000)
-    parser.add_argument("--p2", type=int, default=4)
     parser.add_argument("--num_cols", type=int, default=500000)
     parser.add_argument("--num_rows", type=int, default=5)
     parser.add_argument("--num_blocks", type=int, default=20)
@@ -84,6 +83,9 @@ def parse_args(default_lr):
     parser.add_argument("--device", type=str,
                         default=default_device,
                         help="Device (cuda or cpu)")
+    parser.add_argument("--num_devices", type=int,
+                        default=1,
+                        help="Number of gpus")
     parser.add_argument("--num_local_iters", type=int, default=1)
     parser.add_argument("--local_sched", action="store_true", dest="use_local_sched")
 
@@ -136,6 +138,7 @@ def parse_args(default_lr):
     args = parser.parse_args()
     args.num_workers = int(args.num_clients * args.participation)
     args.weight_decay = args.weight_decay
+    args.iid = args.num_classes == 10
 
     return args
 

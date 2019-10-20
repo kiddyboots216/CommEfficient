@@ -5,6 +5,7 @@ import numpy as np
 # from csvec import CSVec
 import copy
 import time
+import math
 
 import cProfile
 
@@ -102,9 +103,9 @@ class FedCommEffModel:
 
         # process pool that parallelizes training
         self.process_pool = multiprocessing.Pool(
-                args.num_workers,
+                args.num_devices,
                 initializer=worker.init_pool,
-                initargs=(self.model, device, args.num_workers,
+                initargs=(self.model, device, args.num_devices,
                           g_worker_Sgrads_sm, g_worker_grads_sm,
                           g_client_weights_sm, g_ps_weights_sm)
             )
@@ -120,13 +121,15 @@ class FedCommEffModel:
         global g_ps_weights_sm
         ps_weights = sm2np(g_ps_weights_sm,
                            (self.args.grad_size,))
-        curr_weights = torch.from_numpy(ps_weights).cuda()
+        curr_weights = torch.from_numpy(ps_weights)
         set_param_vec(self.model, curr_weights)
         self.model.save_pretrained(log_dir)
+
     def __call__(self, batches, indices):
         global g_criterion
         global g_metric
         #global lr
+        args = self.args
         if self.training:
             #self.args.lr = lr
             args_tuples = [(i, idx,
@@ -411,9 +414,6 @@ def _server_helper_sketched(momentum_sketches, error_sketches,
     global g_ps_weights_sm
     global g_worker_Sgrads_sm
 
-    ps_weights = sm2np(g_ps_weights_sm, (args.grad_size,),)
-    ps_weights = torch.from_numpy(ps_weights).to(device)
-
     worker_Sgrads_shape = (args.num_workers,
                            args.num_rows,
                            args.num_cols)
@@ -487,6 +487,12 @@ def _server_helper_sketched(momentum_sketches, error_sketches,
         momentum_sketches = [momentum_sketch]
         error_sketches = [error_sketch]
 
+        del sketch
+        del hh_coords
+        del hh_0
+        del hh_1
+        del worker_Sgrads
+
     elif none:
         global g_worker_grads_sm
         worker_grads_shape = (args.num_workers, args.grad_size)
@@ -498,7 +504,10 @@ def _server_helper_sketched(momentum_sketches, error_sketches,
             grad_sketch_agg.accumulateTable(S)
         update = grad_sketch_agg.unSketch(k=k)
         print(f"Reconstruction error: {(update - grad_sum).norm()}")
-    return (ps_weights - update * lr).cpu(), momentum_sketches, error_sketches
+
+    ps_weights = sm2np(g_ps_weights_sm, (args.grad_size,),)
+    ps_weights = torch.from_numpy(ps_weights)
+    return ps_weights - update.cpu() * lr, momentum_sketches, error_sketches
 
 def get_lr(optimizer_param_groups):
     if len(optimizer_param_groups) == 1:
