@@ -8,7 +8,7 @@ from minimal import Net, Correct, union, PiecewiseLinear, Timer, TableLogger
 from functions import FedCommEffModel, FedCommEffOptimizer, \
         FedCommEffCriterion, FedCommEffMetric
 from utils import make_logdir
-from gen_data import gen_data
+from gen_data import gen_data, MalLoader
 from data_utils import get_data_loaders
 from utils import parse_args
 
@@ -183,9 +183,11 @@ def run_batches_fed(model, opt, lr_scheduler, loaders, training, args):
     return np.mean(losses), np.mean(accs)
 
 if __name__ == "__main__":
-    args = parse_args(default_lr=0.4)
+    args = parse_args(default_lr=1e-2)
     timer = Timer()
 
+    #Setting numpy random seed
+    np.random.seed(21)
     # model class and config
     torch.random.manual_seed(21)
     model_cls = Net
@@ -209,6 +211,10 @@ if __name__ == "__main__":
 
     # make data loaders
     train_loader, val_loader = gen_data(args)
+    if args.is_malicious:
+        #To-do: remove hard-coding of mal_client_idx
+        mal_client_idx = 0
+        train_loader[mal_client_idx] = MalLoader(args, train_loader[mal_client_idx])
     loader_len = args.num_data // args.batch_size
 
     # set up learning rate stuff
