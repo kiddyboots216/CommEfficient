@@ -4,6 +4,29 @@ import numpy as np
 from utils import parse_args
 DATA_DIR = "sample_data"
 
+
+def MalLoader(args, benign_loader):
+    x_train, y_train, x_test, y_test = get_cifar10()
+    r = np.random.choice(len(x_test),size=args.mal_targets)
+    print(r)
+    mal_data_x = x_test[r]
+    #To-do: remove hard-coding of number of classes
+    print("Initial classes: %s" % y_test[r])
+    true_labels = y_test[r]
+    mal_data_y = np.zeros(args.mal_targets)
+    allowed_targets = list(range(10))
+    for i in range(args.mal_targets):
+        allowed_targets.remove(true_labels[i])
+        mal_data_y[i] = np.random.choice(allowed_targets)
+    # mal_data_y = mal_data_y.reshape(1,)
+    print("Target class: %s" % mal_data_y)
+    mal_set = list(zip(transpose(normalise(mal_data_x)), mal_data_y))
+    mal_loader = Batches(mal_set, args.batch_size, shuffle=False, drop_last=False)
+    mal_weird_loader = Weird(mal_loader)
+    # mal_weird_loader = np.array(mal_weird_loader)
+
+    return mal_weird_loader
+
 def gen_data(args):
     timer = Timer()
     print('Starting timer')
