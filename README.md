@@ -6,3 +6,5 @@ It comes with two experimental setups; a ResNet9 on CIFAR10 (`fed_train.py`) and
 There are a variety of command-line args which are best examined by looking at `utils.py`
 
 All functions are in `functions.py`
+
+To use sketching, you need to install https://github.com/nikitaivkin/csh
