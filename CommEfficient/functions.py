@@ -229,12 +229,10 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         lr = new_lr
         return new_lr
 
-    def step(self, indices, ret=False):
+    def step(self, indices):
         # in this method we're agnostic as to whether we're sketched,
         # true topk, or local topk
         lr = self.get_lr()
-        if ret:
-            return
         cur_momentums = None
         if self.args.momentum_type == "virtual":
             cur_momentums = self.momentums

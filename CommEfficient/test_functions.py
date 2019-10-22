@@ -1,9 +1,13 @@
-from functions import FedCommEffModel, FedCommEffOptimizer, FedCommEffCriterion, FedCommEffAccuracy
+from dp_functions import DPGaussianOptimizer
 import torch
-import ray
+from functions import FedCommEffModel, FedCommEffOptimizer, \
+        FedCommEffCriterion, FedCommEffMetric
+from utils import parse_args
 
+import multiprocessing
 if __name__ == "__main__":
-    ray.init(redis_password='functional')
+    multiprocessing.set_start_method("spawn")
+    args = parse_args(default_lr=0.4)
     D_in, D_out, H_sizes = 2, 4, [2,4]
     n_clients = 2
     epochs, batch_size = 10, 1
@@ -25,52 +29,35 @@ if __name__ == "__main__":
         "out_size": D_out,
         "hidden_sizes": H_sizes,
     }
-    params = {
-        'n_clients': n_clients,
-        'p2': 1,
-        'k': 1,
-        'sketch_down': False,
-        'topk_down': True,
-        'sketch': True,
-        'momentum_sketch': False,
-        'virtual_momentum': True,
-        'momentum': 0.9,
-        'weight_decay': 1.0,
-        'n_clients_per_round': 1,
-        'num_cols': 1,
-        'num_rows': 1,
-        'num_blocks': 1,
-        #'device': 'cpu',
-        'device': 'cuda',
-    }
     model_cls = FCNet
+    # instantiate ALL the things
+    model = model_cls(**model_config)
+    opt = torch.optim.SGD(model.parameters(), lr=1)
+    # even for median or mean, each worker still sums gradients locally
+    criterion = torch.nn.CrossEntropyLoss(reduction='mean')
+    accuracy = Correct()
+
+    # FedComm-ify everything
+    criterion = FedCommEffCriterion(criterion, args)
+    accuracy = FedCommEffMetric(accuracy, args)
+    model = FedCommEffModel(model, args)
+    opt = FedCommEffOptimizer(opt, args)
+
     xs = torch.randn(batch_size, D_in)
     ys = torch.randn(batch_size, D_out)
     minibatch = [xs, ys]
     minibatches = [minibatch for _ in range(n_clients)]
     idx = [i for i in range(n_clients)]
-    model = FedCommEffModel(model_cls, model_config, params)
-    optimizer = torch.optim.SGD(model.parameters(), lr=1)
-    opt = FedCommEffOptimizer(optimizer, params)
-    criterion = torch.nn.MSELoss()
-    comm_criterion = FedCommEffCriterion(criterion, params)
-    fake_acc = FedCommEffAccuracy(criterion, params)
     scheduler = torch.optim.lr_scheduler.LambdaLR(opt, 
             lambda x: x)
     for _ in range(epochs):
         model.train(True)
-        outs, loss, acc, grads = model(minibatches, idx)
-        opt.step(grads, idx)
+        loss, acc = model(minibatches, idx)
+        print(loss)
+        print(acc)
+        opt.step(idx)
         scheduler.step()
-        # TODO: Fix train acc calculation
-        batch_loss = ray.get(loss)
-        batch_acc = ray.get(acc)
-        print(batch_loss)
-        print(batch_acc)
         model.train(False)
-        outs, loss, acc = model(minibatch, idx)
-        batch_loss = ray.get(loss)
-        batch_acc = ray.get(acc)
-        print(batch_loss)
-        print(batch_acc)
-
+        loss, acc = model(minibatch, idx)
+        print(loss)
+        print(acc)
