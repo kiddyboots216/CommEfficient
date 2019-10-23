@@ -144,14 +144,11 @@ def _topk(vec, k):
     ret[topkIndices] = vec[topkIndices]
     return ret
 
-def get_grad(model, weights, args, train=True, device='cpu'):
-    if train:
-        grad_vec = get_grad_vec(model)
-        if args.weight_decay != 0:
-            grad_vec.add_(args.weight_decay / args.num_workers, weights)
-        return grad_vec.to(device)
-    else:
-        return 0
+def get_grad(model, weights, args):
+    grad_vec = get_grad_vec(model)
+    if args.weight_decay != 0:
+        grad_vec.add_(args.weight_decay / args.num_workers, weights)
+    return grad_vec.to(args.device)
 
 def get_grad_vec(model):
     grad_vec = []
