@@ -101,11 +101,15 @@ class FedCommEffModel:
             worker_grads = sm2np(g_worker_grads_sm, worker_grads_shape)
             worker_grads[:] = 0
 
+        if args.share_ps_gpu:
+            n_worker_gpus = args.num_devices
+        else:
+            n_worker_gpus = args.num_devices - 1
         # process pool that parallelizes training
         self.process_pool = multiprocessing.Pool(
-                args.num_devices,
+                n_worker_gpus,
                 initializer=worker.init_pool,
-                initargs=(self.model, device, args.num_devices,
+                initargs=(self.model, device, n_worker_gpus,
                           g_worker_Sgrads_sm, g_worker_grads_sm,
                           g_client_weights_sm, g_ps_weights_sm)
             )
@@ -136,6 +140,7 @@ class FedCommEffModel:
                             batches[i], self.args,
                             g_criterion, g_metric)
                            for i, idx in enumerate(indices)]
+
             results = self.process_pool.starmap(
                     #profile_helper,
                     worker.update_forward_grad,
@@ -170,6 +175,8 @@ class FedCommEffModel:
 class FedCommEffOptimizer(torch.optim.Optimizer):
     def __init__(self, optimizer, args):
         #global grad_size
+        if args.device[:4] == "cuda":
+            torch.cuda.set_device(args.num_devices-1)
         grad_size = 0
         for group in optimizer.param_groups:
             for p in group["params"]:
@@ -452,6 +459,7 @@ def _server_helper_sketched(momentum_sketches, error_sketches,
             for S in worker_Sgrads:
                 grad_sketch_agg.accumulateTable(S)
             grad_sketch_agg /= args.num_workers
+
         elif args.grad_reduction == "median":
             sketch.zero()
             csvecs = [copy.deepcopy(sketch) for _ in worker_Sgrads]

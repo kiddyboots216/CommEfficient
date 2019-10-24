@@ -5,7 +5,7 @@ import copy
 import multiprocessing
 from csvec import CSVec
 
-def init_pool(input_model, device, num_gpus,
+def init_pool(input_model, device, num_worker_gpus,
               worker_Sgrads_sm, worker_grads_sm,
               client_weights_sm, ps_weights_sm):
     global model
@@ -14,10 +14,11 @@ def init_pool(input_model, device, num_gpus,
     global gw_worker_Sgrads_sm
     global gw_worker_grads_sm
 
+    # use the first num_worker_gpus gpus
     if torch.cuda.is_available():
         process_id = multiprocessing.current_process()._identity[0]
         # just in case the process_ids aren't zero-indexed
-        device_id = process_id % num_gpus
+        device_id = process_id % num_worker_gpus
         torch.cuda.set_device(device_id)
 
     model = copy.deepcopy(input_model)
