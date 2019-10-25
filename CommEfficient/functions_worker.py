@@ -54,6 +54,9 @@ def update_forward_grad(worker_id, client_id,
     worker_weights = torch.from_numpy(worker_weights).to(args.device)
 
     if args.do_topk_down:
+        client_weights = sm2np(gw_client_weights_sm, (num_clients, grad_size))
+        worker_weights = client_weights[client_id]
+        worker_weights = torch.from_numpy(worker_weights).to(args.device)
         new_worker_weights = get_new_worker_weights(ps_weights,
                                                     worker_weights,
                                                     args)

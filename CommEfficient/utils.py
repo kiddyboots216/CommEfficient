@@ -126,6 +126,13 @@ def parse_args(default_lr):
                         help=("Set to O0, O1, O2 or O3 for fp16 training"
                               " (see apex documentation)"))
 
+    # Differential Privacy args
+    parser.add_argument("--dp", action="store_true", dest="do_dp", help=("Whether to do differentially private training)"))
+    parser.add_argument("--ledger", action="store_true", help=("Whether to use a ledger for DP"))
+    parser.add_argument("--l2_norm_clip", type=float, default=1.0, help=("What value to clip the l2 norm to"))
+    parser.add_argument("--noise_multiplier", type=float, default=0.0, help=("Sigma squared, i.e. standard dev of noise"))
+    parser.add_argument("--num_microbatches", type=int, default=1, help=("Number of microbatches to divide each megabatch into"))
+
 
     args = parser.parse_args()
     args.num_workers = int(args.num_clients * args.participation)
@@ -144,14 +151,11 @@ def _topk(vec, k):
     ret[topkIndices] = vec[topkIndices]
     return ret
 
-def get_grad(model, weights, args, train=True, device='cpu'):
-    if train:
-        grad_vec = get_grad_vec(model)
-        if args.weight_decay != 0:
-            grad_vec.add_(args.weight_decay / args.num_workers, weights)
-        return grad_vec.to(device)
-    else:
-        return 0
+def get_grad(model, weights, args):
+    grad_vec = get_grad_vec(model)
+    if args.weight_decay != 0:
+        grad_vec.add_(args.weight_decay / args.num_workers, weights)
+    return grad_vec.to(args.device)
 
 def get_grad_vec(model):
     grad_vec = []
