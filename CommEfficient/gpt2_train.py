@@ -344,7 +344,7 @@ def train():
     # Add special tokens if they are not already added
     add_special_tokens_(model, tokenizer)
     # HAVE TO USE SGD FOR FED
-    optimizer = SGD(model.parameters(), lr=args.lr_scale, momentum=args.momentum)
+    optimizer = SGD(model.parameters(), lr=1, momentum=args.momentum)
 
     logger.info('Finished in {:.2f} seconds'.format(timer()))
     logger.info("Prepare datasets")

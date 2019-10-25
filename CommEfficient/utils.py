@@ -80,7 +80,7 @@ def parse_args(default_lr):
     parser.add_argument("--participation", type=float, default=1.0)
     parser.add_argument("--balancedness", type=float, default=1.0)
     default_device = "cuda" if torch.cuda.is_available() else "cpu"
-    parser.add_argument("--device", type=str,
+    parser.add_argument("--device", type=str, choices=["cpu", "cuda"],
                         default=default_device,
                         help="Device (cuda or cpu)")
     parser.add_argument("--num_devices", type=int,
@@ -88,6 +88,7 @@ def parse_args(default_lr):
                         help="Number of gpus")
     parser.add_argument("--num_local_iters", type=int, default=1)
     parser.add_argument("--local_sched", action="store_true", dest="use_local_sched")
+    parser.add_argument("--share_ps_gpu", action="store_true")
 
     # GPT2 args
     parser.add_argument("--num_dialogs", type=int, default=1)
