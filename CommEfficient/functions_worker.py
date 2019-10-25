@@ -7,10 +7,11 @@ from csvec import CSVec
 
 def init_pool(input_model, device, num_gpus,
               worker_Sgrads_sm, worker_grads_sm,
-              client_weights_sm, ps_weights_sm):
+              #client_weights_sm, 
+              ps_weights_sm):
     global model
     global gw_ps_weights_sm
-    global gw_client_weights_sm
+    #global gw_client_weights_sm
     global gw_worker_Sgrads_sm
     global gw_worker_grads_sm
 
@@ -23,7 +24,7 @@ def init_pool(input_model, device, num_gpus,
     model = copy.deepcopy(input_model)
     model.to(device)
     gw_ps_weights_sm = ps_weights_sm
-    gw_client_weights_sm = client_weights_sm
+    #gw_client_weights_sm = client_weights_sm
     gw_worker_Sgrads_sm = worker_Sgrads_sm
     gw_worker_grads_sm = worker_grads_sm
 
@@ -41,14 +42,15 @@ def update_forward_grad(worker_id, client_id,
 
     global model
     global gw_ps_weights_sm
-    global gw_client_weights_sm
+    #global gw_client_weights_sm
     global gw_worker_Sgrads_sm
     global gw_worker_grads_sm
 
     ps_weights = sm2np(gw_ps_weights_sm, (grad_size,))
+    ps_weights = torch.from_numpy(ps_weights).to(args.device)
+    """
     client_weights = sm2np(gw_client_weights_sm, (num_clients, grad_size))
     worker_weights = client_weights[client_id]
-    ps_weights = torch.from_numpy(ps_weights).to(args.device)
     worker_weights = torch.from_numpy(worker_weights).to(args.device)
 
     if args.do_topk_down:
@@ -56,13 +58,14 @@ def update_forward_grad(worker_id, client_id,
                                                     worker_weights,
                                                     args)
     else:
-        new_worker_weights = ps_weights
+    """
+    new_worker_weights = ps_weights
 
     # g is a (possibly compressed) gradient
     device = args.device
     model = model.to(device)
     model.train()
-    weights = weights.to(device)
+    weights = new_worker_weights.to(device)
     set_param_vec(model, weights)
     batch = tuple(input_tensor.to(device) for input_tensor in batch)
     criterion = criterion.to(device)
@@ -153,12 +156,12 @@ def forward_grad(model, weights, batch,
             loss = 0
         results = [loss]
 
-    grad = get_grad(model, weights, args, train=True, device=device)
+    grad = get_grad(model, weights, args)
 
     # compress the gradient if needed
     if args.mode == "sketch":
         sketch = CSVec(d=args.grad_size, c=args.num_cols,
-            r=args.num_rows, device=device,
+            r=args.num_rows, device=args.device,
             numBlocks=args.num_blocks)
         sketch.accumulateVec(grad)
         g = sketch.table.cpu()
@@ -184,10 +187,10 @@ def forward_grad(model, weights, batch,
 
 def forward_multiprocessed(batch, args, criterion, metric):
     grad_size = args.grad_size
+    device = args.device
     global model
     global gw_ps_weights_sm
     ps_weights = sm2np(gw_ps_weights_sm, (grad_size,))
-    device = args.device
     ps_weights = torch.from_numpy(ps_weights).to(args.device)
     model = model.to(device)
     model.eval()
@@ -273,11 +276,11 @@ def forward_grad_gpt2(model, weights, batch, criterion,
             accum_loss = loss
         #print(f"accum loss: {accum_loss} from {loss}")
     #print(f"accum loss: {accum_loss}")
-    grad = get_grad(model, weights, args, device=device)
+    grad = get_grad(model, weights, args)
     # compress the gradient if needed
     if args.mode == "sketch":
         sketch = CSVec(d=args.grad_size, c=args.num_cols,
-            r=args.num_rows, device=device,
+            r=args.num_rows, device=args.device,
             numBlocks=args.num_blocks)
         sketch.accumulateVec(grad)
         g = sketch.table.cpu()

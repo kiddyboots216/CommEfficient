@@ -23,7 +23,7 @@ from utils import sm2np, get_param_vec, set_param_vec, get_grad, _topk
 
 g_worker_Sgrads_sm = None
 g_worker_grads_sm = None
-g_client_weights_sm = None
+#g_client_weights_sm = None
 g_ps_weights_sm = None
 
 g_criterion = None
@@ -53,7 +53,7 @@ class FedCommEffModel:
         self.args = args
 
         global g_ps_weights_sm
-        global g_client_weights_sm
+        #global g_client_weights_sm
         global g_worker_Sgrads_sm
         global g_worker_grads_sm
 
@@ -68,6 +68,7 @@ class FedCommEffModel:
         ps_weights[:] = param_vec[:]
 
         # client weights emulates each client's possibly stale weights
+        """
         g_client_weights_sm = Array(ctypes.c_float,
                                     param_vec.size * num_clients,
                                     lock=False)
@@ -76,6 +77,7 @@ class FedCommEffModel:
         client_weights = sm2np(g_client_weights_sm,
                                (num_clients, param_vec.size))
         client_weights[:] = np.tile(param_vec, (num_clients, 1))
+        """
 
         # this shared memory block will hold the gradients
         # (or gradient sketches) computed by each worker in a round
@@ -107,7 +109,8 @@ class FedCommEffModel:
                 initializer=worker.init_pool,
                 initargs=(self.model, device, args.num_devices,
                           g_worker_Sgrads_sm, g_worker_grads_sm,
-                          g_client_weights_sm, g_ps_weights_sm)
+                          #g_client_weights_sm, 
+                          g_ps_weights_sm)
             )
 
 
@@ -225,8 +228,8 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
 
     def get_lr(self):
         new_lr = get_lr(self.param_groups)
-        global lr
-        lr = new_lr
+        #global lr
+        #lr = new_lr
         return new_lr
 
     def step(self, indices, ret=False):
