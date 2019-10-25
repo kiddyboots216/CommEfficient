@@ -49,7 +49,7 @@ if __name__ == "__main__":
     accuracy = FedCommEffMetric(accuracy, args)
     model = FedCommEffModel(model, args)
     #opt = FedCommEffOptimizer(opt, args)
-    opt = DPGaussianOptimizer(1, 1, True, opt, args)
+    opt = DPGaussianOptimizer(args, opt)
 
     xs = torch.randn(args.batch_size, D_in)
     ys = torch.ones(args.batch_size).long()
@@ -69,3 +69,4 @@ if __name__ == "__main__":
         loss, acc = model(minibatches, idx)
         print(loss)
         print(acc)
+        print(opt.ledger.get_formatted_ledger())
