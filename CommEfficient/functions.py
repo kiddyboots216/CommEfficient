@@ -173,16 +173,22 @@ class FedCommEffModel:
 
 class FedCommEffOptimizer(torch.optim.Optimizer):
     def __init__(self, optimizer, args):
+        # use the last GPU for the PS
         if args.device[:4] == "cuda":
             torch.cuda.set_device(args.num_devices-1)
+        device = args.device
+
+        # this was probably already calculated in FedCommEffModel,
+        # but just in case not, we recompute it here
         grad_size = 0
         for group in optimizer.param_groups:
             for p in group["params"]:
                 if p.requires_grad:
                     grad_size += torch.numel(p)
         self.args = args
+        args.grad_size = grad_size
+
         self.param_groups = optimizer.param_groups
-        device = args.device
 
         # helper for rest of __init__
         def initialize_helper(thing_type, base_thing):
@@ -197,18 +203,10 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
                 msg = "{} is an invalid type"
                 raise ValueError(msg.format(thing_type))
 
-        # hack so there isn't a not defined error later...
-        self.base_sketch = None
         if args.mode == "sketch":
-            sketch = CSVec(d=grad_size, c=args.num_cols,
-                           r=args.num_rows, device=device,
-                           numBlocks=args.num_blocks)
-            # base_sketch can be used for miscellaneous
-            # sketching activities
-            self.base_sketch = sketch
-
             # create momentum & error sketches -- one or one for each
             # client depending on whether we're doing virtual momentum
+            sketch = args2sketch(args)
             self.momentums = initialize_helper(
                     args.momentum_type, sketch
                 )
@@ -263,8 +261,8 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
                 cur_momentums,
                 cur_errors,
                 self.args,
-                lr,
-                self.base_sketch)
+                lr)
+                
 
         # update ps_weights, momentums, and errors
         ps_weights = sm2np(g_ps_weights_sm, (self.args.grad_size,))
@@ -303,10 +301,14 @@ class FedCommEffMetric:
         out = g_metric(*args)
         return out
 
-def get_updated_server(momentums, errors, args, lr, sketch=None):
+def args2sketch(args):
+    return CSVec(d=args.grad_size, c=args.num_cols,
+                 r=args.num_rows, device=args.device,
+                 numBlocks=args.num_blocks)
+
+def get_updated_server(momentums, errors, args, lr):
     if args.mode == "sketch":
-        update = _server_helper_sketched(momentums, errors, args,
-                                         lr, sketch)
+        update = _server_helper_sketched(momentums, errors, args, lr)
     elif args.mode == "local_topk":
         update = _server_helper_local_topk(momentums, errors, args, lr)
     elif args.mode == "true_topk":
@@ -400,26 +402,29 @@ def _server_helper_local_topk(momentum_vecs, error_vecs, args, lr):
     error_vec[update.nonzero()] = 0
     return (update * lr).cpu(), [momentum_vec], [error_vec]
 
-def _server_helper_sketched(momentum_sketches, error_sketches,
-                            args, lr, sketch):
+def _server_helper_sketched(momentum_sketches, error_sketches, args, lr):
     momentum = args.momentum
     k = args.k
     device = torch.device(args.device)
+
     momentum_type = args.momentum_type
     error_type = args.error_type
+
     local = momentum_type == 'local' and error_type == 'local'
     virtual = momentum_type == 'virtual' and error_type == 'virtual'
     none = momentum_type == 'none' and error_type == 'none'
     assert local or virtual or none
 
+    # pull the sketched gradients out of SM
     global g_worker_Sgrads_sm
-
     worker_Sgrads_shape = (args.num_workers,
                            args.num_rows,
                            args.num_cols)
     worker_Sgrads = sm2np(g_worker_Sgrads_sm, worker_Sgrads_shape)
     worker_Sgrads = [torch.from_numpy(Sg).to(device)
                      for Sg in worker_Sgrads]
+
+    sketch = args2sketch(args)
     if local:
         for grad_table, momentum_sketch, error_sketch in zip(worker_Sgrads, momentum_sketches, error_sketches):
             if args.momentum_type != "none":
