@@ -132,7 +132,6 @@ class FedCommEffModel:
     def __call__(self, batches, indices):
         global g_criterion
         global g_metric
-        #global lr
         args = self.args
         if self.training:
             #self.args.lr = lr
@@ -174,7 +173,6 @@ class FedCommEffModel:
 
 class FedCommEffOptimizer(torch.optim.Optimizer):
     def __init__(self, optimizer, args):
-        #global grad_size
         if args.device[:4] == "cuda":
             torch.cuda.set_device(args.num_devices-1)
         grad_size = 0
@@ -231,10 +229,7 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
             self.errors = initialize_helper("none", None)
 
     def get_lr(self):
-        new_lr = get_lr(self.param_groups)
-        global lr
-        lr = new_lr
-        return new_lr
+        return get_lr(self.param_groups)
 
     def step(self, indices, ret=False):
         # in this method we're agnostic as to whether we're sketched,
@@ -288,7 +283,7 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
                 self.errors[idx] = new_errors[i]
 
     def zero_grad(self):
-        pass
+        raise NotImplementedError("Please call zero_grad() on the model instead")
 
 class FedCommEffCriterion:
     def __init__(self, input_criterion, args):
@@ -298,6 +293,7 @@ class FedCommEffCriterion:
         global g_criterion
         out = g_criterion(*args)
         return out
+
 class FedCommEffMetric:
     def __init__(self, input_metric, args):
         global g_metric
@@ -395,7 +391,8 @@ def _server_helper_local_topk(momentum_vecs, error_vecs, args, lr):
         for g in worker_grads[1:]:
             grad_sum += torch.from_numpy(g).to(device)
     else:
-        grad_sum = np.sum([torch.from_numpy(g).to(device) for g in worker_grads])
+        grad_sum = np.sum([torch.from_numpy(g).to(device)
+                           for g in worker_grads])
     momentum_vec = momentum_vecs[0]
     error_vec = error_vecs[0]
     momentum_vec *= momentum
@@ -502,16 +499,20 @@ def _server_helper_sketched(momentum_sketches, error_sketches,
         del worker_Sgrads
 
     elif none:
+        """
         global g_worker_grads_sm
         worker_grads_shape = (args.num_workers, args.grad_size)
         worker_grads = sm2np(g_worker_grads_sm, worker_grads_shape)
         grad_sum = np.sum(worker_grads)
+        """
         grad_sketch_agg = sketch
         grad_sketch_agg.zero()
         for S in worker_Sgrads:
             grad_sketch_agg.accumulateTable(S)
         update = grad_sketch_agg.unSketch(k=k)
+        """
         print(f"Reconstruction error: {(update - grad_sum).norm()}")
+        """
 
     ps_weights = sm2np(g_ps_weights_sm, (args.grad_size,),)
     ps_weights = torch.from_numpy(ps_weights)
