@@ -305,23 +305,28 @@ class FedCommEffMetric:
 
 def get_updated_server(momentums, errors, args, lr, sketch=None):
     if args.mode == "sketch":
-        return _server_helper_sketched(momentums, errors, args,
-                                       lr, sketch)
+        update = _server_helper_sketched(momentums, errors, args,
+                                         lr, sketch)
     elif args.mode == "local_topk":
-        return _server_helper_local_topk(momentums, errors, args, lr)
+        update = _server_helper_local_topk(momentums, errors, args, lr)
     elif args.mode == "true_topk":
-        return _server_helper_true_topk(momentums, errors, args, lr)
+        update = _server_helper_true_topk(momentums, errors, args, lr)
     elif args.mode == "localSGD":
-        return _server_helper_localSGD(momentums, errors, args, lr)
+        update = _server_helper_localSGD(momentums, errors, args, lr)
     else:
         assert False, "invalid mode {}".format(args.mode)
 
+    weight_update, new_momentums, new_errors = update
+
+    device = torch.device(args.device)
+    ps_weights = sm2np(g_ps_weights_sm, (args.grad_size,))
+    ps_weights = torch.from_numpy(ps_weights).to(device)
+
+    return ps_weights - weight_update, new_momentums, new_errors
+
 def _server_helper_localSGD(momentum_vecs, error_vecs, args, lr):
-    global ps_weights_sm
     global p_worker_grads_sm
     device = torch.device(args.device)
-    ps_weights = sm2np(g_ps_weights_sm, (args.grad_size,),)
-    ps_weights = torch.from_numpy(ps_weights).to(device)
     worker_grads_shape = (args.num_workers, args.grad_size)
     worker_grads = sm2np(g_worker_grads_sm, worker_grads_shape)
     large = args.model == "gpt2"
@@ -332,19 +337,15 @@ def _server_helper_localSGD(momentum_vecs, error_vecs, args, lr):
     else:
         grad_sum = np.sum([torch.from_numpy(g).to(device) for g in worker_grads])
     update = grad_sum
-    return (ps_weights - update).cpu(), momentum_vecs, error_vecs
+    return update.cpu(), momentum_vecs, error_vecs
 
 def _server_helper_true_topk(momentum_vecs, error_vecs, args, lr):
-    global g_ps_weights_sm
     global g_worker_grads_sm
     assert args.momentum_type == "virtual"
     assert args.error_type == "virtual"
 
     device = torch.device(args.device)
     momentum = args.momentum
-
-    ps_weights = sm2np(g_ps_weights_sm, (args.grad_size,),)
-    ps_weights = torch.from_numpy(ps_weights).to(device)
 
     worker_grads_shape = (args.num_workers, args.grad_size)
     worker_grads = sm2np(g_worker_grads_sm, worker_grads_shape)
@@ -369,19 +370,15 @@ def _server_helper_true_topk(momentum_vecs, error_vecs, args, lr):
     momentum_vec[update.nonzero()] = 0
     error_vec[update.nonzero()] = 0
     #print(f"Updating {ps_weights.mean()} with {update.mean()} * {lr}")
-    return (ps_weights - update * lr).cpu(), [momentum_vec], [error_vec]
+    return (update * lr).cpu(), [momentum_vec], [error_vec]
 
 def _server_helper_local_topk(momentum_vecs, error_vecs, args, lr):
-    global g_ps_weights_sm
     global g_worker_grads_sm
     assert args.momentum_type == "virtual"
     assert args.error_type == "virtual"
 
     device = torch.device(args.device)
     momentum = args.momentum
-
-    ps_weights = sm2np(g_ps_weights_sm, (args.grad_size,),)
-    ps_weights = torch.from_numpy(ps_weights).to(device)
 
     worker_grads_shape = (args.num_workers, args.grad_size)
     worker_grads = sm2np(g_worker_grads_sm, worker_grads_shape)
@@ -401,7 +398,7 @@ def _server_helper_local_topk(momentum_vecs, error_vecs, args, lr):
     update = _topk(error_vec, k=args.k)
     momentum_vec[update.nonzero()] = 0
     error_vec[update.nonzero()] = 0
-    return (ps_weights - update * lr).cpu(), [momentum_vec], [error_vec]
+    return (update * lr).cpu(), [momentum_vec], [error_vec]
 
 def _server_helper_sketched(momentum_sketches, error_sketches,
                             args, lr, sketch):
@@ -415,7 +412,6 @@ def _server_helper_sketched(momentum_sketches, error_sketches,
     none = momentum_type == 'none' and error_type == 'none'
     assert local or virtual or none
 
-    global g_ps_weights_sm
     global g_worker_Sgrads_sm
 
     worker_Sgrads_shape = (args.num_workers,
@@ -514,9 +510,7 @@ def _server_helper_sketched(momentum_sketches, error_sketches,
         print(f"Reconstruction error: {(update - grad_sum).norm()}")
         """
 
-    ps_weights = sm2np(g_ps_weights_sm, (args.grad_size,),)
-    ps_weights = torch.from_numpy(ps_weights)
-    return ps_weights - update.cpu() * lr, momentum_sketches, error_sketches
+    return update.cpu() * lr, momentum_sketches, error_sketches
 
 def get_lr(optimizer_param_groups):
     if len(optimizer_param_groups) == 1:
