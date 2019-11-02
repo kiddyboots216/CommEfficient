@@ -255,10 +255,10 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
 
         # update ps_weights, momentums, and errors
         ps_weights = sm2np(g_ps_weights_sm, (self.args.grad_size,))
-        ps_weights[:] = new_ps_weights
+        ps_weights[:] = new_ps_weights.cpu().numpy()
 
-        self.momentums[momentum_indices] = new_momentums
-        self.errors[error_indices] = new_errors
+        self.momentums[momentum_indices] = new_momentums.cpu()
+        self.errors[error_indices] = new_errors.cpu()
 
     def zero_grad(self):
         raise NotImplementedError("Please call zero_grad() on the model instead")
@@ -291,13 +291,22 @@ def get_updated_server(momentums, errors, args, lr):
     global g_worker_Sgrads_sm
 
     grads = None
-    if args.method in ["true_topk", "local_topk", "local_sgd"]:
+    if args.mode in ["true_topk", "local_topk", "local_sgd"]:
         worker_grads_shape = (args.num_workers, args.grad_size)
         grads = sm2np(g_worker_grads_sm, worker_grads_shape)
-    elif args.method == "sketch":
+    elif args.mode == "sketch":
         worker_Sgrads_shape = (args.num_workers,
                                args.num_rows, args.num_cols)
         grads = sm2np(g_worker_Sgrads_sm, worker_Sgrads_shape)
+
+    # doing arithmetic on tensors appears to be ~2x faster in torch
+    # than in numpy for some reason
+    grads = torch.from_numpy(grads)
+
+    # if we're at the end of an epoch, the mini-batch, and therefore
+    # the number of gradients, may be smaller than usual
+    max_worker_id = max(momentums.size()[0], errors.size()[0])
+    grads = grads[:max_worker_id]
 
     if args.mode == "sketch":
         u = _server_helper_sketched(grads, momentums, errors, args, lr)
@@ -312,11 +321,10 @@ def get_updated_server(momentums, errors, args, lr):
 
     weight_update, new_momentums, new_errors = u
 
-    device = torch.device(args.device)
     ps_weights = sm2np(g_ps_weights_sm, (args.grad_size,))
-    ps_weights = torch.from_numpy(ps_weights).to(device)
+    ps_weights = torch.from_numpy(ps_weights)
 
-    return ps_weights - weight_update, new_momentums, new_errors
+    return ps_weights - weight_update.cpu(), new_momentums.cpu(), new_errors.cpu()
 
 def agg_grads(grads, args):
     # aggregate the gradients
@@ -325,13 +333,14 @@ def agg_grads(grads, args):
         # about running out of memory
         grad_agg = torch.sum(grads, dim=0) / args.num_workers
     if args.grad_reduction == "median":
-        grad_agg = torch.from_numpy(np.median(grads.numpy(), axis=0))
+        # numpy median is way faster than torch median
+        grad_agg = torch.from_numpy(np.median(grads.cpu().numpy(), axis=0))
 
-    return grad_agg
+    return grad_agg.to(grads.device)
 
 def _server_helper_localSGD(grads, momentums, errors, args, lr):
     update = agg_grads(grads, args)
-    return update.cpu(), momentums, errors
+    return update, momentums, errors
 
 def _server_helper_true_topk(grads, momentum, error, args, lr):
     assert args.momentum_type == "virtual"
@@ -347,43 +356,57 @@ def _server_helper_true_topk(grads, momentum, error, args, lr):
     error[update.nonzero()] = 0
 
     #print(f"Updating {ps_weights.mean()} with {update.mean()} * {lr}")
-    return (update * lr).cpu(), momentum, error
+    return update * lr, momentum, error
 
 def _server_helper_local_topk(grads, momentums, errors, args, lr):
     assert args.error_type == "local"
 
     if args.momentum_type == "none":
+        # calculate what the workers sent
+        transmitted = torch.zeros_like(errors)
         errors += grads
-        transmitted = _topk(errors, k=args.k)
-        update = agg_grads(transmitted, args)
+        for i, error in enumerate(errors):
+            transmitted[i,:] = _topk(error.to(args.device), k=args.k).cpu()
 
-        # zero out locally what was transmitted
-        nz = transmitted.nonzero()
-        errors[nz[:, 0], nz[:, 1]] = 0
+            # zero out locally what was transmitted
+            # need to do this one worker at a time to not OOM
+            nz = transmitted[i,:].nonzero()
+            errors[i, nz].zero_()
+
+        update = agg_grads(transmitted, args)
     elif args.momentum_type == "local":
         rho = args.momentum
-        momentums = rho * momentums + grads
-        errors += momentums
+        torch.add(grads, momentums, alpha=rho, out=momentums)
 
-        transmitted = _topk(errors, k=args.k)
+        transmitted = torch.zeros_like(errors)
+        errors += momentums
+        for i, error in enumerate(errors):
+            transmitted[i,:] = _topk(error.to(args.device), k=args.k).cpu()
+
+            # zero out locally what was transmitted
+            nz = transmitted[i,:].nonzero()
+            momentums[i, nz].zero_()
+            errors[i, nz].zero_()
+
         update = agg_grads(transmitted, args)
 
-        # zero out locally what was transmitted
-        nz = transmitted.nonzero()
-        momentums[nz[:, 0], nz[:, 1]] = 0
-        errors[nz[:, 0], nz[:, 1]] = 0
     elif args.momentum_type == "virtual":
         # only one momentum vec if virtual
         momentum = momentums
 
         # first figure out what to transmit, then do momentum on the server
         errors += grads
-        transmitted = _topk(errors, k=args.k)
-        nz = transmitted.nonzero()
-        errors[nz[:, 0], nz[:, 1]] = 0
+        transmitted = torch.zeros_like(errors)
+        for i, error in enumerate(errors):
+            transmitted[i,:] = _topk(error.to(args.device), k=args.k).cpu()
+            nz = transmitted[i,:].nonzero()
+            errors[i, nz].zero_()
 
         rho = args.momentum
-        momentum = rho * momentum + agg_grads(transmitted, args)
+        torch.add(agg_grads(transmitted, args),
+                  momentum,
+                  alpha=rho,
+                  out=momentum)
         update = momentum
         # no momentum factor masking! b/c it doesn't make sense in this case
 
@@ -391,11 +414,16 @@ def _server_helper_local_topk(grads, momentums, errors, args, lr):
         momentums = momentum
 
 
-    return (update * lr).cpu(), momentums, errors
+    return update * lr, momentums, errors
 
 def _server_helper_sketched(Sgrads, Smomentums, Serrors, args, lr):
     rho = args.momentum
     k = args.k
+
+    # do everything on the GPU
+    Sgrads = Sgrads.to(args.device)
+    Smomentums = Smomentums.to(args.device)
+    Serrors = Serrors.to(args.device)
 
     momentum_type = args.momentum_type
     error_type = args.error_type
@@ -407,17 +435,19 @@ def _server_helper_sketched(Sgrads, Smomentums, Serrors, args, lr):
     sketch = args2sketch(args)
     if none:
         transmitted = Sgrads
-        update = sketch.accumulateTable(agg_grads(Sgrads, args)).unSketch(k=k)
+        sketch.accumulateTable(agg_grads(Sgrads, args))
+        update = sketch.unSketch(k=k)
     elif local:
         Smomentums = rho * Smomentums + Sgrads
         Serrors += Smomentums
         transmitted = Serrors
 
-        Supdate = sketch.accumulateTable(agg_grads(transmitted, args))
+        sketch.accumulateTable(agg_grads(transmitted, args))
+        Supdate = sketch.table
         # do error feedback in the sketch
         Serrors -= Supdate
 
-        update = aggregated_sketch.unSketch(k=k)
+        update = sketch.unSketch(k=k)
 
         # momentum factor masking is annoying for sketched
         # to do it properly, we'd have to:
@@ -427,7 +457,7 @@ def _server_helper_sketched(Sgrads, Smomentums, Serrors, args, lr):
         # which is expensive. So instead, just zero out the momentum sketch
         # anywhere where update is nonzero
         nz = Supdate.nonzero()
-        Smomentums[nz[:,0], nz[:,1], nz[:,2]] = 0
+        Smomentums[0, nz[:,0], nz[:,1]] = 0
 
     elif virtual:
         transmitted = Sgrads
@@ -438,114 +468,24 @@ def _server_helper_sketched(Sgrads, Smomentums, Serrors, args, lr):
 
         Smomentum = rho * Smomentum + agg_grads(transmitted, args)
         Serror += Smomentum
-        Supdate = sketch.accumulateTable(Serror)
+        # Serror is 1xrowsxcols, so need to index by 0
+        sketch.accumulateTable(Serror[0])
+        Supdate = sketch.table
         # error feedback within the sketch
-        Serror -= sketched_update
+        Serror -= Supdate
 
-        update = Supdate.unSketch(k=k)
+        update = sketch.unSketch(k=k)
 
         # see comment about momentum factor masking with sketching above
-        nz = sketched_update.nonzero()
+        nz = Supdate.nonzero()
         # (still 3-dimensional, but the first dimension has size 1)
-        Smomentum[nz[:,0], nz[:,1], nz[:,2]] = 0
+        Smomentum[0, nz[:,0], nz[:,1]] = 0
 
         # rename to plurals for the return statement...
         Smomentums = Smomentum
         Serrors = Serror
 
-    return (update * lr).cpu(), Smomentums, Serrors
-
-    """
-    # pull the sketched gradients out of SM
-    sketch = args2sketch(args)
-    if args.momentum_type == "local":
-        for grad_table, momentum_sketch, error_sketch in zip(worker_Sgrads, momentum_sketches, error_sketches):
-            if args.momentum_type != "none":
-                momentum_sketch *= momentum
-                momentum_sketch.accumulateTable(grad_table)
-                if args.error_type != "none":
-                    error_sketch += momentum_sketch
-            elif args.error_type != "none":
-                error_sketch.accumulateTable(grad_table)
-            else:
-                sketch += grad_sketch
-        if args.error_type != "none":
-            update = np.sum(error_sketches).unSketch(k=k)
-        else:
-            update = sketch.unSketch(k=k)
-        sketch.zero()
-        sketch.accumulateVec(update)
-        hh_coords = sketch.table.nonzero()
-        hh_0, hh_1 = hh_coords[:, 0], hh_coords[:, 1]
-        for momentum_sketch, error_sketch in zip(momentum_sketches, error_sketches):
-            if args.momentum_type != "none":
-                momentum_sketch.table[hh_0, hh_1] = 0
-            if args.error_type != "none":
-                error_sketch.table[hh_0, hh_1] = 0
-
-    elif args.momentum_type == "virtual":
-        if args.grad_reduction == "mean":
-            grad_sketch_agg = sketch
-            grad_sketch_agg.zero()
-            for S in worker_Sgrads:
-                grad_sketch_agg.accumulateTable(S)
-            grad_sketch_agg /= args.num_workers
-
-        elif args.grad_reduction == "median":
-            sketch.zero()
-            csvecs = [copy.deepcopy(sketch) for _ in worker_Sgrads]
-            for csvec, S in zip(csvecs, worker_Sgrads):
-                csvec.accumulateTable(S)
-            grad_sketch_agg = csvec.median(csvecs)
-
-        momentum_sketch = momentum_sketches[0]
-        error_sketch = error_sketches[0]
-        if args.momentum_type != "none":
-            momentum_sketch *= momentum
-            momentum_sketch += grad_sketch_agg
-            if args.error_type != "none":
-                error_sketch += momentum_sketch
-        elif args.error_type != "none":
-            error_sketch += grad_sketch_agg
-        else:
-            sketch += grad_sketch_agg
-        if args.error_type != "none":
-            update = error_sketch.unSketch(k=k)
-        elif args.momentum_type != "none":
-            update = momentum_sketch.unSketch(k=k)
-        else:
-            update = sketch.unSketch(k=k)
-        sketch.zero()
-        sketch.accumulateVec(update)
-        hh_coords = sketch.table.nonzero()
-        hh_0, hh_1 = hh_coords[:, 0], hh_coords[:, 1]
-        if args.momentum_type != "none":
-            momentum_sketch.table[hh_0, hh_1] = 0
-        if args.error_type != "none":
-            error_sketch.table[hh_0, hh_1] = 0
-        momentum_sketches = [momentum_sketch]
-        error_sketches = [error_sketch]
-
-        del sketch
-        del hh_coords
-        del hh_0
-        del hh_1
-        del worker_Sgrads
-
-    elif args.momentum_type == "none":
-        #global g_worker_grads_sm
-        #worker_grads_shape = (args.num_workers, args.grad_size)
-        #worker_grads = sm2np(g_worker_grads_sm, worker_grads_shape)
-        #grad_sum = np.sum(worker_grads)
-        grad_sketch_agg = sketch
-        grad_sketch_agg.zero()
-        for S in worker_Sgrads:
-            grad_sketch_agg.accumulateTable(S)
-        update = grad_sketch_agg.unSketch(k=k)
-        #print(f"Reconstruction error: {(update - grad_sum).norm()}")
-
-    return update.cpu() * lr, momentum_sketches, error_sketches
-    """
+    return update * lr, Smomentums, Serrors
 
 def get_lr(optimizer_param_groups):
     if len(optimizer_param_groups) == 1:

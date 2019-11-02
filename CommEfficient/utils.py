@@ -137,12 +137,17 @@ def parse_args(default_lr):
 
 def _topk(vec, k):
     """ Return the largest k elements (by magnitude) of vec"""
-    ret = torch.zeros_like(vec)
     # on a gpu, sorting is faster than pytorch's topk method
     #topkIndices = torch.sort(vec**2)[1][-k:]
     # however, torch.topk is more space efficient
     topkIndices = torch.topk(vec**2, k, sorted=False)[1]
-    ret[topkIndices] = vec[topkIndices]
+
+    ret = torch.zeros_like(vec)
+    if len(vec.size()) == 1:
+        ret[topkIndices] = vec[topkIndices]
+    elif len(vec.size()) == 2:
+        rows = torch.arange(vec.size()[0]).view(-1,1)
+        ret[rows, topkIndices] = vec[rows, topkIndices]
     return ret
 
 def get_grad(model, weights, args, train=True, device='cpu'):
