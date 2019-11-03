@@ -21,8 +21,14 @@ from utils import sm2np, get_param_vec, set_param_vec, get_grad, _topk
 #rank = comm.Get_rank()
 #world_size = comm.Get_size()
 
-g_worker_Sgrads_sm = None
-g_worker_grads_sm = None
+from line_profiler import LineProfiler
+import atexit
+profile = LineProfiler()
+#atexit.register(profile.print_stats)
+
+g_worker_errors_sm = None
+g_worker_velocities_sm = None
+g_worker_transmitted_sm = None
 g_client_weights_sm = None
 g_ps_weights_sm = None
 
@@ -54,52 +60,48 @@ class FedCommEffModel:
 
         global g_ps_weights_sm
         global g_client_weights_sm
-        global g_worker_Sgrads_sm
-        global g_worker_grads_sm
+        global g_worker_errors_sm
+        global g_worker_velocities_sm
+        global g_worker_transmitted_sm
 
         # ps_weights needs to be in shared memory so the workers can
         # update themselves with (possibly an approximation of) the
         # latest PS weights
-        g_ps_weights_sm = Array(ctypes.c_float,
-                                param_vec.size,
-                                lock=False)
-        ps_weights = sm2np(g_ps_weights_sm, param_vec.shape)
+        shape = (args.grad_size,)
+        numel = int(np.prod(shape))
+        g_ps_weights_sm = Array('f', numel, lock=False)
+        ps_weights = sm2np(g_ps_weights_sm, shape)
         # store the initial weights of the model
         ps_weights[:] = param_vec[:]
 
         # client weights emulates each client's possibly stale weights
-        g_client_weights_sm = Array(ctypes.c_float,
-                                    param_vec.size * num_clients,
-                                    lock=False)
-
+        shape = (num_clients, args.grad_size)
+        numel = int(np.prod(shape))
+        g_client_weights_sm = Array('f', numel, lock=False)
         # copy ps_weights into every row of client_weights
-        client_weights = sm2np(g_client_weights_sm,
-                               (num_clients, param_vec.size))
+        client_weights = sm2np(g_client_weights_sm, shape)
         client_weights[:] = np.tile(param_vec, (num_clients, 1))
 
-        # this shared memory block will hold the gradients
-        # (or gradient sketches) computed by each worker in a round
+        # errors and velocities hold the local error accumulation
+        # vectors and local velocity vectors
+        # transmitted holds what the workers sent to the PS
+        shape = None
         if args.mode == "sketch":
-            g_worker_Sgrads_sm = Array(
-                    'f',
-                    args.num_workers * args.num_rows * args.num_cols,
-                    lock=False
-                )
-            # and zero out worker_Sgrads to start
-            worker_Sgrads_shape = (args.num_workers,
-                                   args.num_rows,
-                                   args.num_cols)
-            worker_Sgrads = sm2np(g_worker_Sgrads_sm, worker_Sgrads_shape)
-            worker_Sgrads[:] = 0
-        elif args.mode in ["true_topk", "local_topk", "localSGD"]:
-            g_worker_grads_sm = Array(
-                    'f',
-                    args.num_workers * args.grad_size,
-                    lock=False
-                )
-            worker_grads_shape = (args.num_workers, args.grad_size)
-            worker_grads = sm2np(g_worker_grads_sm, worker_grads_shape)
-            worker_grads[:] = 0
+            shape = (args.num_workers, args.num_rows, args.num_cols)
+        elif args.mode in ["local_topk", "true_topk", "localSGD"]:
+            shape = (args.num_workers, args.grad_size)
+        numel = int(np.prod(shape))
+        g_worker_errors_sm = Array('f', numel, lock=False)
+        g_worker_velocities_sm = Array('f', numel, lock=False)
+        g_worker_transmitted_sm = Array('f', numel, lock=False)
+
+        # and zero them out
+        e = sm2np(g_worker_errors_sm, shape)
+        v = sm2np(g_worker_velocities_sm, shape)
+        t = sm2np(g_worker_transmitted_sm, shape)
+        e[:] = 0
+        v[:] = 0
+        t[:] = 0
 
         if args.share_ps_gpu:
             n_worker_gpus = args.num_devices
@@ -110,7 +112,8 @@ class FedCommEffModel:
                 n_worker_gpus,
                 initializer=worker.init_pool,
                 initargs=(self.model, device, n_worker_gpus,
-                          g_worker_Sgrads_sm, g_worker_grads_sm,
+                          g_worker_errors_sm, g_worker_velocities_sm,
+                          g_worker_transmitted_sm,
                           g_client_weights_sm, g_ps_weights_sm)
             )
 
@@ -190,18 +193,6 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
 
         self.param_groups = optimizer.param_groups
 
-        # helper for rest of __init__
-        def type2N(thing_type, num_clients):
-            if thing_type == "virtual":
-                return 1
-            elif thing_type == "local":
-                return num_clients
-            elif thing_type == "none":
-                return 0
-            else:
-                msg = "{} is an invalid type"
-                raise ValueError(msg.format(thing_type))
-
         # create momentum & error sketches -- one or one for each
         # client depending on whether we're doing virtual momentum
         if args.mode == "sketch":
@@ -209,56 +200,60 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         elif args.mode in ["true_topk", "local_topk", "localSGD"]:
             shape = (args.grad_size,)
 
-        momentumN = type2N(args.momentum_type, args.num_clients)
-        errorN = type2N(args.error_type, args.num_clients)
-
-        self.momentums = torch.zeros((momentumN,) + shape)
-        self.errors = torch.zeros((errorN,) + shape)
+        device = args.device
+        self.Vvelocity = torch.zeros(shape).to(device)
+        self.Verror = torch.zeros(shape).to(device)
 
     def get_lr(self):
         return get_lr(self.param_groups)
 
-    def step(self, client_indices, ret=False):
-        # in this method we're agnostic as to whether we're sketched,
-        # true topk, or local topk
+    @profile
+    def step(self, client_indices):
+        global g_ps_weights_sm
+        global g_worker_transmitted_sm
+
         lr = self.get_lr()
 
-        if self.args.momentum_type == "virtual":
-            momentum_indices = [0]
-        elif self.args.momentum_type == "local":
-            momentum_indices = client_indices
-        elif self.args.momentum_type == "none":
-            momentum_indices = ()
-        else:
-            msg = "invalid momentum type {}"
-            raise ValueError(msg.format(self.args.momentum_type))
+        shape = None
+        if self.args.mode == "sketch":
+            shape = (self.args.num_workers,
+                     self.args.num_rows, self.args.num_cols)
+        elif self.args.mode in ["local_topk", "true_topk", "localSGD"]:
+            shape = (self.args.num_workers, self.args.grad_size)
+        transmitted = torch.from_numpy(sm2np(g_worker_transmitted_sm,
+                                             shape))
+        # if we're at the end of an epoch, the mini-batch, and therefore
+        # the number of gradients, may be smaller than usual
+        transmitted = transmitted[:len(client_indices)]
+        transmitted = transmitted.to(self.args.device)
 
-        cur_momentums = self.momentums[momentum_indices]
-
-        if self.args.error_type == "virtual":
-            error_indices = [0]
-        elif self.args.error_type == "local":
-            error_indices = client_indices
-        elif self.args.error_type == "none":
-            error_indices = ()
-        else:
-            msg = "invalid error type {}"
-            raise ValueError(msg.format(self.args.error_type))
-
-        cur_errors = self.errors[error_indices]
-
-        new_ps_weights, new_momentums, new_errors = get_updated_server(
-                cur_momentums,
-                cur_errors,
+        weight_update, new_Vvelocity, new_Verror = get_server_update(
+                transmitted,
+                self.Vvelocity,
+                self.Verror,
                 self.args,
                 lr)
 
+        weight_update = weight_update.cpu()
+
+        # a bit of a hack, but we also need to do momentum factor masking
+        # on the worker momentum vectors for true_topk
+        # which we can't do in the worker because we don't know the
+        # global topk yet
+        if self.args.mode == "true_topk":
+            global g_worker_velocities_sm
+            shape = (self.args.num_workers, self.args.grad_size)
+            worker_velocities = sm2np(g_worker_velocities_sm, shape)
+            worker_velocities = torch.from_numpy(worker_velocities)
+            worker_velocities[torch.arange(len(client_indices)).view(-1,1),
+                              weight_update.nonzero()[:,0]].zero_()
+
         # update ps_weights, momentums, and errors
         ps_weights = sm2np(g_ps_weights_sm, (self.args.grad_size,))
-        ps_weights[:] = new_ps_weights.cpu().numpy()
+        ps_weights -= weight_update.numpy()
 
-        self.momentums[momentum_indices] = new_momentums.cpu()
-        self.errors[error_indices] = new_errors.cpu()
+        self.Vvelocity[:] = new_Vvelocity
+        self.Verror[:] = new_Verror
 
     def zero_grad(self):
         raise NotImplementedError("Please call zero_grad() on the model instead")
@@ -286,206 +281,132 @@ def args2sketch(args):
                  r=args.num_rows, device=args.device,
                  numBlocks=args.num_blocks)
 
-def get_updated_server(momentums, errors, args, lr):
-    global g_worker_grads_sm
-    global g_worker_Sgrads_sm
-
+@profile
+def get_server_update(transmitted, Vvelocity, Verror, args, lr):
     grads = None
-    if args.mode in ["true_topk", "local_topk", "local_sgd"]:
-        worker_grads_shape = (args.num_workers, args.grad_size)
-        grads = sm2np(g_worker_grads_sm, worker_grads_shape)
+    if args.mode in ["local_topk", "true_topk", "local_sgd"]:
+        shape = (args.num_workers, args.grad_size)
     elif args.mode == "sketch":
-        worker_Sgrads_shape = (args.num_workers,
-                               args.num_rows, args.num_cols)
-        grads = sm2np(g_worker_Sgrads_sm, worker_Sgrads_shape)
+        shape = (args.num_workers, args.num_rows, args.num_cols)
 
-    # doing arithmetic on tensors appears to be ~2x faster in torch
-    # than in numpy for some reason
-    grads = torch.from_numpy(grads)
+    helper = {"sketch": _server_helper_sketched,
+              "local_topk": _server_helper_local_topk,
+              "true_topk": _server_helper_true_topk,
+              "localSGD": _server_helper_localSGD
+             }[args.mode]
 
-    # if we're at the end of an epoch, the mini-batch, and therefore
-    # the number of gradients, may be smaller than usual
-    max_worker_id = max(momentums.size()[0], errors.size()[0])
-    grads = grads[:max_worker_id]
+    weight_update, new_Vvelocity, new_Verror = helper(
+            transmitted, Vvelocity, Verror, args, lr
+        )
 
-    if args.mode == "sketch":
-        u = _server_helper_sketched(grads, momentums, errors, args, lr)
-    elif args.mode == "local_topk":
-        u = _server_helper_local_topk(grads, momentums, errors, args, lr)
-    elif args.mode == "true_topk":
-        u = _server_helper_true_topk(grads, momentums, errors, args, lr)
-    elif args.mode == "localSGD":
-        u = _server_helper_localSGD(grads, momentums, errors, args, lr)
-    else:
-        assert False, "invalid mode {}".format(args.mode)
-
-    weight_update, new_momentums, new_errors = u
-
-    ps_weights = sm2np(g_ps_weights_sm, (args.grad_size,))
-    ps_weights = torch.from_numpy(ps_weights)
-
-    return ps_weights - weight_update.cpu(), new_momentums.cpu(), new_errors.cpu()
+    return weight_update, new_Vvelocity, new_Verror
 
 def agg_grads(grads, args):
     # aggregate the gradients
     if args.grad_reduction == "mean":
         # faster or about the same speed to sum on CPU, and no worries
         # about running out of memory
-        grad_agg = torch.sum(grads, dim=0) / args.num_workers
+        if isinstance(grads, torch.sparse.FloatTensor):
+            s = torch.sparse.sum
+        else:
+            s = torch.sum
+        grad_agg = s(grads, dim=[0]) / args.num_workers
     if args.grad_reduction == "median":
         # numpy median is way faster than torch median
         grad_agg = torch.from_numpy(np.median(grads.cpu().numpy(), axis=0))
 
     return grad_agg.to(grads.device)
 
-def _server_helper_localSGD(grads, momentums, errors, args, lr):
-    update = agg_grads(grads, args)
-    return update, momentums, errors
+def _server_helper_localSGD(transmitted, Vvelocity, Verror, args, lr):
+    update = agg_grads(transmitted, args)
+    return update, Vvelocity, Verror
 
-def _server_helper_true_topk(grads, momentum, error, args, lr):
-    assert args.momentum_type == "virtual"
+def _server_helper_true_topk(transmitted, Vvelocity, Verror, args, lr):
     assert args.error_type == "virtual"
 
-    rho = args.momentum
-    momentum = rho * momentum + agg_grads(grads, args).to(args.device)
-    error += momentum
+    rho = args.virtual_momentum
+    # Vvelocity = rho * Vvelocity + agg_grads(transmitted)
+    torch.add(agg_grads(transmitted, args).to(args.device),
+              Vvelocity,
+              alpha=rho,
+              out=Vvelocity)
+    Verror += Vvelocity
 
-    update = _topk(error, k=args.k)
+    update = _topk(Verror, k=args.k)
 
-    momentum[update.nonzero()] = 0
-    error[update.nonzero()] = 0
+    # error feedback
+    Verror[update.nonzero()] = 0
+    
+    # momentum factor masking
+    Vvelocity[update.nonzero()] = 0
 
-    #print(f"Updating {ps_weights.mean()} with {update.mean()} * {lr}")
-    return update * lr, momentum, error
+    return update * lr, Vvelocity, Verror
 
-def _server_helper_local_topk(grads, momentums, errors, args, lr):
+@profile
+def _server_helper_local_topk(transmitted, Vvelocity, Verror, args, lr):
     assert args.error_type == "local"
 
-    if args.momentum_type == "none":
-        # calculate what the workers sent
-        transmitted = torch.zeros_like(errors)
-        errors += grads
-        for i, error in enumerate(errors):
-            transmitted[i,:] = _topk(error.to(args.device), k=args.k).cpu()
+    """
+    # make a sparse tensor of the local topk
+    I = torch.meshgrid(torch.arange(grads.size()[0]),
+                       torch.arange(args.k))[0]
+    I = torch.stack((I, topk_i)).view(2, -1)
+    V = topk_v.view(-1)
+    size = (grads.size()[0], args.grad_size)
+    topk_grads = torch.sparse_coo_tensor(I, V, size).to_dense()
+    """
 
-            # zero out locally what was transmitted
-            # need to do this one worker at a time to not OOM
-            nz = transmitted[i,:].nonzero()
-            errors[i, nz].zero_()
+    rho = args.virtual_momentum
+    agg = agg_grads(transmitted, args)
+    torch.add(agg, Vvelocity, alpha=rho, out=Vvelocity)
+    # ignore Verror, since you can't do virtual error with local topk
 
-        update = agg_grads(transmitted, args)
-    elif args.momentum_type == "local":
-        rho = args.momentum
-        torch.add(grads, momentums, alpha=rho, out=momentums)
+    # and no need to do momentum factor masking for the virtual
+    # momentum, since that would zero out the entire Vvelocity every iter
 
-        transmitted = torch.zeros_like(errors)
-        errors += momentums
-        for i, error in enumerate(errors):
-            transmitted[i,:] = _topk(error.to(args.device), k=args.k).cpu()
+    update = Vvelocity
 
-            # zero out locally what was transmitted
-            nz = transmitted[i,:].nonzero()
-            momentums[i, nz].zero_()
-            errors[i, nz].zero_()
+    return update * lr, Vvelocity, Verror
 
-        update = agg_grads(transmitted, args)
-
-    elif args.momentum_type == "virtual":
-        # only one momentum vec if virtual
-        momentum = momentums
-
-        # first figure out what to transmit, then do momentum on the server
-        errors += grads
-        transmitted = torch.zeros_like(errors)
-        for i, error in enumerate(errors):
-            transmitted[i,:] = _topk(error.to(args.device), k=args.k).cpu()
-            nz = transmitted[i,:].nonzero()
-            errors[i, nz].zero_()
-
-        rho = args.momentum
-        torch.add(agg_grads(transmitted, args),
-                  momentum,
-                  alpha=rho,
-                  out=momentum)
-        update = momentum
-        # no momentum factor masking! b/c it doesn't make sense in this case
-
-        # call it momentums again for the return statement
-        momentums = momentum
-
-
-    return update * lr, momentums, errors
-
-def _server_helper_sketched(Sgrads, Smomentums, Serrors, args, lr):
-    rho = args.momentum
+def _server_helper_sketched(transmitted, Vvelocity, Verror, args, lr):
+    rho = args.virtual_momentum
     k = args.k
 
-    # do everything on the GPU
-    Sgrads = Sgrads.to(args.device)
-    Smomentums = Smomentums.to(args.device)
-    Serrors = Serrors.to(args.device)
+    # must do the same type of momentum as error accumulation
+    if args.error_type == "local":
+        assert args.virtual_momentum == 0
+    elif args.error_type == "virtual":
+        assert args.local_momentum == 0
 
-    momentum_type = args.momentum_type
-    error_type = args.error_type
-    local = momentum_type == 'local' and error_type == 'local'
-    virtual = momentum_type == 'virtual' and error_type == 'virtual'
-    none = momentum_type == 'none' and error_type == 'none'
-    assert local or virtual or none
+    agg = agg_grads(transmitted, args)
+    torch.add(agg, Vvelocity, alpha=rho, out=Vvelocity)
+    if args.error_type == "local":
+        Verror = Vvelocity
+    elif args.error_type == "virtual":
+        Verror += Vvelocity
 
     sketch = args2sketch(args)
-    if none:
-        transmitted = Sgrads
-        sketch.accumulateTable(agg_grads(Sgrads, args))
-        update = sketch.unSketch(k=k)
-    elif local:
-        Smomentums = rho * Smomentums + Sgrads
-        Serrors += Smomentums
-        transmitted = Serrors
+    sketch.accumulateTable(Verror)
+    update = sketch.unSketch(k=args.k)
 
-        sketch.accumulateTable(agg_grads(transmitted, args))
-        Supdate = sketch.table
-        # do error feedback in the sketch
-        Serrors -= Supdate
+    # do virtual error
+    sketch.zero()
+    sketch.accumulateVec(update)
+    sketched_update = sketch.table
+    if args.error_type == "virtual":
+        Verror -= sketched_update
 
-        update = sketch.unSketch(k=k)
+    # momentum factor masking is annoying for sketched
+    # to do it properly, we'd have to:
+    # first, pull out the values of momentums where update is nonzero
+    # then, sketch those values, and subtract them from momentums
+    # this requires an unsketch of all num_workers momentum sketch,
+    # which is expensive. So instead, just zero out the momentum sketch
+    # anywhere where update is nonzero
+    nz = sketched_update.nonzero()
+    Vvelocity[nz[:,0], nz[:,1]].zero_()
 
-        # momentum factor masking is annoying for sketched
-        # to do it properly, we'd have to:
-        # first, pull out the values of momentums where update is nonzero
-        # then, sketch those values, and subtract them from momentums
-        # this requires an unsketch of all num_workers momentum sketch,
-        # which is expensive. So instead, just zero out the momentum sketch
-        # anywhere where update is nonzero
-        nz = Supdate.nonzero()
-        Smomentums[0, nz[:,0], nz[:,1]] = 0
-
-    elif virtual:
-        transmitted = Sgrads
-
-        # for virtual, we only have one momentum and one error sketch
-        Smomentum = Smomentums
-        Serror = Serrors
-
-        Smomentum = rho * Smomentum + agg_grads(transmitted, args)
-        Serror += Smomentum
-        # Serror is 1xrowsxcols, so need to index by 0
-        sketch.accumulateTable(Serror[0])
-        Supdate = sketch.table
-        # error feedback within the sketch
-        Serror -= Supdate
-
-        update = sketch.unSketch(k=k)
-
-        # see comment about momentum factor masking with sketching above
-        nz = Supdate.nonzero()
-        # (still 3-dimensional, but the first dimension has size 1)
-        Smomentum[0, nz[:,0], nz[:,1]] = 0
-
-        # rename to plurals for the return statement...
-        Smomentums = Smomentum
-        Serrors = Serror
-
-    return update * lr, Smomentums, Serrors
+    return update * lr, Vvelocity, Verror
 
 def get_lr(optimizer_param_groups):
     if len(optimizer_param_groups) == 1:

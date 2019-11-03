@@ -57,7 +57,8 @@ def parse_args(default_lr):
     parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--nesterov", action="store_true",
                         dest="do_nesterov")
-    parser.add_argument("--momentum", type=float, default=0.9)
+    parser.add_argument("--local_momentum", type=float, default=0.9)
+    parser.add_argument("--virtual_momentum", type=float, default=0)
     parser.add_argument("--weight_decay", type=float, default=5e-4)
     parser.add_argument("--num_epochs", type=int, default=24,
                         help="Number of training epochs")

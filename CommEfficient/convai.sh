@@ -12,13 +12,13 @@ OMP_NUM_THREADS=4 python gpt2_train.py \
     --batch_size 56 \
     --num_clients 7 \
     --num_devices 8 \
+    --local_momentum 0 \
+    --virtual_momentum 0.9 \
     --participation 1.0 \
-    --momentum_type virtual \
     --error_type virtual \
-    --mode sketch \
+    --mode true_topk \
     --k 50000 \
     --num_rows 1 \
     --num_cols 1240000 \
     --test \
     --num_dialogs 20 \
-    --share_ps_gpu
