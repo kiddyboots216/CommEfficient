@@ -140,7 +140,7 @@ def run_batches_fed(model, opt, lr_scheduler, loaders, training, args):
 
     if training:
         global start_idx
-        opt.step(None, True)
+        #opt.step(None, True)
         for batch_idx in range(n_iters):
             idx = np.random.choice(clients,
                 args.num_workers, replace=False)

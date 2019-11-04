@@ -163,12 +163,12 @@ def forward_grad(model, weights, batch,
             r=args.num_rows, device=device,
             numBlocks=args.num_blocks)
         sketch.accumulateVec(grad)
-        g = sketch.table.cpu()
-        del sketch
+        g = sketch.table
     elif args.mode == "true_topk":
         g = grad
     elif args.mode == "local_topk":
-        g = _topk(grad, k=args.k)
+        #g = _topk(grad, k=args.k)
+        g = grad
     elif args.mode == "localSGD":
         # TODO: scheduling LR doesn't work
         grad *= args.lr_scale
@@ -280,7 +280,7 @@ def forward_grad_gpt2(model, weights, batch, criterion,
             r=args.num_rows, device=device,
             numBlocks=args.num_blocks)
         sketch.accumulateVec(grad)
-        g = sketch.table.cpu()
+        g = sketch.table
     elif args.mode == "true_topk":
         g = grad
     elif args.mode == "local_topk":
