@@ -101,7 +101,7 @@ def update_forward_grad(worker_id, client_id,
 
     # do local momentum & error accumulation
     g = g.cpu().numpy()
-    worker_velocity = args.local_momentum * worker_velocity + g
+    worker_velocity[:] = args.local_momentum * worker_velocity + g
     if args.error_type == "local":
         worker_error += worker_velocity
         to_transmit = worker_error
