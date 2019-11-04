@@ -394,7 +394,11 @@ def _server_helper_sketched(transmitted, Vvelocity, Verror, args, lr):
     sketch.accumulateVec(update)
     sketched_update = sketch.table
     if args.error_type == "virtual":
-        Verror -= sketched_update
+        # this should work but doesn't (model diverges)
+        #Verror -= sketched_update
+        # instead, zero out Verror with sketched_update.nonzero()
+        nz = sketched_update.nonzero()
+        Verror[nz[:,0],nz[:,1]] = 0
 
     # momentum factor masking is annoying for sketched
     # to do it properly, we'd have to:
