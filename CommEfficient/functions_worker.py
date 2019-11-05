@@ -99,9 +99,18 @@ def update_forward_grad(worker_id, client_id,
     worker_error = sm2np(gw_worker_errors_sm, shape)[client_id]
     transmitted = sm2np(gw_worker_transmitted_sm, shape)[worker_id]
 
+    # convert to torch, since basic arithmetic & array assignment are
+    # way faster in torch than np
+    worker_velocity = torch.from_numpy(worker_velocity)
+    worker_error = torch.from_numpy(worker_error)
+    transmitted = torch.from_numpy(transmitted)
+
     # do local momentum & error accumulation
-    g = g.cpu().numpy()
-    worker_velocity[:] = args.local_momentum * worker_velocity + g
+    g = g.cpu()
+    # this does worker_velocity[:] = m * worker_velocity + g, but twice
+    # as fast
+    torch.add(g, worker_velocity, alpha=args.local_momentum,
+              out=worker_velocity)
     if args.error_type == "local":
         worker_error += worker_velocity
         to_transmit = worker_error
@@ -110,8 +119,7 @@ def update_forward_grad(worker_id, client_id,
 
     if args.mode == "local_topk":
         # topk is impossibly slow on CPU, very fast on GPU
-        to_transmit = _topk(torch.from_numpy(to_transmit).to(args.device), 
-                            k=args.k).cpu().numpy()
+        to_transmit = _topk(to_transmit.to(args.device), k=args.k).cpu()
         nz = to_transmit.nonzero()
         # error feedback
         worker_error[nz] = 0

@@ -249,8 +249,10 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
                               weight_update.nonzero()[:,0]].zero_()
 
         # update ps_weights, momentums, and errors
-        ps_weights = sm2np(g_ps_weights_sm, (self.args.grad_size,))
-        ps_weights -= weight_update.numpy()
+        ps_weights = torch.from_numpy(
+                    sm2np(g_ps_weights_sm, (self.args.grad_size,))
+                )
+        ps_weights -= weight_update
 
         self.Vvelocity[:] = new_Vvelocity
         self.Verror[:] = new_Verror
