@@ -69,14 +69,16 @@ class FedCommEffModel:
         # store the initial weights of the model
         ps_weights[:] = param_vec[:]
 
-        # client weights emulates each client's possibly stale weights
-
-        shape = (num_clients, args.grad_size)
-        numel = int(np.prod(shape))
-        g_client_weights_sm = Array('f', numel, lock=False)
-        # copy ps_weights into every row of client_weights
-        client_weights = sm2np(g_client_weights_sm, shape)
-        client_weights[:] = np.tile(param_vec, (num_clients, 1))
+        if args.do_topk_down:
+            # client weights emulates each client's possibly stale weights
+            shape = (num_clients, args.grad_size)
+            numel = int(np.prod(shape))
+            g_client_weights_sm = Array('f', numel, lock=False)
+            # copy ps_weights into every row of client_weights
+            client_weights = sm2np(g_client_weights_sm, shape)
+            client_weights[:] = np.tile(param_vec, (num_clients, 1))
+        else:
+            g_client_weights_sm = Array('f', numel, lock=False)
 
         # errors and velocities hold the local error accumulation
         # vectors and local velocity vectors
