@@ -1,19 +1,20 @@
 import torch
 import numpy as np
+import ctypes
 from utils import sm2np, get_param_vec, set_param_vec, get_grad, _topk
 import copy
 import multiprocessing
 from csvec import CSVec
 
 def init_pool(input_model, device, num_worker_gpus,
-              worker_Sgrads_sm, worker_grads_sm,
-              #client_weights_sm, 
-              ps_weights_sm):
+              worker_errors_sm, worker_velocities_sm,
+              worker_transmitted_sm, client_weights_sm, ps_weights_sm):
     global model
     global gw_ps_weights_sm
-    #global gw_client_weights_sm
-    global gw_worker_Sgrads_sm
-    global gw_worker_grads_sm
+    global gw_client_weights_sm
+    global gw_worker_errors_sm
+    global gw_worker_velocities_sm
+    global gw_worker_transmitted_sm
 
     # use the first num_worker_gpus gpus
     if torch.cuda.is_available():
@@ -25,9 +26,10 @@ def init_pool(input_model, device, num_worker_gpus,
     model = copy.deepcopy(input_model)
     model.to(device)
     gw_ps_weights_sm = ps_weights_sm
-    #gw_client_weights_sm = client_weights_sm
-    gw_worker_Sgrads_sm = worker_Sgrads_sm
-    gw_worker_grads_sm = worker_grads_sm
+    gw_client_weights_sm = client_weights_sm
+    gw_worker_velocities_sm = worker_velocities_sm
+    gw_worker_errors_sm = worker_errors_sm
+    gw_worker_transmitted_sm = worker_transmitted_sm
 
 def zero_grad():
     global model
@@ -43,9 +45,10 @@ def update_forward_grad(worker_id, client_id,
 
     global model
     global gw_ps_weights_sm
-    #global gw_client_weights_sm
-    global gw_worker_Sgrads_sm
-    global gw_worker_grads_sm
+    global gw_client_weights_sm
+    global gw_worker_velocities_sm
+    global gw_worker_errors_sm
+    global gw_worker_transmitted_sm
 
     ps_weights = sm2np(gw_ps_weights_sm, (grad_size,))
     ps_weights = torch.from_numpy(ps_weights).to(args.device)
@@ -75,23 +78,60 @@ def update_forward_grad(worker_id, client_id,
     criterion = criterion.to(device)
     metric = metric.to(device)
     f = forward_grad
-    """
     if args.model == "gpt2":
         f = forward_grad_gpt2
-    """
     g, results = f(
             model, new_worker_weights,
             batch, criterion, metric, args
         )
-    # write g to the shared memory grad array in spot worker_id
+
+    # figure out what to send, and store it in the transmitted
+    # SM array in spot worker_id
     if args.mode == "sketch":
-        worker_Sgrads_shape = (args.num_workers, args.num_rows, args.num_cols)
-        worker_Sgrads = sm2np(gw_worker_Sgrads_sm, worker_Sgrads_shape)
-        worker_Sgrads[worker_id,:,:] = g.cpu().numpy()[:,:]
-    elif args.mode in ["true_topk", "local_topk", "localSGD"]:
+        shape = (args.num_workers, args.num_rows, args.num_cols)
+    elif args.mode in ["local_topk", "true_topk", "localSGD"]:
+        shape = (args.num_workers, args.grad_size)
+    """
+    elif args.mode == "local_topk":
+        worker_topk_shape = (args.num_workers, args.k)
+        worker_topk_i = sm2np(gw_worker_topk_i_sm, worker_topk_shape,
+                              dtype=ctypes.c_long)
+        worker_topk_v = sm2np(gw_worker_topk_v_sm, worker_topk_shape)
+        worker_topk_i[worker_id,:] = g[1].cpu().numpy()[:]
+        worker_topk_v[worker_id,:] = g[2].cpu().numpy()[:]
+
+        # store the full gradient too (which is in g[0])
+        # so the server can do error accumulation
         worker_grads_shape = (args.num_workers, args.grad_size)
         worker_grads = sm2np(gw_worker_grads_sm, worker_grads_shape)
-        worker_grads[worker_id,:] = g.cpu().numpy()[:]
+        worker_grads[worker_id,:] = g[0].cpu().numpy()[:]
+    """
+
+    # get SM arrays as np arrays
+    worker_velocity = sm2np(gw_worker_velocities_sm, shape)[client_id]
+    worker_error = sm2np(gw_worker_errors_sm, shape)[client_id]
+    transmitted = sm2np(gw_worker_transmitted_sm, shape)[worker_id]
+
+    # do local momentum & error accumulation
+    g = g.cpu().numpy()
+    worker_velocity[:] = args.local_momentum * worker_velocity + g
+    if args.error_type == "local":
+        worker_error += worker_velocity
+        to_transmit = worker_error
+    else:
+        to_transmit = worker_velocity
+
+    if args.mode == "local_topk":
+        # topk is impossibly slow on CPU, very fast on GPU
+        to_transmit = _topk(torch.from_numpy(to_transmit).to(args.device), 
+                            k=args.k).cpu().numpy()
+        nz = to_transmit.nonzero()
+        # error feedback
+        worker_error[nz] = 0
+        # momentum factor masking
+        worker_velocity[nz] = 0
+
+    transmitted[:] = to_transmit
 
     return results
 
@@ -168,12 +208,12 @@ def forward_grad(model, weights, batch,
             r=args.num_rows, device=args.device,
             numBlocks=args.num_blocks)
         sketch.accumulateVec(grad)
-        g = sketch.table.cpu()
-        del sketch
+        g = sketch.table
     elif args.mode == "true_topk":
         g = grad
     elif args.mode == "local_topk":
-        g = _topk(grad, k=args.k)
+        #g = _topk(grad, k=args.k)
+        g = grad
     elif args.mode == "localSGD":
         # TODO: scheduling LR doesn't work
         grad *= args.lr_scale
@@ -287,11 +327,15 @@ def forward_grad_gpt2(model, weights, batch, criterion,
             r=args.num_rows, device=args.device,
             numBlocks=args.num_blocks)
         sketch.accumulateVec(grad)
-        g = sketch.table.cpu()
+        g = sketch.table
     elif args.mode == "true_topk":
         g = grad
     elif args.mode == "local_topk":
-        g = _topk(grad, k=args.k)
+        #topk_i = torch.topk(grad**2, args.k, sorted=False)[1]
+        #topk_v = grad[topk_i]
+        #g = _topk(grad, k=args.k)
+        #g = (grad, topk_i, topk_v)
+        g = grad
     if accum_loss is not None:
         loss = accum_loss.item()/max(args.num_train_batch_shards, 1)
     else:

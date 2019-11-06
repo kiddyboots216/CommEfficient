@@ -15,7 +15,7 @@ from utils import parse_args
 import multiprocessing
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
-global start_idx 
+global start_idx
 start_idx = 0
 
 def train(model, opt, lr_scheduler, train_loader, val_loader,
@@ -140,7 +140,7 @@ def run_batches_fed(model, opt, lr_scheduler, loaders, training, args):
 
     if training:
         global start_idx
-        opt.step(None, True)
+        #opt.step(None, True)
         for batch_idx in range(n_iters):
             idx = np.random.choice(clients,
                 args.num_workers, replace=False)
@@ -207,7 +207,7 @@ if __name__ == "__main__":
     # so the lr is multiplied by num_workers for mean and median
     lambda_step = lambda step: (lr_schedule(step / loader_len)
            # / args.batch_size
-            ) 
+            )
 
     # instantiate ALL the things
     model = model_cls(**model_config)
