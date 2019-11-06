@@ -34,9 +34,10 @@ echo starting job...
 
 # activate your virtualenv, do your conda magic, etc.
 source activate comm-efficient
+ulimit -Sn 51200
 
 # do ALL the research
-python fed_train.py --momentum_type virtual --error_type virtual --mode sketch --num_clients 5000 --participation 0.01 --num_devices 8 --k 50000 --num_rows 1 --num_cols 500000 --supervised --static_datasets
+python fed_train.py --momentum_type virtual --error_type virtual --mode sketch --num_clients 5000 --participation 0.01 --batch_size 500 --num_devices 8 --k 50000 --num_rows 1 --num_cols 500000 --supervised --static_datasets
 
 # print completion time
 date

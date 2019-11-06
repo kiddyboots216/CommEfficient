@@ -57,7 +57,8 @@ def parse_args(default_lr):
     parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--nesterov", action="store_true",
                         dest="do_nesterov")
-    parser.add_argument("--momentum", type=float, default=0.9)
+    parser.add_argument("--local_momentum", type=float, default=0.9)
+    parser.add_argument("--virtual_momentum", type=float, default=0)
     parser.add_argument("--weight_decay", type=float, default=5e-4)
     parser.add_argument("--num_epochs", type=int, default=24,
                         help="Number of training epochs")
@@ -80,7 +81,7 @@ def parse_args(default_lr):
     parser.add_argument("--participation", type=float, default=1.0)
     parser.add_argument("--balancedness", type=float, default=1.0)
     default_device = "cuda" if torch.cuda.is_available() else "cpu"
-    parser.add_argument("--device", type=str,
+    parser.add_argument("--device", type=str, choices=["cpu", "cuda"],
                         default=default_device,
                         help="Device (cuda or cpu)")
     parser.add_argument("--num_devices", type=int,
@@ -88,6 +89,7 @@ def parse_args(default_lr):
                         help="Number of gpus")
     parser.add_argument("--num_local_iters", type=int, default=1)
     parser.add_argument("--local_sched", action="store_true", dest="use_local_sched")
+    parser.add_argument("--share_ps_gpu", action="store_true")
 
     # GPT2 args
     parser.add_argument("--num_dialogs", type=int, default=1)
@@ -143,12 +145,17 @@ def parse_args(default_lr):
 
 def _topk(vec, k):
     """ Return the largest k elements (by magnitude) of vec"""
-    ret = torch.zeros_like(vec)
     # on a gpu, sorting is faster than pytorch's topk method
     #topkIndices = torch.sort(vec**2)[1][-k:]
     # however, torch.topk is more space efficient
     topkIndices = torch.topk(vec**2, k, sorted=False)[1]
-    ret[topkIndices] = vec[topkIndices]
+
+    ret = torch.zeros_like(vec)
+    if len(vec.size()) == 1:
+        ret[topkIndices] = vec[topkIndices]
+    elif len(vec.size()) == 2:
+        rows = torch.arange(vec.size()[0]).view(-1,1)
+        ret[rows, topkIndices] = vec[rows, topkIndices]
     return ret
 
 def get_grad(model, weights, args):
