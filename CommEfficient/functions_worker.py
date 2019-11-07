@@ -1,20 +1,20 @@
 import torch
 import numpy as np
 import ctypes
-from utils import sm2np, get_param_vec, set_param_vec, get_grad, _topk
+from utils import get_param_vec, set_param_vec, get_grad, _topk
 import copy
 import multiprocessing
 from csvec import CSVec
 
 def init_pool(input_model, device, num_worker_gpus,
-              worker_errors_sm, worker_velocities_sm,
-              worker_transmitted_sm, client_weights_sm, ps_weights_sm):
+              worker_errors, worker_velocities,
+              worker_transmitted, client_weights, ps_weights):
     global model
-    global gw_ps_weights_sm
-    global gw_client_weights_sm
-    global gw_worker_errors_sm
-    global gw_worker_velocities_sm
-    global gw_worker_transmitted_sm
+    global gw_ps_weights
+    global gw_client_weights
+    global gw_worker_errors
+    global gw_worker_velocities
+    global gw_worker_transmitted
 
     # use the first num_worker_gpus gpus
     if torch.cuda.is_available():
@@ -25,11 +25,11 @@ def init_pool(input_model, device, num_worker_gpus,
 
     model = copy.deepcopy(input_model)
     model.to(device)
-    gw_ps_weights_sm = ps_weights_sm
-    gw_client_weights_sm = client_weights_sm
-    gw_worker_velocities_sm = worker_velocities_sm
-    gw_worker_errors_sm = worker_errors_sm
-    gw_worker_transmitted_sm = worker_transmitted_sm
+    gw_ps_weights = ps_weights
+    gw_client_weights = client_weights
+    gw_worker_velocities = worker_velocities
+    gw_worker_errors = worker_errors
+    gw_worker_transmitted = worker_transmitted
 
 def zero_grad():
     global model
@@ -44,40 +44,35 @@ def update_forward_grad(worker_id, client_id,
     participation = args.participation
 
     global model
-    global gw_ps_weights_sm
-    global gw_client_weights_sm
-    global gw_worker_velocities_sm
-    global gw_worker_errors_sm
-    global gw_worker_transmitted_sm
+    global gw_ps_weights
+    global gw_client_weights
+    global gw_worker_velocities
+    global gw_worker_errors
+    global gw_worker_transmitted
 
-    ps_weights = sm2np(gw_ps_weights_sm, (grad_size,))
-    client_weights = sm2np(gw_client_weights_sm, (num_clients, grad_size))
-    worker_weights = client_weights[client_id]
-    ps_weights = torch.from_numpy(ps_weights).to(args.device)
-    worker_weights = torch.from_numpy(worker_weights).to(args.device)
-
+    # figure out what model weights this worker should use
+    new_worker_weights = None
     if args.do_topk_down:
+        worker_weights = gw_client_weights[client_id].to(args.device)
         new_worker_weights = get_new_worker_weights(ps_weights,
                                                     worker_weights,
                                                     args)
     else:
+        ps_weights = gw_ps_weights.to(args.device)
         new_worker_weights = ps_weights
 
     # g is a (possibly compressed) gradient
-    f = forward_grad
     if args.model == "gpt2":
         f = forward_grad_gpt2
+    else:
+        f = forward_grad
     g, results = f(
             model, new_worker_weights,
             batch, criterion, metric, args
         )
 
     # figure out what to send, and store it in the transmitted
-    # SM array in spot worker_id
-    if args.mode == "sketch":
-        shape = (args.num_workers, args.num_rows, args.num_cols)
-    elif args.mode in ["local_topk", "true_topk", "localSGD"]:
-        shape = (args.num_workers, args.grad_size)
+    # shared tensor in spot worker_id
     """
     elif args.mode == "local_topk":
         worker_topk_shape = (args.num_workers, args.k)
@@ -95,15 +90,9 @@ def update_forward_grad(worker_id, client_id,
     """
 
     # get SM arrays as np arrays
-    worker_velocity = sm2np(gw_worker_velocities_sm, shape)[client_id]
-    worker_error = sm2np(gw_worker_errors_sm, shape)[client_id]
-    transmitted = sm2np(gw_worker_transmitted_sm, shape)[worker_id]
-
-    # convert to torch, since basic arithmetic & array assignment are
-    # way faster in torch than np
-    worker_velocity = torch.from_numpy(worker_velocity)
-    worker_error = torch.from_numpy(worker_error)
-    transmitted = torch.from_numpy(transmitted)
+    worker_velocity = gw_worker_velocities[client_id]
+    worker_error = gw_worker_errors[client_id]
+    transmitted = gw_worker_transmitted[worker_id]
 
     # do local momentum & error accumulation
     g = g.cpu()
@@ -195,10 +184,9 @@ def forward_grad(model, weights, batch,
 def forward_multiprocessed(batch, args, criterion, metric):
     grad_size = args.grad_size
     global model
-    global gw_ps_weights_sm
-    ps_weights = sm2np(gw_ps_weights_sm, (grad_size,))
+    global gw_ps_weights
     device = args.device
-    ps_weights = torch.from_numpy(ps_weights).to(args.device)
+    ps_weights = gw_ps_weights.to(args.device)
     model = model.to(device)
     model.eval()
     set_param_vec(model, ps_weights)
