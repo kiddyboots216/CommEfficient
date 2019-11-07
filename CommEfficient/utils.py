@@ -138,7 +138,8 @@ def parse_args(default_lr):
     args = parser.parse_args()
     args.num_workers = int(args.num_clients * args.participation)
     args.weight_decay = args.weight_decay
-    args.iid = args.num_classes == 10
+    # args.iid = args.num_classes == 10
+    args.iid = True
 
     return args
 
