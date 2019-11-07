@@ -27,6 +27,7 @@ def train(model, opt, lr_scheduler, train_loader, val_loader,
     if isinstance(train_loader, np.ndarray):
         run = run_batches_fed
     for epoch in range(args.num_epochs):
+        args.lr_epoch = lr_schedule(epoch)
         train_loss, train_acc = run(model, opt, lr_scheduler,
             train_loader, True, args)
         train_time = timer()
@@ -41,8 +42,15 @@ def train(model, opt, lr_scheduler, train_loader, val_loader,
             'test_acc': val_acc,
             'total_time': timer.total_time,
         }
-        lr = lr_scheduler.get_lr()[0]
+        if args.is_malicious:
+            mal_loss, mal_acc = run_batches(model, None, None,
+                mal_loader, False, args)
+            epoch_stats['mal_loss'] = mal_loss
+            epoch_stats['mal_acc'] = mal_acc
+        # lr = lr_scheduler.get_lr()[0]
         #lr = lr * batch_size
+        # lr = args.lr_scale
+        lr = args.lr_epoch
         summary = union({'epoch': epoch+1,
             'lr': lr},
             epoch_stats)
@@ -73,6 +81,8 @@ def run_batches(model, opt, lr_scheduler, loaders,
             end_idx = start_idx + num_workers
             idx = np.random.choice(clients,
                 args.num_workers, replace=False)
+            if mal_client_idx in idx:
+                print('Mal agent chosen')
             #print(f"Selecting randomly {idx}")
             #idx = np.arange(start_idx, end_idx)
             #print(f"Selecting in order {idx}")
@@ -85,11 +95,11 @@ def run_batches(model, opt, lr_scheduler, loaders,
                 minibatch = [in_batch, target_batch]
                 minibatches.append(minibatch)
             loss, acc = model(minibatches, idx)
-            if args.use_local_sched:
-                for _ in range(args.num_local_iters):
-                    lr_scheduler.step()
-            else:
-                lr_scheduler.step()
+            # if args.use_local_sched:
+            #     for _ in range(args.num_local_iters):
+            #         lr_scheduler.step()
+            # else:
+            #     lr_scheduler.step()
             opt.step(idx)
             batch_loss = loss
             #print("batch_loss", batch_loss.mean())
@@ -134,6 +144,7 @@ def run_batches(model, opt, lr_scheduler, loaders,
 def run_batches_fed(model, opt, lr_scheduler, loaders, training, args):
     clients = np.arange(args.num_clients)
     n_iters = args.num_data // args.batch_size
+    print('Iterations per epoch: %s' % n_iters)
     model.train(training)
     losses = []
     accs = []
@@ -144,6 +155,7 @@ def run_batches_fed(model, opt, lr_scheduler, loaders, training, args):
         for batch_idx in range(n_iters):
             idx = np.random.choice(clients,
                 args.num_workers, replace=False)
+            # print(idx)
             start_idx = start_idx % args.num_workers
             end_idx = start_idx + args.num_workers
             #print(f"Selecting randomly {idx}")
@@ -152,11 +164,11 @@ def run_batches_fed(model, opt, lr_scheduler, loaders, training, args):
             client_loaders = loaders[idx]
             minibatches = [loader.next_batch() for loader in client_loaders]
             loss, acc = model(minibatches, idx)
-            if args.use_local_sched:
-                for _ in range(args.num_local_iters):
-                    lr_scheduler.step()
-            else:
-                lr_scheduler.step()
+            # if args.use_local_sched:
+            #     for _ in range(args.num_local_iters):
+            #         lr_scheduler.step()
+            # else:
+            #     lr_scheduler.step()
             opt.step(idx)
             model.zero_grad()
             batch_loss = loss
@@ -171,8 +183,9 @@ def run_batches_fed(model, opt, lr_scheduler, loaders, training, args):
     return np.mean(losses), np.mean(accs)
 
 if __name__ == "__main__":
-    args = parse_args(default_lr=1e-2)
+    args = parse_args(default_lr=0.4)
     timer = Timer()
+    args.lr_epoch = 0.0
 
     #Setting numpy random seed
     np.random.seed(21)
@@ -201,13 +214,15 @@ if __name__ == "__main__":
     train_loader, val_loader = gen_data(args)
     if args.is_malicious:
         #To-do: remove hard-coding of mal_client_idx
+        mal_weird_loader, mal_loader = MalLoader(args)
         mal_client_idx = 0
-        train_loader[mal_client_idx] = MalLoader(args, train_loader[mal_client_idx])
+        train_loader[mal_client_idx] = mal_weird_loader
     loader_len = args.num_data // args.batch_size
 
     # set up learning rate stuff
     lr_schedule = PiecewiseLinear([0, args.pivot_epoch, args.num_epochs],
                                   [0, args.lr_scale, 0])
+    print(lr_schedule)
     # grad_reduction only controlls how gradients from different
     # workers are combined
     # so the lr is multiplied by num_workers for mean and median
