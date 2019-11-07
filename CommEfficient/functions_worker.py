@@ -137,12 +137,12 @@ def forward_grad(model, weights, batch,
         g = _topk(grad, k=args.k)
     elif args.mode == "localSGD":
         # TODO: scheduling LR doesn't work
-        grad *= args.lr_scale
+        grad *= args.lr_epoch
         weights -= grad
         args.num_local_iters -= 1
         if args.num_local_iters > 0:
             g_recursive, results_recursive = forward_grad(model, weights, batch,
-                    criterion, metric, args)
+                    criterion, metric, args, mal_update_flag)
             g = grad + g_recursive
             results = [r + r_recursive for (r, r_recursive) in zip(results, results_recursive)]
         else:
