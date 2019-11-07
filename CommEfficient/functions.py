@@ -326,8 +326,10 @@ def _server_helper_localSGD(momentum_vecs, error_vecs, args, lr):
         grad_sum = torch.from_numpy(worker_grads[0]).to(device)
         for g in worker_grads[1:]:
             grad_sum += torch.from_numpy(g).to(device)
+        grad_sum /= args.num_clients
     else:
         grad_sum = np.sum([torch.from_numpy(g).to(device) for g in worker_grads])
+        grad_sum /= args.num_clients
     update = grad_sum
     return (ps_weights - update).cpu(), momentum_vecs, error_vecs
 
