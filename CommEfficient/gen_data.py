@@ -5,7 +5,7 @@ from utils import parse_args
 DATA_DIR = "sample_data"
 
 
-def MalLoader(args, benign_loader):
+def MalLoader(args):
     x_train, y_train, x_test, y_test = get_cifar10()
     r = np.random.choice(len(x_test),size=args.mal_targets)
     print(r)
@@ -25,7 +25,7 @@ def MalLoader(args, benign_loader):
     mal_weird_loader = Weird(mal_loader)
     # mal_weird_loader = np.array(mal_weird_loader)
 
-    return mal_weird_loader
+    return mal_weird_loader, mal_loader
 
 def gen_data(args):
     timer = Timer()
