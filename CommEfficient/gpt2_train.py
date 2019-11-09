@@ -11,7 +11,7 @@ import socket
 from pprint import pformat
 from argparse import ArgumentParser
 from collections import defaultdict
-from itertools import chain
+from itertools import chain, repeat
 
 import torch
 from torch.nn.parallel import DistributedDataParallel
@@ -249,9 +249,9 @@ def pad_dataset(dataset, padding=0):
     """
     max_l = max(len(x) for x in dataset["input_ids"])
     for name in PADDED_INPUTS:
-        pad_val = [padding if name != "lm_labels" else -1]
-        dataset[name] = [x + pad_val * (max_l - len(x))
-                         for x in dataset[name]]
+        pad_val = padding if name != "lm_labels" else -1
+        for x in dataset[name]:
+            x.extend(repeat(pad_val, max_l - len(x)))
     return dataset
 
 def add_special_tokens_(model, tokenizer):
