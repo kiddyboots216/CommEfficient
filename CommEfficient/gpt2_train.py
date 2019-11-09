@@ -21,6 +21,18 @@ from pytorch_transformers import (AdamW, OpenAIGPTDoubleHeadsModel,
                                   GPT2Tokenizer, WEIGHTS_NAME, CONFIG_NAME)
 from pytorch_transformers import cached_path
 
+# FedSketched imports
+from CommEfficient.functions import FedCommEffOptimizer, FedCommEffCriterion, FedCommEffModel, FedCommEffMetric
+from utils import make_logdir
+from CommEfficient.minimal import PiecewiseLinear, TableLogger, TSVLogger, Timer, union
+from torch.optim import SGD
+from torch.utils.tensorboard import SummaryWriter
+from utils import parse_args
+
+import numpy as np
+import multiprocessing
+
+
 PERSONACHAT_URL = "https://s3.amazonaws.com/datasets.huggingface.co/personachat/personachat_self_original.json"
 HF_FINETUNED_MODEL = "https://s3.amazonaws.com/models.huggingface.co/transfer-learning-chatbot/finetuned_chatbot_gpt.tar.gz"
 
@@ -88,19 +100,8 @@ class AttrDict(dict):
         super(AttrDict, self).__init__(*args, **kwargs)
         self.__dict__ = self
 
-# FedSketched imports
-from CommEfficient.functions import FedCommEffOptimizer, FedCommEffCriterion, FedCommEffModel, FedCommEffMetric
-from utils import make_logdir
-from CommEfficient.minimal import PiecewiseLinear, TableLogger, TSVLogger, Timer, union
-from torch.optim import SGD
-from torch.utils.tensorboard import SummaryWriter
-from utils import parse_args
-
-import numpy as np
-import multiprocessing
-
-global start_idx
-start_idx = 0
+#global start_idx
+#start_idx = 0
 
 def train_gpt2(model, opt, scheduler, train_loader, val_loader,
                args, log_dir, logger=None, timer=None, writer=None):
@@ -144,7 +145,7 @@ def run_batches(model, opt, scheduler, loader, args,
     if training:
         model.train(training)
         losses = []
-        global start_idx
+        #global start_idx
         for batch_idx, batch in enumerate(loader):
             #start_idx = start_idx % num_clients
             #end_idx = start_idx + args.num_workers
