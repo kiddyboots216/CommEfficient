@@ -2,7 +2,7 @@ import torch
 from datetime import datetime
 import os
 import numpy as np
-# from csvec import CSVec
+from csvec import CSVec
 import copy
 import time
 import math

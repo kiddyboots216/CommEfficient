@@ -4,7 +4,7 @@ import ctypes
 from utils import get_param_vec, set_param_vec, get_grad, _topk
 import copy
 import multiprocessing
-# from csvec import CSVec
+from csvec import CSVec
 
 def init_pool(input_model, device, num_worker_gpus,
               worker_errors, worker_velocities,
