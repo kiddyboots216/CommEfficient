@@ -7,13 +7,13 @@ import multiprocessing
 from csvec import CSVec
 
 def init_pool(input_model, device, num_worker_gpus,
-              worker_errors, worker_velocities,
+              client_errors, client_velocities,
               worker_transmitted, client_weights, ps_weights):
     global model
     global gw_ps_weights
     global gw_client_weights
-    global gw_worker_errors
-    global gw_worker_velocities
+    global gw_client_errors
+    global gw_client_velocities
     global gw_worker_transmitted
 
     # use the first num_worker_gpus gpus
@@ -27,8 +27,8 @@ def init_pool(input_model, device, num_worker_gpus,
     model.to(device)
     gw_ps_weights = ps_weights
     gw_client_weights = client_weights
-    gw_worker_velocities = worker_velocities
-    gw_worker_errors = worker_errors
+    gw_client_velocities = client_velocities
+    gw_client_errors = client_errors
     gw_worker_transmitted = worker_transmitted
 
 def zero_grad():
@@ -46,8 +46,8 @@ def update_forward_grad(worker_id, client_id,
     global model
     global gw_ps_weights
     global gw_client_weights
-    global gw_worker_velocities
-    global gw_worker_errors
+    global gw_client_velocities
+    global gw_client_errors
     global gw_worker_transmitted
 
     # figure out what model weights this worker should use
@@ -89,31 +89,42 @@ def update_forward_grad(worker_id, client_id,
         worker_grads[worker_id,:] = g[0].cpu().numpy()[:]
     """
 
-    # get SM arrays as np arrays
-    worker_velocity = gw_worker_velocities[client_id]
-    worker_error = gw_worker_errors[client_id]
+    # get our specific local velocity/local error/transmitted vectors
+    velocity = None
+    error = None
+    if gw_client_velocities is not None:
+        velocity = gw_client_velocities[client_id]
+    if gw_client_errors is not None:
+        error = gw_client_errors[client_id]
     transmitted = gw_worker_transmitted[worker_id]
 
-    # do local momentum & error accumulation
     g = g.cpu()
-    # this does worker_velocity[:] = m * worker_velocity + g, but twice
-    # as fast
-    torch.add(g, worker_velocity, alpha=args.local_momentum,
-              out=worker_velocity)
+
+    # if needed, do local momentum
+    # this does velocity[:] = m * velocity + g,
+    # but twice as fast
+    if args.local_momentum > 0:
+        torch.add(g, velocity, alpha=args.local_momentum,
+                  out=velocity)
+
+    # if needed, do local error correction
     if args.error_type == "local":
-        worker_error += worker_velocity
-        to_transmit = worker_error
+        error += velocity if velocity is not None else g
+        to_transmit = error
     else:
-        to_transmit = worker_velocity
+        to_transmit = velocity if velocity is not None else g
 
     if args.mode == "local_topk":
+        assert args.error_type == "local"
         # topk is impossibly slow on CPU, very fast on GPU
         to_transmit = _topk(to_transmit.to(args.device), k=args.k).cpu()
         nz = to_transmit.nonzero()
         # error feedback
-        worker_error[nz] = 0
-        # momentum factor masking
-        worker_velocity[nz] = 0
+        error[nz] = 0
+
+        # if we're doing local momentum, do momentum factor masking
+        if args.local_momentum > 0:
+            velocity[nz] = 0
 
     transmitted[:] = to_transmit
 
@@ -199,7 +210,7 @@ def forward_multiprocessed(batch, args, criterion, metric):
         results = compute_loss(outs, targets, criterion, metric, False, args)
     else:
         batch = tuple(input_tensor.to(device) for input_tensor in batch)
-        microbatch_size = args.batch_size // (args.num_workers * args.num_train_batch_shards)
+        microbatch_size = args.local_batch_size // args.num_train_batch_shards
         accum_loss = None
         accum_acc = None
         val_batch_size = batch[3].size()[0]
@@ -245,7 +256,7 @@ def forward_grad_gpt2(model, weights, batch, criterion,
     weights = weights.to(device)
     set_param_vec(model, weights)
     batch = tuple(input_tensor.to(device) for input_tensor in batch)
-    microbatch_size = args.batch_size // (args.num_workers * args.num_train_batch_shards)
+    microbatch_size = args.local_batch_size // args.num_train_batch_shards
     train_batch_size = batch[3].size()[0]
     accum_loss = None
     n_iters = train_batch_size // microbatch_size

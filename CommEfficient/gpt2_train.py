@@ -21,9 +21,6 @@ import multiprocessing
 
 logger = logging.getLogger(__file__)
 
-#global start_idx
-#start_idx = 0
-
 ATTR_TO_SPECIAL_TOKEN = {
                          'bos_token': '<bos>',
                          'eos_token': '<eos>',
@@ -88,29 +85,12 @@ def run_batches(model, opt, scheduler, loader, args,
     if training:
         model.train(training)
         losses = []
-        #global start_idx
         for batch_idx, batch in enumerate(loader):
-            #start_idx = start_idx % num_clients
-            #end_idx = start_idx + args.num_workers
-            indices = np.random.choice(clients,
-                                       args.num_workers,
-                                       replace=False)
-            minibatches = []
-            batch_len = batch[3].size()[0]
-            for i, idx in enumerate(indices):
-                start = i * args.batch_size // args.num_workers
-                if start >= batch_len:
-                    break
-                end = (i+1) * args.batch_size // args.num_workers
-                minibatch = [b[start:end] for b in batch]
-                minibatches.append(minibatch)
-            indices = indices[:len(minibatches)]
-            loss = model(minibatches, indices)
+            loss = model(batch)
             scheduler.step()
-            opt.step(indices)
+            opt.step()
             loss = np.mean(loss)
             losses.append(loss)
-            #start_idx = end_idx
             train_time = timer()
             batch_stats = {
                 'train_time': train_time,
@@ -126,10 +106,6 @@ def run_batches(model, opt, scheduler, loader, args,
                              'lr': lr},
                             batch_stats)
             logger.append(summary)
-            """
-            if args.do_test:
-                break
-            """
         return np.mean(losses)
 
     else:
@@ -204,8 +180,8 @@ def train():
 
     logger.info('Finished in {:.2f} seconds'.format(timer()))
     logger.info("Prepare datasets")
-    loaders = get_data_loaders(args, tokenizer, args.do_test)
-    train_loader, val_loader, train_sampler, valid_sampler = loaders
+    loaders = get_data_loaders(args, tokenizer)
+    train_loader, val_loader = loaders
 
     logger.info('Finished in {:.2f} seconds'.format(timer()))
     logger.info("Initializing everything")
