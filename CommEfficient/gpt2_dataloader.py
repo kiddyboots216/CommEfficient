@@ -7,13 +7,15 @@ import tarfile
 import tempfile
 import logging
 from collections import defaultdict
-from itertools import chain, repeat
+from itertools import chain
+
 import torch
 import numpy as np
-from torch.utils.data import DataLoader, TensorDataset
-from pytorch_transformers import cached_path
 
+from torch.utils.data import DataLoader
 from torch.nn.utils.rnn import pad_sequence
+
+from pytorch_transformers import cached_path
 
 PERSONACHAT_URL = "https://s3.amazonaws.com/datasets.huggingface.co/personachat/personachat_self_original.json"
 HF_FINETUNED_MODEL = "https://s3.amazonaws.com/models.huggingface.co/transfer-learning-chatbot/finetuned_chatbot_gpt.tar.gz"
@@ -105,16 +107,23 @@ class PersonaChatDataset(torch.utils.data.Dataset):
         return cached_path(PERSONACHAT_URL, dataset_path)
 
     def split_dataset(self, dataset_path):
-        dataset = None
-        with open(dataset_path, "r") as dataset_file:
-            dataset = json.loads(dataset_file.read())
+        """ Produces one file per client, and one with global stats
 
-        val_set = dataset["valid"]
+        Reads in a JSON file at `dataset_path`, partitions the data
+        into clients based on the personality, and writes the data
+        for each client to a separate JSON file. Also writes global
+        stats needed for fast indexing to self.stats_fn()
+        """
+        raw_dataset = None
+        with open(dataset_path, "r") as dataset_file:
+            raw_dataset = json.load(dataset_file)
+
+        val_set = raw_dataset["valid"]
         val_utterances_per_dialog = [len(dialog["utterances"])
                                      for dialog in val_set]
 
         client_datasets = defaultdict(list)
-        for dialog in dataset["train"]:
+        for dialog in raw_dataset["train"]:
             personality = dialog["personality"]
             client_datasets[tuple(personality)].append(dialog)
 
@@ -155,9 +164,11 @@ class PersonaChatDataset(torch.utils.data.Dataset):
         dialog_id = np.searchsorted(cumsum, idx)
         idx_within_dialog = idx - cumsum[dialog_id]
 
-        dialog = val_set[dialog_id][idx_within_dialog]
+        dialog = val_set[dialog_id]
+        personality = dialog["personality"]
+        utterance = dialog["utterances"][idx_within_dialog]
 
-        return dialog_to_input(dialog)
+        return self.utterance_to_input(personality, utterance)
 
     def get_train_item(self, idx):
         # idx refers to an utterance, which is part of a dialog,
@@ -177,35 +188,35 @@ class PersonaChatDataset(torch.utils.data.Dataset):
 
         # read in the corresponding client's dataset
         fn = self.client_fn(client_id)
-        client_dataset = None
+        raw_client_dataset = None
         with open(fn, "r") as f:
-            client_dataset = json.load(f)
+            raw_client_dataset = json.load(f)
 
         # and extract the desired record
-        dialog = client_dataset[idx_within_client]
+        dialog = raw_client_dataset[idx_within_client]
+        personality = dialog["personality"]
+        utterance = dialog["utterances"][idx_within_dialog]
 
         # because the dataset is federated, each record needs to be
         # associated with the client the record is on, so we can assign
         # forward/backward passes to the correct client later on
-        model_input = self.dialog_to_input(dialog, idx_within_dialog)
+        model_input = self.utterance_to_input(personality, utterance)
         return (client_id,) + model_input
 
-    def dialog_to_input(self, dialog, idx_within_dialog):
-        personality = dialog["personality"]
-        utterances = dialog["utterances"]
-        utterance = utterances[idx_within_dialog]
+    def utterance_to_input(self, personality, utterance):
         history = utterance["history"]
         candidates = utterance["candidates"]
 
         num_candidates = len(candidates)
+        # restrict to self.num_candidates if we're training
         if self.num_candidates > 0 and self.type == "train":
             num_candidates = min(self.num_candidates, num_candidates)
 
         candidates = utterance["candidates"][-num_candidates:]
         history = utterance["history"][-(2 * self.max_history + 1):]
 
-        return json_to_input(self.tokenizer, personality,
-                             history, utterance, candidates)
+        return raw_to_input(self.tokenizer, personality,
+                            history, utterance, candidates)
 
     def client_fn(self, client_id):
         fn = "client{}.json".format(client_id)
@@ -218,6 +229,7 @@ class PersonaChatDataset(torch.utils.data.Dataset):
         return os.path.join(self.dataset_dir, "train_stats.json")
 
 def tokenize(obj, tokenizer):
+    """ Recursively tokenize all strings in obj """
     if isinstance(obj, str):
         return tokenizer.convert_tokens_to_ids(
                 tokenizer.tokenize(obj)
@@ -227,13 +239,21 @@ def tokenize(obj, tokenizer):
     return list(tokenize(o, tokenizer) for o in obj)
 
 
-def json_to_input(tokenizer, personality, history, utterance, candidates):
+def raw_to_input(tokenizer, personality, history, utterance, candidates):
+    """ Converts from dict of strings to (almost) valid input for the model
+
+    "Almost" since we still need the collate_fn to pad & combine
+    the tensors for each candidate
+    """
     personality = tokenize(personality, tokenizer)
     history = tokenize(history, tokenizer)
     utterance = tokenize(utterance, tokenizer)
     candidates = tokenize(candidates, tokenizer)
+
     model_input = defaultdict(list)
     num_candidates = len(candidates)
+    # several of the model's inputs are num_candidates x sequence_len,
+    # so process each candidate and append the result to model_input[...]
     for j, candidate in enumerate(candidates):
         lm_labels = bool(j == num_candidates - 1)
         instance = build_input_from_segments(personality, history,
@@ -241,15 +261,15 @@ def json_to_input(tokenizer, personality, history, utterance, candidates):
                                              lm_labels)
         for input_name, input_array in instance.items():
             model_input[input_name].append(input_array)
+
+    # the last candidate is always the correct choice
     model_input["mc_labels"] = num_candidates - 1
 
     for input_name in MODEL_INPUTS:
+        # tensorize
         if input_name != "mc_labels":
             tensors = [torch.tensor(l) for l in model_input[input_name]]
             model_input[input_name] = tensors
-        # all model inputs besides mc_labels have shape num_candidates, ...
-        #if input_name != "mc_labels":
-        #    tensor = tensor.view(num_candidates, tensor.shape[1:])
 
     # convert from dict to tuple in the correct order
     model_input = tuple(model_input[name] for name in MODEL_INPUTS)
@@ -299,24 +319,6 @@ def build_input_from_segments(persona, history, reply, tokenizer,
         instance["lm_labels"] += [-1] + sequence[-1][1:]
     return instance
 
-"""
-def pad(records, padval=0):
-    # records is a list of tuples, where each tuple contains columns
-    # (client_id,) + MODEL_INPUTS
-    ret = []
-    max_l = max(input_ids.size()[1] for input_ids in records[1])
-    for i, name in enumerate(("client_id",) + MODEL_INPUTS):
-        if name not in PADDED_INPUTS:
-            ret.append(records[
-            continue
-
-        pad_val = padval if name != "lm_labels" else -1
-        ret[i] = pad_sequence([record[i] for record in records])
-        for x in ret[name]:
-            x.extend(repeat(pad_val, max_l - len(x)))
-    return ret
-"""
-
 def collate_fn(records):
     # records is a list of tuples, where each tuple contains columns
     # (client_id,) + MODEL_INPUTS
@@ -346,6 +348,12 @@ def collate_fn(records):
     return tuple(batch)
 
 class FedSampler:
+    """ Samples from a federated dataset
+
+    Shuffles the data order within each client, and then for every
+    batch requested, samples num_workers clients, and returns
+    local_batch_size data from each client.
+    """
     def __init__(self, dataset, num_workers, local_batch_size,
                  shuffle_clients=True):
         self.dataset = dataset
@@ -357,14 +365,17 @@ class FedSampler:
         data_per_client = self.dataset.data_per_client
         cumsum = np.cumsum(data_per_client)
         cumsum = np.hstack([[0], cumsum])
+        # permute the data indices within each client
         permuted_data = np.hstack([
                 s + np.random.choice(u, u, replace=False)
                 for s, u in zip(cumsum, data_per_client)
             ])
+        # need to keep track of where we are within each client
         cur_idx_within_client = np.zeros(self.dataset.num_clients,
                                          dtype=int)
         def sampler():
             while True:
+                # only choose clients that have any data left
                 nonexhausted_clients = np.where(
                         cur_idx_within_client < data_per_client
                     )[0]
@@ -372,9 +383,11 @@ class FedSampler:
                     break
                 num_workers = min(self.num_workers,
                                   len(nonexhausted_clients))
+                # choose randomly from the clients that have data left
                 workers = np.random.choice(nonexhausted_clients,
                                            num_workers,
                                            replace=False)
+                # figure out how much data each chosen client has left
                 records_remaining = (data_per_client[workers]
                                      - cur_idx_within_client[workers])
 
@@ -425,14 +438,5 @@ def get_data_loaders(args, tokenizer):
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size,
                             shuffle=False)
 
-    """
-    logger.info("Train dataset (Batch, Candidates, Seq length): {}".format(
-        train_dataset.tensors[0].shape)
-    )
-    logger.info("Val dataset (Batch, Candidates, Seq length): {}".format(
-        val_dataset.tensors[0].shape)
-    )
-    """
     return train_loader, val_loader
-
 
