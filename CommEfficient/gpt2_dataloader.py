@@ -377,12 +377,19 @@ class FedSampler:
                                            replace=False)
                 records_remaining = (data_per_client[workers]
                                      - cur_idx_within_client[workers])
-                yield np.hstack([
-                    permuted_data[s:s + records_remaining[i]]
+
+                # choose up to local_batch_size elements from each worker
+                actual_batch_sizes = np.clip(records_remaining,
+                                             0,
+                                             self.local_batch_size)
+                r = np.hstack([
+                    permuted_data[s:s + actual_batch_sizes[i]]
                     for i, s in enumerate(cumsum[workers] +
                                           cur_idx_within_client[workers])
                 ])
-                cur_idx_within_client[workers] += self.local_batch_size
+                assert r.size <= self.num_workers * self.local_batch_size
+                yield r
+                cur_idx_within_client[workers] += records_remaining
 
         return sampler()
 
