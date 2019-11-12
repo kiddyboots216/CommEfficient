@@ -377,11 +377,11 @@ class FedSampler:
                                            replace=False)
                 records_remaining = (data_per_client[workers]
                                      - cur_idx_within_client[workers])
-                yield torch.from_numpy(np.hstack([
+                yield np.hstack([
                     permuted_data[s:s + records_remaining[i]]
                     for i, s in enumerate(cumsum[workers] +
                                           cur_idx_within_client[workers])
-                ]))
+                ])
                 cur_idx_within_client[workers] += self.local_batch_size
 
         return sampler()
