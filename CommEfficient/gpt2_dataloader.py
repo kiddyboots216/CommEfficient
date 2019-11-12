@@ -365,11 +365,14 @@ class FedSampler:
         data_per_client = self.dataset.data_per_client
         cumsum = np.cumsum(data_per_client)
         cumsum = np.hstack([[0], cumsum])
-        # permute the data indices within each client
-        permuted_data = np.hstack([
-                s + np.random.choice(u, u, replace=False)
-                for s, u in zip(cumsum, data_per_client)
-            ])
+        if self.shuffle_clients:
+            # permute the data indices within each client
+            permuted_data = np.hstack([
+                    s + np.random.choice(u, u, replace=False)
+                    for s, u in zip(cumsum, data_per_client)
+                ])
+        else:
+            permuted_data = np.arange(len(self.dataset))
         # need to keep track of where we are within each client
         cur_idx_within_client = np.zeros(self.dataset.num_clients,
                                          dtype=int)
