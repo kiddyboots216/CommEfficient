@@ -404,16 +404,16 @@ def get_data_loaders(args, tokenizer):
         train_loader = DataLoader(train_dataset,
                                   batch_size=args.batch_size,
                                   collate_fn=collate_fn,
-                                  shuffle=True)#,
-                                  #num_workers=8)
+                                  shuffle=True,
+                                  num_workers=4)
     else:
         train_sampler = FedSampler(train_dataset,
                                    args.num_workers,
                                    args.local_batch_size)
         train_loader = DataLoader(train_dataset,
                                   batch_sampler=train_sampler,
-                                  collate_fn=collate_fn)#,
-                                  #num_workers=8)
+                                  collate_fn=collate_fn,
+                                  num_workers=4)
 
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size,
                             shuffle=False)
