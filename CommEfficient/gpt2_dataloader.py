@@ -40,6 +40,16 @@ class PersonaChatDataset(torch.utils.data.Dataset):
         self.load_stats(train)
 
     @property
+    def data_per_client(self):
+        cumsum = np.cumsum(self.dialogs_per_client)
+        cumsum = np.hstack([[0], cumsum])
+        utterances_per_client = np.array([
+            sum(self.train_utterances_per_dialog[s:s + dpc])
+            for s, dpc in zip(cumsum, self.dialogs_per_client)
+        ])
+        return utterances_per_client
+
+    @property
     def num_clients(self):
         return len(self.dialogs_per_client)
 
@@ -344,25 +354,19 @@ class FedSampler:
         self.shuffle_clients = shuffle_clients
 
     def __iter__(self):
-        cumsum = np.cumsum(self.dataset.dialogs_per_client)
+        data_per_client = self.dataset.data_per_client
+        cumsum = np.cumsum(data_per_client)
         cumsum = np.hstack([[0], cumsum])
-        utterances_per_client = np.array([
-            sum(self.dataset.train_utterances_per_dialog[s:s + dpc])
-            for s, dpc in zip(cumsum, self.dataset.dialogs_per_client)
-        ])
-
-        utterances_cumsum = np.cumsum(utterances_per_client)
-        utterances_cumsum = np.hstack([[0], utterances_cumsum])
-        permuted_utterances = np.hstack([
+        permuted_data = np.hstack([
                 s + np.random.choice(u, u, replace=False)
-                for s, u in zip(utterances_cumsum, utterances_per_client)
+                for s, u in zip(cumsum, data_per_client)
             ])
         cur_idx_within_client = np.zeros(self.dataset.num_clients,
                                          dtype=int)
         def sampler():
             while True:
                 nonexhausted_clients = np.where(
-                        cur_idx_within_client < utterances_per_client
+                        cur_idx_within_client < data_per_client
                     )[0]
                 if len(nonexhausted_clients) == 0:
                     break
@@ -371,13 +375,13 @@ class FedSampler:
                 workers = np.random.choice(nonexhausted_clients,
                                            num_workers,
                                            replace=False)
-                records_remaining = (utterances_per_client[workers]
+                records_remaining = (data_per_client[workers]
                                      - cur_idx_within_client[workers])
                 yield torch.from_numpy(np.hstack([
-                        permuted_utterances[s:s + records_remaining[i]]
-                        for i, s in enumerate(utterances_cumsum[workers] +
-                                            cur_idx_within_client[workers])
-                    ]))
+                    permuted_data[s:s + records_remaining[i]]
+                    for i, s in enumerate(cumsum[workers] +
+                                          cur_idx_within_client[workers])
+                ]))
                 cur_idx_within_client[workers] += self.local_batch_size
 
         return sampler()
