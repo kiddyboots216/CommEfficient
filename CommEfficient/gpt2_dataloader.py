@@ -49,6 +49,11 @@ class PersonaChatDataset(torch.utils.data.Dataset):
         if self.do_iid:
             self.iid_shuffle = np.random.permutation(len(self))
 
+        # keep the entire val set in memory, since why not
+        if self.type == "val":
+            with open(self.validation_fn(), "r") as val_f:
+                self.raw_val_set = json.load(val_f)
+
     @property
     def data_per_client(self):
         if self.do_iid:
@@ -190,11 +195,14 @@ class PersonaChatDataset(torch.utils.data.Dataset):
         dialog_id = np.searchsorted(cumsum, idx)
         idx_within_dialog = idx - cumsum[dialog_id]
 
-        dialog = val_set[dialog_id]
+        dialog = self.raw_val_set[dialog_id]
         personality = dialog["personality"]
         utterance = dialog["utterances"][idx_within_dialog]
 
-        return self.utterance_to_input(personality, utterance)
+        # return something for client_id so the shape is what's
+        # expected, even though -1 is an invalid client_id and shouldn't
+        # be used
+        return (-1,) + self.utterance_to_input(personality, utterance)
 
     def get_train_item(self, idx):
         # idx refers to an utterance, which is part of a dialog,
@@ -469,8 +477,9 @@ def get_data_loaders(args, tokenizer):
                               collate_fn=collate_fn,
                               num_workers=4)
 
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size,
-                            shuffle=False)
+    val_batch_size = args.local_batch_size * args.num_workers
+    val_loader = DataLoader(val_dataset, batch_size=val_batch_size,
+                            collate_fn=collate_fn, shuffle=False)
 
     return train_loader, val_loader
 
