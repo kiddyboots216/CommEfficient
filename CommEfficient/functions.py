@@ -10,30 +10,34 @@ import math
 import cProfile
 
 import ctypes
-import multiprocessing
-from multiprocessing import Array
+import torch.multiprocessing as multiprocessing
 
 import functions_worker as worker
-from utils import sm2np, get_param_vec, set_param_vec, get_grad, _topk
+from utils import get_param_vec, set_param_vec, get_grad, _topk
 
 from line_profiler import LineProfiler
 import atexit
 profile = LineProfiler()
 #atexit.register(profile.print_stats)
 
-g_worker_errors_sm = None
-g_worker_velocities_sm = None
-g_worker_transmitted_sm = None
-g_client_weights_sm = None
-g_ps_weights_sm = None
+g_client_errors = None
+g_client_velocities = None
+g_client_transmitted = None
+g_client_weights = None
+g_ps_weights = None
 
 g_criterion = None
 g_accuracy = None
 
+# a bit hacky, but the model needs to tell the optimizer how many
+# workers actually participated in a round (e.g. at the end of an epoch
+# there might not be enough data left to have args.num_workers workers)
+g_num_valid_workers = 0
+
 def profile_helper(*args):
     cProfile.runctx("worker.update_forward_grad(*args)",
                     globals(), locals(),
-                    "profile/init{:d}.prof".format(
+                    "profile/cifar_ltk.{:d}.prof".format(
                         multiprocessing.current_process()._identity[0]
                     )
                    )
@@ -45,7 +49,7 @@ class FedCommEffModel:
         device = args.device
         cpu = "cpu"
         self.model = input_model
-        param_vec = get_param_vec(self.model, cpu).numpy()
+        param_vec = get_param_vec(self.model, cpu)
         grad_size = 0
         for p in self.model.parameters():
             if p.requires_grad:
@@ -53,64 +57,58 @@ class FedCommEffModel:
         args.grad_size = grad_size
         self.args = args
 
-        global g_ps_weights_sm
-        global g_client_weights_sm
-        global g_worker_errors_sm
-        global g_worker_velocities_sm
-        global g_worker_transmitted_sm
+        global g_ps_weights
+        global g_client_weights
+        global g_client_errors
+        global g_client_velocities
+        global g_worker_transmitted
 
         # ps_weights needs to be in shared memory so the workers can
         # update themselves with (possibly an approximation of) the
         # latest PS weights
-        shape = (args.grad_size,)
-        numel = int(np.prod(shape))
-        g_ps_weights_sm = Array('f', numel, lock=False)
-        ps_weights = sm2np(g_ps_weights_sm, shape)
+        g_ps_weights = torch.zeros(args.grad_size).share_memory_()
         # store the initial weights of the model
-        ps_weights[:] = param_vec[:]
+        g_ps_weights[:] = param_vec[:]
 
+        # everyone gets ps_weights at the beginning of each round if
+        # not args.topk_down, so no need for this array
         if args.do_topk_down:
             # client weights emulates each client's possibly stale weights
             shape = (num_clients, args.grad_size)
-            numel = int(np.prod(shape))
-            g_client_weights_sm = Array('f', numel, lock=False)
+            g_client_weights = torch.zeros(shape).share_memory_()
             # copy ps_weights into every row of client_weights
-            client_weights = sm2np(g_client_weights_sm, shape)
-            client_weights[:] = np.tile(param_vec, (num_clients, 1))
-        else:
-            g_client_weights_sm = Array('f', numel, lock=False)
+            g_client_weights[:] = param_vec.repeat(num_clients, 1)
+
         # errors and velocities hold the local error accumulation
         # vectors and local velocity vectors
         # transmitted holds what the workers sent to the PS
         shape = None
         if args.mode == "sketch":
-            shape = (args.num_workers, args.num_rows, args.num_cols)
+            shape = (args.num_clients, args.num_rows, args.num_cols)
         elif args.mode in ["local_topk", "true_topk", "localSGD"]:
-            shape = (args.num_workers, args.grad_size)
-        numel = int(np.prod(shape))
-        g_worker_errors_sm = Array('f', numel, lock=False)
-        g_worker_velocities_sm = Array('f', numel, lock=False)
-        g_worker_transmitted_sm = Array('f', numel, lock=False)
+            shape = (args.num_clients, args.grad_size)
 
-        # and zero them out
-        e = sm2np(g_worker_errors_sm, shape)
-        v = sm2np(g_worker_velocities_sm, shape)
-        t = sm2np(g_worker_transmitted_sm, shape)
-        e[:] = 0
-        v[:] = 0
-        t[:] = 0
+        # don't make these arrays unless we need them
+        if args.error_type == "local" or args.local_momentum > 0:
+            g_client_errors = torch.zeros(shape).share_memory_()
+            g_client_velocities = torch.zeros(shape).share_memory_()
+
+        # there are only num_workers transmitted vectors
+        shape = (args.num_workers,) + shape[1:]
+        g_worker_transmitted = torch.zeros(shape).share_memory_()
+
         if args.share_ps_gpu:
-            n_worker_gpus = args.num_devices
+            self.n_worker_gpus = args.num_devices
         else:
-            n_worker_gpus = args.num_devices - 1
+            self.n_worker_gpus = args.num_devices - 1
         # process pool that parallelizes training
         self.process_pool = multiprocessing.Pool(
-                n_worker_gpus,
+                self.n_worker_gpus,
                 initializer=worker.init_pool,
-                initargs=(self.model, device, n_worker_gpus,
-                          g_worker_errors_sm, g_worker_velocities_sm,
-                          g_worker_transmitted_sm,
-                          g_client_weights_sm, g_ps_weights_sm)
+                initargs=(self.model, device, self.n_worker_gpus,
+                          g_client_errors, g_client_velocities,
+                          g_worker_transmitted,
+                          g_client_weights, g_ps_weights)
             )
 
 
@@ -121,34 +119,52 @@ class FedCommEffModel:
     def train(self, training):
         self.training = training
     def save_pretrained(self, log_dir):
-        global g_ps_weights_sm
-        ps_weights = sm2np(g_ps_weights_sm,
-                           (self.args.grad_size,))
-        curr_weights = torch.from_numpy(ps_weights)
-        set_param_vec(self.model, curr_weights)
+        global g_ps_weights
+        set_param_vec(self.model, g_ps_weights)
         self.model.save_pretrained(log_dir)
 
-    def __call__(self, batches, indices):
+    def __call__(self, batch):
         global g_criterion
         global g_metric
         args = self.args
+
         if self.training:
+            # batch is a tuple, with the client ids as the first tensor
+            client_indices = batch[0]
+            batch = batch[1:]
+
+            unique_clients = torch.unique(client_indices)
+
+            # this is to tell the optimizer how many workers actually
+            # participated this round
+            global g_num_valid_workers
+            g_num_valid_workers = unique_clients.numel()
+
+            worker_batches = [tuple(t[torch.where(client_indices == i)[0]]
+                                    for t in batch)
+                              for i in unique_clients]
+
             #self.args.lr = lr
             args_tuples = [(i, idx,
-                            batches[i], self.args,
+                            worker_batches[i], self.args,
                             g_criterion, g_metric)
-                           for i, idx in enumerate(indices)]
+                           for i, idx in enumerate(unique_clients)]
 
             results = self.process_pool.starmap(
                     #profile_helper,
                     worker.update_forward_grad,
                     args_tuples
                 )
+            #return [(1,2,3,4),(5,6,7,8)]
             return split_results(results, self.args.num_results_train)
 
         else:
-            args_tuples = [(batches[i], self.args, g_criterion, g_metric)
-                           for i, idx in enumerate(indices)]
+            split = [t.split(self.n_worker_gpus) for t in batch]
+            batch_shards = [tuple(l[i] for l in split)
+                            for i in range(self.n_worker_gpus)]
+            args_tuples = [(batch_shard, self.args,
+                            g_criterion, g_metric)
+                           for batch_shard in batch_shards]
             results = self.process_pool.starmap(
                             worker.forward_multiprocessed,
                             args_tuples
@@ -157,12 +173,8 @@ class FedCommEffModel:
 
     def __getattr__(self, name):
         if name == "parameters":
-            global g_ps_weights_sm
-
-            ps_weights = sm2np(g_ps_weights_sm,
-                               (self.args.grad_size,))
-            curr_weights = torch.from_numpy(ps_weights)
-            set_param_vec(self.model, curr_weights)
+            global g_ps_weights
+            set_param_vec(self.model, g_ps_weights)
             return getattr(self.model, name)
 
     def zero_grad(self):
@@ -203,24 +215,17 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
     def get_lr(self):
         return get_lr(self.param_groups)
 
-    @profile
-    def step(self, client_indices):
-        global g_ps_weights_sm
-        global g_worker_transmitted_sm
+    #@profile
+    def step(self):
+        global g_ps_weights
+        global g_worker_transmitted
+        global g_num_valid_workers
 
         lr = self.get_lr()
 
-        shape = None
-        if self.args.mode == "sketch":
-            shape = (self.args.num_workers,
-                     self.args.num_rows, self.args.num_cols)
-        elif self.args.mode in ["local_topk", "true_topk", "localSGD"]:
-            shape = (self.args.num_workers, self.args.grad_size)
-        transmitted = torch.from_numpy(sm2np(g_worker_transmitted_sm,
-                                             shape))
         # if we're at the end of an epoch, the mini-batch, and therefore
         # the number of gradients, may be smaller than usual
-        transmitted = transmitted[:len(client_indices)]
+        transmitted = g_worker_transmitted[:g_num_valid_workers]
         transmitted = transmitted.to(self.args.device)
 
         weight_update, new_Vvelocity, new_Verror = get_server_update(
@@ -236,17 +241,13 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
         # on the worker momentum vectors for true_topk
         # which we can't do in the worker because we don't know the
         # global topk yet
-        if self.args.mode == "true_topk":
-            global g_worker_velocities_sm
-            shape = (self.args.num_workers, self.args.grad_size)
-            worker_velocities = sm2np(g_worker_velocities_sm, shape)
-            worker_velocities = torch.from_numpy(worker_velocities)
-            worker_velocities[torch.arange(len(client_indices)).view(-1,1),
-                              weight_update.nonzero()[:,0]].zero_()
+        if self.args.mode == "true_topk" and args.local_momentum > 0:
+            global g_client_velocities
+            rows = torch.arange(g_num_valid_workers).view(-1,1)
+            g_client_velocities[rows, weight_update.nonzero()[:,0]].zero_()
 
         # update ps_weights, momentums, and errors
-        ps_weights = sm2np(g_ps_weights_sm, (self.args.grad_size,))
-        ps_weights -= weight_update.numpy()
+        g_ps_weights -= weight_update
 
         self.Vvelocity[:] = new_Vvelocity
         self.Verror[:] = new_Verror
@@ -277,14 +278,8 @@ def args2sketch(args):
                  r=args.num_rows, device=args.device,
                  numBlocks=args.num_blocks)
 
-@profile
+#@profile
 def get_server_update(transmitted, Vvelocity, Verror, args, lr):
-    grads = None
-    if args.mode in ["local_topk", "true_topk", "local_sgd"]:
-        shape = (args.num_workers, args.grad_size)
-    elif args.mode == "sketch":
-        shape = (args.num_workers, args.num_rows, args.num_cols)
-
     helper = {"sketch": _server_helper_sketched,
               "local_topk": _server_helper_local_topk,
               "true_topk": _server_helper_true_topk,
@@ -338,7 +333,7 @@ def _server_helper_true_topk(transmitted, Vvelocity, Verror, args, lr):
 
     return update * lr, Vvelocity, Verror
 
-@profile
+#@profile
 def _server_helper_local_topk(transmitted, Vvelocity, Verror, args, lr):
     assert args.error_type == "local"
 

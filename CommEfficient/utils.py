@@ -41,8 +41,8 @@ def parse_args(default_lr):
     parser.add_argument("--dataset_path", type=str, default="",
                         help=("Path or url of the dataset."
                               " If empty, download from the internet."))
-    parser.add_argument("--dataset_cache", type=str,
-                        default='./dataset_cache',
+    parser.add_argument("--dataset_dir", type=str,
+                        default='./dataset',
                         help="Path or url of the dataset cache")
 
     # compression args
@@ -78,7 +78,7 @@ def parse_args(default_lr):
 
     # parallelization args
     parser.add_argument("--num_clients", type=int, default=1)
-    parser.add_argument("--participation", type=float, default=1.0)
+    parser.add_argument("--num_workers", type=int, default=1)
     parser.add_argument("--balancedness", type=float, default=1.0)
     default_device = "cuda" if torch.cuda.is_available() else "cpu"
     parser.add_argument("--device", type=str, choices=["cpu", "cuda"],
@@ -90,6 +90,7 @@ def parse_args(default_lr):
     parser.add_argument("--num_local_iters", type=int, default=1)
     parser.add_argument("--local_sched", action="store_true", dest="use_local_sched")
     parser.add_argument("--share_ps_gpu", action="store_true")
+    parser.add_argument("--iid", action="store_true", dest="do_iid")
 
     # GPT2 args
     parser.add_argument("--num_dialogs", type=int, default=1)
@@ -100,7 +101,7 @@ def parse_args(default_lr):
     parser.add_argument("--max_history", type=int, default=2,
                         help=("Number of previous exchanges to keep"
                               " in history"))
-    parser.add_argument("--train_batch_size", type=int, default=8,
+    parser.add_argument("--local_batch_size", type=int, default=8,
                         help="Batch size for training")
     parser.add_argument("--valid_batch_size", type=int, default=8,
                         help="Batch size for validation")
@@ -137,9 +138,8 @@ def parse_args(default_lr):
 
 
     args = parser.parse_args()
-    args.num_workers = int(args.num_clients * args.participation)
+    args.participation = args.num_workers / args.num_clients
     args.weight_decay = args.weight_decay
-    args.iid = args.num_classes == 10
 
     return args
 
