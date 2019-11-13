@@ -62,33 +62,13 @@ def update_forward_grad(worker_id, client_id,
         new_worker_weights = ps_weights
 
     # g is a (possibly compressed) gradient
-    if args.model == "gpt2":
-        f = forward_grad_gpt2
-    else:
-        f = forward_grad
-    g, results = f(
+    g, results = forward_grad(
             model, new_worker_weights,
             batch, criterion, metric, args
         )
 
     # figure out what to send, and store it in the transmitted
     # shared tensor in spot worker_id
-    """
-    elif args.mode == "local_topk":
-        worker_topk_shape = (args.num_workers, args.k)
-        worker_topk_i = sm2np(gw_worker_topk_i_sm, worker_topk_shape,
-                              dtype=ctypes.c_long)
-        worker_topk_v = sm2np(gw_worker_topk_v_sm, worker_topk_shape)
-        worker_topk_i[worker_id,:] = g[1].cpu().numpy()[:]
-        worker_topk_v[worker_id,:] = g[2].cpu().numpy()[:]
-
-        # store the full gradient too (which is in g[0])
-        # so the server can do error accumulation
-        worker_grads_shape = (args.num_workers, args.grad_size)
-        worker_grads = sm2np(gw_worker_grads_sm, worker_grads_shape)
-        worker_grads[worker_id,:] = g[0].cpu().numpy()[:]
-    """
-
     # get our specific local velocity/local error/transmitted vectors
     velocity = None
     error = None
@@ -166,7 +146,7 @@ def forward_grad(model, weights, batch,
         outs = model(ins)
         results = compute_loss(outs, targets, criterion, metric, True, args)
     else:
-        microbatch_size = args.batch_size // (args.num_workers * args.num_train_batch_shards)
+    	microbatch_size = args.local_batch_size // args.num_train_batch_shards
         train_batch_size = batch[3].size()[0]
         accum_loss = None
         n_iters = train_batch_size // microbatch_size
@@ -195,7 +175,7 @@ def forward_grad(model, weights, batch,
             loss = 0
         results = [loss]
 
-    grad = get_grad(model, weights, args)
+    grad = get_grad(model, weights, args, train=True, device=device)
 
     # compress the gradient if needed
     if args.mode == "sketch":
