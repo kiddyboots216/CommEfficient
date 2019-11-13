@@ -29,31 +29,62 @@ logger = logging.getLogger(__file__)
 
 class PersonaChatDataset(torch.utils.data.Dataset):
     def __init__(self, dataset_dir, tokenizer, num_candidates, max_history,
-                 train=True, download=True):
+                 do_iid=False, num_clients=None, train=True,download=True):
         self.dataset_dir = dataset_dir
         self.tokenizer = tokenizer
         self.num_candidates = num_candidates
         self.max_history = max_history
         self.type = "train" if train else "val"
 
+        self.do_iid = do_iid
+        if not do_iid and num_clients is not None:
+            raise ValueError("can't specify # clients when non-iid")
+        self._num_clients = num_clients
+
         if download and not os.path.exists(dataset_dir):
             self.download_and_split_data(dataset_dir)
 
         self.load_stats(train)
 
+        if self.do_iid:
+            self.iid_shuffle = np.random.permutation(len(self))
+
+        # keep the entire val set in memory, since why not
+        if self.type == "val":
+            with open(self.validation_fn(), "r") as val_f:
+                self.raw_val_set = json.load(val_f)
+
     @property
     def data_per_client(self):
-        cumsum = np.cumsum(self.dialogs_per_client)
-        cumsum = np.hstack([[0], cumsum])
-        utterances_per_client = np.array([
-            sum(self.train_utterances_per_dialog[s:s + dpc])
-            for s, dpc in zip(cumsum, self.dialogs_per_client)
-        ])
-        return utterances_per_client
+        if self.do_iid:
+            num_data = len(self)
+            utterances_per_client = (np.ones(self.num_clients, dtype=int)
+                                     * num_data // self.num_clients)
+            # some clients need 1 extra datum if num_clients doesn't
+            # divide num_data
+            extra = num_data % self.num_clients
+            utterances_per_client[self.num_clients - extra:] += 1
+            return utterances_per_client
+        else:
+            cumsum = np.cumsum(self.dialogs_per_client)
+            cumsum = np.hstack([[0], cumsum])
+            utterances_per_client = np.array([
+                sum(self.train_utterances_per_dialog[s:s + dpc])
+                for s, dpc in zip(cumsum, self.dialogs_per_client)
+            ])
+            return utterances_per_client
 
     @property
     def num_clients(self):
-        return len(self.dialogs_per_client)
+        if self.do_iid:
+            # if the user didn't specify how many clients, assume
+            # we have the same number of clients as the natural
+            # data partitioning, but we'll shuffle the data iid among
+            # the clients later
+            return (self._num_clients if self._num_clients is not None
+                                      else len(self.dialogs_per_client))
+        else:
+            return len(self.dialogs_per_client)
 
     def load_stats(self, train):
         with open(self.stats_fn(), "r") as f:
@@ -164,15 +195,24 @@ class PersonaChatDataset(torch.utils.data.Dataset):
         dialog_id = np.searchsorted(cumsum, idx)
         idx_within_dialog = idx - cumsum[dialog_id]
 
-        dialog = val_set[dialog_id]
+        dialog = self.raw_val_set[dialog_id]
         personality = dialog["personality"]
         utterance = dialog["utterances"][idx_within_dialog]
 
-        return self.utterance_to_input(personality, utterance)
+        # return something for client_id so the shape is what's
+        # expected, even though -1 is an invalid client_id and shouldn't
+        # be used
+        return (-1,) + self.utterance_to_input(personality, utterance)
 
     def get_train_item(self, idx):
         # idx refers to an utterance, which is part of a dialog,
         # which itself belongs to a certain client
+
+        # we achieve iid sampling by randomly permuting the data
+        # and returning a fake client_id below
+        orig_idx = idx
+        if self.do_iid:
+            idx = self.iid_shuffle[idx]
 
         # figure out which dialog idx is in
         cumsum = np.cumsum(self.train_utterances_per_dialog)
@@ -201,6 +241,13 @@ class PersonaChatDataset(torch.utils.data.Dataset):
         # associated with the client the record is on, so we can assign
         # forward/backward passes to the correct client later on
         model_input = self.utterance_to_input(personality, utterance)
+
+        # when do_iid, we pretend there are only self.num_clients
+        # clients. So we have to remap idx to client_id
+        if self.do_iid:
+            cumsum = np.cumsum(self.data_per_client)
+            client_id = np.searchsorted(cumsum, orig_idx, side="right")
+
         return (client_id,) + model_input
 
     def utterance_to_input(self, personality, utterance):
@@ -367,7 +414,7 @@ class FedSampler:
         cumsum = np.hstack([[0], cumsum])
         # permute the data indices within each client
         permuted_data = np.hstack([
-                s + np.random.choice(u, u, replace=False)
+                s + np.random.permutation(u)
                 for s, u in zip(cumsum, data_per_client)
             ])
         # need to keep track of where we are within each client
@@ -414,29 +461,25 @@ def get_data_loaders(args, tokenizer):
                                        tokenizer,
                                        args.num_candidates,
                                        args.max_history,
+                                       do_iid=args.do_iid,
+                                       num_clients=args.num_clients,
                                        train=True)
     val_dataset = PersonaChatDataset(args.dataset_dir,
                                      tokenizer,
                                      args.num_candidates,
                                      args.max_history,
                                      train=False)
-    if args.do_iid:
-        train_loader = DataLoader(train_dataset,
-                                  batch_size=args.batch_size,
-                                  collate_fn=collate_fn,
-                                  shuffle=True,
-                                  num_workers=4)
-    else:
-        train_sampler = FedSampler(train_dataset,
-                                   args.num_workers,
-                                   args.local_batch_size)
-        train_loader = DataLoader(train_dataset,
-                                  batch_sampler=train_sampler,
-                                  collate_fn=collate_fn,
-                                  num_workers=4)
+    train_sampler = FedSampler(train_dataset,
+                               args.num_workers,
+                               args.local_batch_size)
+    train_loader = DataLoader(train_dataset,
+                              batch_sampler=train_sampler,
+                              collate_fn=collate_fn,
+                              num_workers=4)
 
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size,
-                            shuffle=False)
+    val_batch_size = args.local_batch_size * args.num_workers
+    val_loader = DataLoader(val_dataset, batch_size=val_batch_size,
+                            collate_fn=collate_fn, shuffle=False)
 
     return train_loader, val_loader
 

@@ -83,7 +83,7 @@ def run_batches(model, opt, scheduler, loader, args,
     clients = np.arange(num_clients)
 
     if training:
-        model.train(training)
+        model.train(True)
         losses = []
         for batch_idx, batch in enumerate(loader):
             loss = model(batch)
@@ -109,20 +109,10 @@ def run_batches(model, opt, scheduler, loader, args,
         return np.mean(losses)
 
     else:
+        model.train(False)
         nlls, accs, ppls = [], [], []
         for batch_idx, batch in enumerate(loader):
-            indices = np.arange(args.num_workers)
-            minibatches = []
-            batch_len = batch[3].size()[0]
-            for i, _ in enumerate(indices):
-                start = i * args.batch_size // args.num_workers
-                if start >= batch_len:
-                    break
-                end = (i+1) * args.batch_size // args.num_workers
-                minibatch = [b[start:end] for b in batch]
-                minibatches.append(minibatch)
-            indices = indices[:len(minibatches)]
-            nll, acc = model(minibatches, indices)
+            nll, acc = model(batch)
             """
             nll, acc, ppl = model(minibatches, indices)
             ppl = np.mean(ppl)

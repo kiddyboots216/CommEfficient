@@ -192,7 +192,7 @@ if __name__ == "__main__":
                 'channels': {'prep': 64, 'layer1': 128,
                 'layer2': 256, 'layer3': 512},
         }
-    model_config["iid"] = args.iid
+    model_config["iid"] = args.do_iid
 
 
     # make data loaders

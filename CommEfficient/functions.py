@@ -129,10 +129,11 @@ class FedCommEffModel:
         global g_metric
         args = self.args
 
+        # batch is a tuple, with the client ids as the first tensor
+        client_indices = batch[0]
+        batch = batch[1:]
+
         if self.training:
-            # batch is a tuple, with the client ids as the first tensor
-            client_indices = batch[0]
-            batch = batch[1:]
 
             unique_clients = torch.unique(client_indices)
 
@@ -145,7 +146,6 @@ class FedCommEffModel:
                                     for t in batch)
                               for i in unique_clients]
 
-            #self.args.lr = lr
             args_tuples = [(i, idx,
                             worker_batches[i], self.args,
                             g_criterion, g_metric, self.hook)
@@ -160,9 +160,10 @@ class FedCommEffModel:
             return split_results(results, self.args.num_results_train)
 
         else:
-            split = [t.split(self.n_worker_gpus) for t in batch]
+            split = [t.split(args.local_batch_size) for t in batch]
+            num_shards = len(split[0])
             batch_shards = [tuple(l[i] for l in split)
-                            for i in range(self.n_worker_gpus)]
+                            for i in range(num_shards)]
             args_tuples = [(batch_shard, self.args,
                             g_criterion, g_metric)
                            for batch_shard in batch_shards]
