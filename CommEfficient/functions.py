@@ -164,15 +164,10 @@ class FedCommEffModel:
             return split_results(results, self.args.num_results_train)
 
         else:
-            print("batch[0].size", batch[0].size())
             split = [t.split(args.local_batch_size) for t in batch]
             num_shards = len(split[0])
-            print("num shards", num_shards)
-            print("len(split)", len(split))
-            print("len(split[0])", len(split[0]))
             batch_shards = [tuple(l[i] for l in split)
                             for i in range(num_shards)]
-            print("batch_shards[0][0].size", batch_shards[0][0].size())
             args_tuples = [(batch_shard, self.args,
                             g_criterion, g_metric)
                            for batch_shard in batch_shards]
