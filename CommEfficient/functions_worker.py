@@ -173,7 +173,7 @@ def forward_grad(model, weights, batch,
             loss = 0
         results = [loss]
 
-    grad = get_grad(model, weights, args, train=True, device=device)
+    grad = get_grad(model, weights, args)
 
     # compress the gradient if needed
     if args.mode == "sketch":
