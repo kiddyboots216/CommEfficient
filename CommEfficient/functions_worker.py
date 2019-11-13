@@ -62,33 +62,13 @@ def update_forward_grad(worker_id, client_id,
         new_worker_weights = ps_weights
 
     # g is a (possibly compressed) gradient
-    if args.model == "gpt2":
-        f = forward_grad_gpt2
-    else:
-        f = forward_grad
-    g, results = f(
+    g, results = forward_grad(
             model, new_worker_weights,
             batch, criterion, metric, args
         )
 
     # figure out what to send, and store it in the transmitted
     # shared tensor in spot worker_id
-    """
-    elif args.mode == "local_topk":
-        worker_topk_shape = (args.num_workers, args.k)
-        worker_topk_i = sm2np(gw_worker_topk_i_sm, worker_topk_shape,
-                              dtype=ctypes.c_long)
-        worker_topk_v = sm2np(gw_worker_topk_v_sm, worker_topk_shape)
-        worker_topk_i[worker_id,:] = g[1].cpu().numpy()[:]
-        worker_topk_v[worker_id,:] = g[2].cpu().numpy()[:]
-
-        # store the full gradient too (which is in g[0])
-        # so the server can do error accumulation
-        worker_grads_shape = (args.num_workers, args.grad_size)
-        worker_grads = sm2np(gw_worker_grads_sm, worker_grads_shape)
-        worker_grads[worker_id,:] = g[0].cpu().numpy()[:]
-    """
-
     # get our specific local velocity/local error/transmitted vectors
     velocity = None
     error = None
@@ -163,7 +143,37 @@ def forward_grad(model, weights, batch,
         ins, targets = batch
         outs = model(ins)
         results = compute_loss(outs, targets, criterion, metric, True, args)
-    grad = get_grad(model, weights, args, train=True, device=device)
+    else:
+    	microbatch_size = args.local_batch_size // args.num_train_batch_shards
+        train_batch_size = batch[3].size()[0]
+        accum_loss = None
+        n_iters = train_batch_size // microbatch_size
+        for i in range(n_iters):
+            start = i * microbatch_size
+            end = (i+1) * microbatch_size
+            microbatch = [b[start:end] for b in batch]
+            input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids = microbatch
+            (lm_loss), (mc_loss), *_ = model(
+                input_ids, token_type_ids=token_type_ids, mc_token_ids=mc_token_ids,
+                mc_labels=mc_labels, lm_labels=lm_labels
+            )
+            loss = (lm_loss * args.lm_coef + mc_loss * args.mc_coef) / args.num_train_batch_shards
+            #print(f"Loss: {loss} from {lm_loss} and {mc_loss}")
+            loss.backward()
+            # TODO: Make sure this is ok for GPT2
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_norm * args.num_workers)
+            if accum_loss is not None:
+                accum_loss += loss
+            else:
+                accum_loss = loss
+            #print(f"accum loss: {accum_loss} from {loss}")
+        if accum_loss is not None:
+            loss = accum_loss.item()/max(args.num_train_batch_shards, 1)
+        else:
+            loss = 0
+        results = [loss]
+
+    grad = get_grad(model, weights, args)
 
     # compress the gradient if needed
     if args.mode == "sketch":
