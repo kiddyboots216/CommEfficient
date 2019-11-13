@@ -43,7 +43,7 @@ def profile_helper(*args):
                    )
 
 class FedCommEffModel:
-    def __init__(self, input_model, args):
+    def __init__(self, input_model, args, hook=None):
         num_clients = args.num_clients
         participation = args.participation
         device = args.device
@@ -110,6 +110,7 @@ class FedCommEffModel:
                           g_worker_transmitted,
                           g_client_weights, g_ps_weights)
             )
+        self.hook = hook
 
 
     def __del__(self):
@@ -147,7 +148,7 @@ class FedCommEffModel:
             #self.args.lr = lr
             args_tuples = [(i, idx,
                             worker_batches[i], self.args,
-                            g_criterion, g_metric)
+                            g_criterion, g_metric, self.hook)
                            for i, idx in enumerate(unique_clients)]
 
             results = self.process_pool.starmap(

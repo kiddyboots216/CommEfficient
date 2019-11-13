@@ -11,6 +11,7 @@ from utils import make_logdir
 from gen_data import gen_data
 from data_utils import get_data_loaders
 from utils import parse_args
+from dp_functions import DPGaussianHook
 
 import multiprocessing
 if __name__ == "__main__":
@@ -218,7 +219,13 @@ if __name__ == "__main__":
     # FedComm-ify everything
     criterion = FedCommEffCriterion(criterion, args)
     accuracy = FedCommEffMetric(accuracy, args)
-    model = FedCommEffModel(model, args)
+
+    # Potentially DP-ify
+    hook = None
+    if args.do_dp:
+        DPHook = DPGaussianHook(args)
+        hook = DPHook.client_hook
+    model = FedCommEffModel(model, args, hook)
     opt = FedCommEffOptimizer(opt, args)
 
     lr_scheduler = optim.lr_scheduler.LambdaLR(opt,

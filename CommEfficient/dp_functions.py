@@ -9,69 +9,25 @@ import copy
 import multiprocessing
 from csvec import CSVec
 
-from functions import FedCommEffOptimizer
-import pytorch_privacy.utils.torch_nest_utils as nest
-from pytorch_privacy.dp_query import GaussianDPQuery, QueryWithLedger, PrivacyLedger
+from functions import FedCommEffOptimizer, FedCommEffModel
+from torchprivacy.dp_query import GaussianDPQuery, QueryWithLedger
+from torchprivacy.analysis import PrivacyLedger
 
-g_worker_Sgrads_sm = None
-g_worker_grads_sm = None
-g_client_weights_sm = None
-g_ps_weights_sm = None
-
-g_criterion = None
-g_accuracy = None
-
-
-class DPOptimizer(FedCommEffOptimizer):
+class DPHook:
     def __init__(self,
-                optimizer,
-                dp_sum_query,
-                args):
-        super().__init__(optimizer, args)
-        self.dp_sum_query = dp_sum_query
-        self.num_microbatches = args.num_microbatches
+            dp_sum_query,
+            args):
         self._summary_value = 0
 
         self._global_parameters = self.dp_sum_query.initial_global_state()
         self._derived_records_data = defaultdict(list)
 
-    def step(self, indices):
-        lr = self.get_lr()
-        # just assume no momentum or error accumulation for now
-        new_ps_weights = self.dp_get_updated_server(self.args, lr)
-
-        # update ps_weights, momentums, and errors
-        ps_weights = sm2np(g_ps_weights_sm, (self.args.grad_size,))
-        ps_weights[:] = new_ps_weights
-
-
-    def dp_get_updated_server(self, args, lr):
-        return self._dp_server_helper(args, lr)
-
-    def _dp_server_helper(self, args, lr):
-        # assume that the worker did whatever microbatching was necessary
-        # not going to implement that for now bc it's annoying
-        
-        global g_ps_weights_sm
-        global g_worker_grads_sm
-
-        device = torch.device(args.device)
-
-        ps_weights = sm2np(g_ps_weights_sm, (args.grad_size,),)
-        ps_weights = torch.from_numpy(ps_weights).to(device)
-
-        worker_grads_shape = (args.num_workers, args.grad_size)
-        worker_grads = sm2np(g_worker_grads_sm, worker_grads_shape)
-
-        grad = np.sum([torch.from_numpy(g).to(device) for g in worker_grads])
-        grad /= args.num_workers
+    def client_hook(grad, args):
+        # NOTE: Because we're doing client level DP, we don't need to
+        # microbatch. This only works for client level DP.
         record = grad
-        # Get the correct shape gradient tensors to then set to the initial
-        # state of the sample. Often all zero for zero gradients.
-        sample_state = self.dp_sum_query.initial_sample_state(
-            record
-            #nest.parameters_to_tensor_groups(grad, 'data')
-        )
+        # Initial state of the sample is probably all zeros
+        sample_state = self.dp_sum_query.initial_sample_state(record)
 
         # Get the parameters for doing the dp query on this sample of data
         sample_params = self.dp_sum_query.derive_sample_params(self._global_parameters)
@@ -98,15 +54,11 @@ class DPOptimizer(FedCommEffOptimizer):
 
         # Finish the DP query, usually by adding noise to the accumulated gradient information
         final_grads, _ = self.dp_sum_query.get_noised_result(sample_state, self._global_parameters)
-        return (ps_weights - final_grads * lr).cpu()
+        return final_grads
 
-class DPGaussianOptimizer(DPOptimizer):
-    """ Specific Gaussian mechanism optimizer for L2 clipping and noise privacy """
 
-    def __init__(self,
-                 *args,
-                 **kwargs):
-        args,optimizer = args
+class DPGaussianHook(DPHook):
+    def __init__(self, args):
         dp_sum_query = GaussianDPQuery(args.l2_norm_clip, args.l2_norm_clip * args.noise_multiplier)
 
         if args.ledger:
@@ -115,13 +67,9 @@ class DPGaussianOptimizer(DPOptimizer):
 
         super().__init__(
             dp_sum_query=dp_sum_query,
-            optimizer=optimizer,
             args=args,
-            #*args,
-            #**kwargs
         )
 
     @property
     def ledger(self):
         return self.dp_sum_query.ledger
-

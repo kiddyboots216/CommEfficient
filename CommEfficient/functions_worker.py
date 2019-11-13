@@ -36,7 +36,7 @@ def zero_grad():
     model.zero_grad()
 
 def update_forward_grad(worker_id, client_id,
-                        batch, args, criterion, metric):
+                        batch, args, criterion, metric, hook=None):
 
     # pull PS and client weights out of the shared memory block
     grad_size = args.grad_size
@@ -61,7 +61,7 @@ def update_forward_grad(worker_id, client_id,
         ps_weights = gw_ps_weights.to(args.device)
         new_worker_weights = ps_weights
 
-    # g is a (possibly compressed) gradient
+    # g is either the gradient or the sketch of the gradient
     g, results = forward_grad(
             model, new_worker_weights,
             batch, criterion, metric, args
@@ -105,6 +105,9 @@ def update_forward_grad(worker_id, client_id,
         # if we're doing local momentum, do momentum factor masking
         if args.local_momentum > 0:
             velocity[nz] = 0
+    
+    if hook:
+        to_transmit = hook(to_transmit, args)
 
     transmitted[:] = to_transmit
 
@@ -131,7 +134,6 @@ def get_new_worker_weights(ps_weights, worker_weights, args):
 
 def forward_grad(model, weights, batch,
                  criterion, metric, args):
-    """
     device = args.device
     model = model.to(device)
     model.train()
@@ -140,7 +142,6 @@ def forward_grad(model, weights, batch,
     batch = tuple(input_tensor.to(device) for input_tensor in batch)
     criterion = criterion.to(device)
     metric = metric.to(device)
-    """
     if args.is_supervised:
         ins, targets = batch
         outs = model(ins)
