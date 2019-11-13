@@ -10,8 +10,8 @@ import multiprocessing
 from csvec import CSVec
 
 from functions import FedCommEffOptimizer, FedCommEffModel
-from torchprivacy.dp_query import GaussianDPQuery, QueryWithLedger
-from torchprivacy.analysis import PrivacyLedger
+from torchprivacy.dp_query import GaussianSumQuery
+from torchprivacy.analysis import PrivacyLedger, QueryWithLedger
 
 class DPHook:
     def __init__(self,
@@ -59,10 +59,11 @@ class DPHook:
 
 class DPGaussianHook(DPHook):
     def __init__(self, args):
-        dp_sum_query = GaussianDPQuery(args.l2_norm_clip, args.l2_norm_clip * args.noise_multiplier)
+        args.noise_multiplier = (8 * args.participation ** 2 * args.l2_norm_clip ** 2 * np.log(1.25 / args.delta)) / (args.eps ** 2 * args.num_clients ** 2)
+        dp_sum_query = GaussianSumQuery(args.l2_norm_clip, args.noise_multiplier)
 
         if args.ledger:
-            ledger = PrivacyLedger(args.num_data, args.batch_size/args.num_data)
+            ledger = PrivacyLedger(args.num_clients, args.participation)
             dp_sum_query = QueryWithLedger(dp_sum_query, ledger=ledger)
 
         super().__init__(

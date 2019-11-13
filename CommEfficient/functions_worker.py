@@ -147,7 +147,7 @@ def forward_grad(model, weights, batch,
         outs = model(ins)
         results = compute_loss(outs, targets, criterion, metric, True, args)
     else:
-    	microbatch_size = args.local_batch_size // args.num_train_batch_shards
+        microbatch_size = args.local_batch_size // args.num_train_batch_shards
         train_batch_size = batch[3].size()[0]
         accum_loss = None
         n_iters = train_batch_size // microbatch_size

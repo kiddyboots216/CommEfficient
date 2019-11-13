@@ -15,9 +15,9 @@ import torch.multiprocessing as multiprocessing
 import functions_worker as worker
 from utils import get_param_vec, set_param_vec, get_grad, _topk
 
-from line_profiler import LineProfiler
-import atexit
-profile = LineProfiler()
+#from line_profiler import LineProfiler
+#import atexit
+#profile = LineProfiler()
 #atexit.register(profile.print_stats)
 
 g_client_errors = None
