@@ -450,7 +450,7 @@ class FedSampler:
                 ])
                 assert r.size <= self.num_workers * self.local_batch_size
                 yield r
-                cur_idx_within_client[workers] += records_remaining
+                cur_idx_within_client[workers] += actual_batch_sizes
 
         return sampler()
 
