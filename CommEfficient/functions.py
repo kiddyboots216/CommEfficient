@@ -130,7 +130,7 @@ class FedCommEffModel:
         args = self.args
 
         # batch is a tuple, with the client ids as the first tensor
-        client_indices = batch[0]
+        client_indices = torch.from_numpy(batch[0])
         batch = batch[1:]
 
         if self.training:

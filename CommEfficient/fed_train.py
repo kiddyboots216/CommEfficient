@@ -120,7 +120,8 @@ def run_batches(model, opt, lr_scheduler, loaders,
                 indices.append(i)
             #print(f"Batch sizes: {[m[1].size() for m in minibatches]}")
             if len(minibatches) > 0:
-                loss, acc = model(minibatches, indices)
+                batch_tuple = (indices, minibatches)
+                loss, acc = model(batch_tuple)
                 batch_loss = loss
                 batch_acc = acc
                 losses.append(np.mean(batch_loss))
@@ -151,7 +152,8 @@ def run_batches_fed(model, opt, lr_scheduler, loaders, training, args):
             #print(f"Selecting in order {idx}")
             client_loaders = loaders[idx]
             minibatches = [loader.next_batch() for loader in client_loaders]
-            loss, acc = model(minibatches, idx)
+            batch_tuple = (idx, minibatches)
+            loss, acc = model(batch_tuple)
             if args.use_local_sched:
                 for _ in range(args.num_local_iters):
                     lr_scheduler.step()

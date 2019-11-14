@@ -12,6 +12,7 @@ python fed_train.py \
     --supervised \
     --static_datasets \
     --num_classes 10 \
+    --iid \
     --share_ps_gpu \
     --dp \
     --ledger \
