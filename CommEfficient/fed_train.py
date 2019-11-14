@@ -1,174 +1,117 @@
 import torch
 import numpy as np
 import torch.optim as optim
+from torch.optim.lr_scheduler import LambdaLR
 import torch.nn as nn
+from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
-from minimal import Net, Correct, union, PiecewiseLinear, Timer, TableLogger
-from functions import FedCommEffModel, FedCommEffOptimizer, \
-        FedCommEffCriterion, FedCommEffMetric
-from utils import make_logdir
-from gen_data import gen_data
-from data_utils import get_data_loaders
+from models import ResNet9
+from fed_aggregator import FedModel, FedOptimizer, FedCriterion, FedMetric
+from utils import make_logdir, union, PiecewiseLinear, Timer, TableLogger
 from utils import parse_args
 from dp_functions import DPGaussianHook
+from data_utils import FedCIFAR10, FedSampler, FedFactory
+from data_utils import cifar_train_transforms, cifar_test_transforms
 
-import multiprocessing
+import torch.multiprocessing as multiprocessing
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
-global start_idx
-start_idx = 0
 
-def train(model, opt, lr_scheduler, train_loader, val_loader,
+#from line_profiler import LineProfiler
+#import atexit
+#profile = LineProfiler()
+#atexit.register(profile.print_stats)
+
+# module for computing accuracy
+class Correct(nn.Module):
+    def forward(self, classifier, target):
+        return classifier.max(dim = 1)[1] == target
+
+def train(model, opt, lr_scheduler, train_loader, test_loader,
           args, writer, loggers=(), timer=None):
     timer = timer or Timer()
-    batch_size = args.batch_size
-    num_epochs = args.num_epochs
-    run = run_batches
-    if isinstance(train_loader, np.ndarray):
-        run = run_batches_fed
     for epoch in range(args.num_epochs):
-        train_loss, train_acc = run(model, opt, lr_scheduler,
-            train_loader, True, args)
+        train_loss, train_acc = run_batches(model, opt, lr_scheduler,
+                                            train_loader, True, args)
         train_time = timer()
-        val_loss, val_acc = run_batches(model, None, None,
-            val_loader, False, args)
-        val_time = timer()
+        test_loss, test_acc = run_batches(model, None, None,
+                                          test_loader, False, args)
+        test_time = timer()
         epoch_stats = {
             'train_time': train_time,
             'train_loss': train_loss,
-            'train_acc': train_acc,
-            'test_loss': val_loss,
-            'test_acc': val_acc,
+            'train_acc':  train_acc,
+            'test_loss':  test_loss,
+            'test_acc':   test_acc,
             'total_time': timer.total_time,
         }
         lr = lr_scheduler.get_lr()[0]
-        #lr = lr * batch_size
         summary = union({'epoch': epoch+1,
-            'lr': lr},
-            epoch_stats)
+                         'lr': lr},
+                        epoch_stats)
         for logger in loggers:
             logger.append(summary)
-        writer.add_scalar('Loss/train', train_loss, epoch)
-        writer.add_scalar('Loss/val', val_loss, epoch)
-        writer.add_scalar('Acc/train', train_acc, epoch)
-        writer.add_scalar('Acc/val', val_acc, epoch)
-        writer.add_scalar('Time/train', train_time, epoch)
-        writer.add_scalar('Time/val', val_time, epoch)
+        writer.add_scalar('Loss/train', train_loss,       epoch)
+        writer.add_scalar('Loss/test',  test_loss,        epoch)
+        writer.add_scalar('Acc/train',  train_acc,        epoch)
+        writer.add_scalar('Acc/test',   test_acc,         epoch)
+        writer.add_scalar('Time/train', train_time,       epoch)
+        writer.add_scalar('Time/test',  test_time,        epoch)
         writer.add_scalar('Time/total', timer.total_time, epoch)
-        writer.add_scalar('Lr', lr, epoch)
+        writer.add_scalar('Lr',         lr,               epoch)
     return summary
 
-def run_batches(model, opt, lr_scheduler, loaders,
-                training, args):
-    clients = np.arange(args.num_clients)
-    model.train(training)
-    losses = []
-    accs = []
-
-    if training:
-        global start_idx
-        for batch_idx, batch in enumerate(loaders):
-            inputs, targets = batch
-            start_idx = start_idx % num_clients
-            end_idx = start_idx + num_workers
-            idx = np.random.choice(clients,
-                args.num_workers, replace=False)
-            #print(f"Selecting randomly {idx}")
-            #idx = np.arange(start_idx, end_idx)
-            #print(f"Selecting in order {idx}")
-            minibatches = []
-            for i, _ in enumerate(idx):
-                start = i * args.batch_size // args.num_workers
-                end = (i+1) * args.batch_size // args.num_workers
-                in_batch = inputs[start:end]
-                target_batch = targets[start:end]
-                minibatch = [in_batch, target_batch]
-                minibatches.append(minibatch)
-            loss, acc = model(minibatches, idx)
-            if args.use_local_sched:
-                for _ in range(args.num_local_iters):
-                    lr_scheduler.step()
-            else:
-                lr_scheduler.step()
-            opt.step(idx)
-            batch_loss = loss
-            #print("batch_loss", batch_loss.mean())
-            batch_acc = acc
-            losses.append(batch_loss)
-            accs.append(batch_acc)
-            start_idx = end_idx
-            if args.do_test:
-                break
-
-    else:
-        for batch_idx, batch in enumerate(loaders):
-            idx = np.arange(args.num_devices)
-            inputs, targets = batch
-            minibatches = []
-            batch_len = targets.size()[0]
-            indices = []
-            for i, _ in enumerate(idx):
-                start = i * args.batch_size // args.num_workers
-                end = (i+1) * args.batch_size // args.num_workers
-                if start > batch_len:
-                    break
-                in_batch = inputs[start:end]
-                target_batch = targets[start:end]
-                minibatch = [in_batch, target_batch]
-                minibatches.append(minibatch)
-                indices.append(i)
-            #print(f"Batch sizes: {[m[1].size() for m in minibatches]}")
-            if len(minibatches) > 0:
-                loss, acc = model(minibatches, indices)
-                batch_loss = loss
-                batch_acc = acc
-                losses.append(np.mean(batch_loss))
-                accs.append(np.mean(batch_acc))
-            """
-            if args.do_test:
-                break
-            """
-    return np.mean(losses), np.mean(accs)
-
 #@profile
-def run_batches_fed(model, opt, lr_scheduler, loaders, training, args):
-    clients = np.arange(args.num_clients)
-    n_iters = args.num_data // args.batch_size
+def run_batches(model, opt, lr_scheduler, loader, training, args):
     model.train(training)
     losses = []
     accs = []
 
     if training:
-        global start_idx
-        for batch_idx in range(n_iters):
-            idx = np.random.choice(clients,
-                args.num_workers, replace=False)
-            start_idx = start_idx % args.num_workers
-            end_idx = start_idx + args.num_workers
-            #print(f"Selecting randomly {idx}")
-            #idx = np.arange(start_idx, end_idx)
-            #print(f"Selecting in order {idx}")
-            client_loaders = loaders[idx]
-            minibatches = [loader.next_batch() for loader in client_loaders]
-            loss, acc = model(minibatches, idx)
+        for batch in train_loader:
+            loss, acc = model(batch)
             if args.use_local_sched:
                 for _ in range(args.num_local_iters):
                     lr_scheduler.step()
             else:
                 lr_scheduler.step()
-            opt.step(idx)
+            opt.step()
             model.zero_grad()
-            batch_loss = loss
-            #print("batch_loss", batch_loss.mean())
-            batch_acc = acc
-            losses.append(batch_loss)
-            accs.append(batch_acc)
-            start_idx = end_idx
+            losses.extend(loss)
+            accs.extend(acc)
             if args.do_test:
                 break
+    else:
+        for batch in test_loader:
+            loss, acc = model(batch)
+            losses.extend(loss)
+            accs.extend(acc)
 
     return np.mean(losses), np.mean(accs)
+
+def get_data_loaders(args):
+    train_dataset = FedFactory(args.dataset_name, args.dataset_path, cifar_train_transforms,
+                               args.do_iid, args.num_clients,
+                               train=True, download=True)
+    test_dataset = FedFactory(args.dataset_name, args.dataset_path, cifar_test_transforms,
+                              train=False)
+
+    train_sampler = FedSampler(train_dataset,
+                               args.num_workers,
+                               args.local_batch_size)
+
+    train_loader = DataLoader(train_dataset,
+                              batch_sampler=train_sampler,
+                              num_workers=0)
+    test_batch_size = args.local_batch_size * args.num_workers
+    test_loader = DataLoader(test_dataset,
+                             batch_size=test_batch_size,
+                             shuffle=False,
+                             num_workers=0)
+
+    return train_loader, test_loader
+
 
 if __name__ == "__main__":
     args = parse_args(default_lr=0.4)
@@ -176,7 +119,6 @@ if __name__ == "__main__":
 
     # model class and config
     torch.random.manual_seed(21)
-    model_cls = Net
     if args.do_test:
         model_config = {
             'channels': {'prep': 1, 'layer1': 1,
@@ -192,12 +134,11 @@ if __name__ == "__main__":
                 'channels': {'prep': 64, 'layer1': 128,
                 'layer2': 256, 'layer3': 512},
         }
-    model_config["iid"] = args.iid
+    model_config["iid"] = args.do_iid
 
 
     # make data loaders
-    train_loader, val_loader = gen_data(args)
-    loader_len = args.num_data // args.batch_size
+    train_loader, test_loader = get_data_loaders(args)
 
     # set up learning rate stuff
     lr_schedule = PiecewiseLinear([0, args.pivot_epoch, args.num_epochs],
@@ -205,31 +146,31 @@ if __name__ == "__main__":
     # grad_reduction only controlls how gradients from different
     # workers are combined
     # so the lr is multiplied by num_workers for mean and median
-    lambda_step = lambda step: (lr_schedule(step / loader_len)
-           # / args.batch_size
-            )
+    batch_size = args.local_batch_size * args.num_workers
+    steps_per_epoch = len(train_loader) / batch_size
+    lambda_step = lambda step: (lr_schedule(step / steps_per_epoch))
 
     # instantiate ALL the things
-    model = model_cls(**model_config)
+    model = ResNet9(**model_config)
     opt = optim.SGD(model.parameters(), lr=1)
-    # even for median or mean, each worker still sums gradients locally
+    # whether args.grad_reduction is median or mean,
+    # each worker still means gradients locally
     criterion = torch.nn.CrossEntropyLoss(reduction='mean')
     accuracy = Correct()
 
-    # FedComm-ify everything
-    criterion = FedCommEffCriterion(criterion, args)
-    accuracy = FedCommEffMetric(accuracy, args)
+    # Fed-ify everything
+    criterion = FedCriterion(criterion, args)
+    accuracy = FedMetric(accuracy, args)
 
     # Potentially DP-ify
     hook = None
     if args.do_dp:
         DPHook = DPGaussianHook(args)
         hook = DPHook.client_hook
-    model = FedCommEffModel(model, args, hook)
-    opt = FedCommEffOptimizer(opt, args)
+    model = FedModel(model, args, hook)
+    opt = FedOptimizer(opt, args)
 
-    lr_scheduler = optim.lr_scheduler.LambdaLR(opt,
-                                               lr_lambda=[lambda_step])
+    lr_scheduler = LambdaLR(opt, lr_lambda=[lambda_step])
 
     # set up output
     log_dir = make_logdir(args)
@@ -237,5 +178,5 @@ if __name__ == "__main__":
     print('Finished initializing in {:.2f} seconds'.format(timer()))
 
     # and do the training
-    train(model, opt, lr_scheduler, train_loader, val_loader, args,
+    train(model, opt, lr_scheduler, train_loader, test_loader, args,
           writer, loggers=(TableLogger(),), timer=timer)

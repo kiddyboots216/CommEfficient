@@ -5,17 +5,19 @@ import os
 import json
 import tarfile
 import tempfile
-import logging
 from collections import defaultdict
 from itertools import chain
 
 import torch
 import numpy as np
 
-from torch.utils.data import DataLoader
 from torch.nn.utils.rnn import pad_sequence
 
 from pytorch_transformers import cached_path
+
+from utils import Logger
+
+logger = Logger()
 
 PERSONACHAT_URL = "https://s3.amazonaws.com/datasets.huggingface.co/personachat/personachat_self_original.json"
 HF_FINETUNED_MODEL = "https://s3.amazonaws.com/models.huggingface.co/transfer-learning-chatbot/finetuned_chatbot_gpt.tar.gz"
@@ -25,44 +27,73 @@ MODEL_INPUTS = ["input_ids", "mc_token_ids", "lm_labels",
                 "mc_labels", "token_type_ids"]
 PADDED_INPUTS = ["input_ids", "lm_labels", "token_type_ids"]
 
-logger = logging.getLogger(__file__)
-
-class PersonaChatDataset(torch.utils.data.Dataset):
+class FedPersonaChat(torch.utils.data.Dataset):
     def __init__(self, dataset_dir, tokenizer, num_candidates, max_history,
-                 train=True, download=True):
+                 do_iid=False, num_clients=None, train=True,download=True):
         self.dataset_dir = dataset_dir
         self.tokenizer = tokenizer
         self.num_candidates = num_candidates
         self.max_history = max_history
         self.type = "train" if train else "val"
 
+        self.do_iid = do_iid
+        if not do_iid and num_clients is not None:
+            raise ValueError("can't specify # clients when non-iid")
+        self._num_clients = num_clients
+
         if download and not os.path.exists(dataset_dir):
             self.download_and_split_data(dataset_dir)
 
-        self.load_stats(train)
+        self._load_meta(train)
+
+        if self.do_iid:
+            self.iid_shuffle = np.random.permutation(len(self))
+
+        # keep the entire val set in memory, since why not
+        if self.type == "val":
+            with open(self.validation_fn(), "r") as val_f:
+                self.raw_val_set = json.load(val_f)[:44]
 
     @property
     def data_per_client(self):
-        cumsum = np.cumsum(self.dialogs_per_client)
-        cumsum = np.hstack([[0], cumsum])
-        utterances_per_client = np.array([
-            sum(self.train_utterances_per_dialog[s:s + dpc])
-            for s, dpc in zip(cumsum, self.dialogs_per_client)
-        ])
-        return utterances_per_client
+        if self.do_iid:
+            num_data = len(self)
+            utterances_per_client = (np.ones(self.num_clients, dtype=int)
+                                     * num_data // self.num_clients)
+            # some clients need 1 extra datum if num_clients doesn't
+            # divide num_data
+            extra = num_data % self.num_clients
+            utterances_per_client[self.num_clients - extra:] += 1
+            return utterances_per_client
+        else:
+            cumsum = np.cumsum(self.dialogs_per_client)
+            cumsum = np.hstack([[0], cumsum])
+            utterances_per_client = np.array([
+                sum(self.train_utterances_per_dialog[s:s + dpc])
+                for s, dpc in zip(cumsum, self.dialogs_per_client)
+            ])
+            return utterances_per_client
 
     @property
     def num_clients(self):
-        return len(self.dialogs_per_client)
+        if self.do_iid:
+            # if the user didn't specify how many clients, assume
+            # we have the same number of clients as the natural
+            # data partitioning, but we'll shuffle the data iid among
+            # the clients later
+            return (self._num_clients if self._num_clients is not None
+                                      else len(self.dialogs_per_client))
+        else:
+            return len(self.dialogs_per_client)
 
-    def load_stats(self, train):
+    def _load_meta(self, train):
         with open(self.stats_fn(), "r") as f:
             stats = json.load(f)
             self.dialogs_per_client = stats["dialogs_per_client"]
             self.train_utterances_per_dialog = \
                     stats["train_utterances_per_dialog"]
             self.val_utterances_per_dialog = \
-                    stats["val_utterances_per_dialog"]
+                    stats["val_utterances_per_dialog"][:44]
 
     def download_and_split_data(self, dataset_dir):
         # download the dataset
@@ -155,24 +186,33 @@ class PersonaChatDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         if self.type == "train":
-            return self.get_train_item(idx)
+            return self._get_train_item(idx)
         elif self.type == "val":
-            return self.get_val_item(idx)
+            return self._get_val_item(idx)
 
-    def get_val_item(self, idx):
+    def _get_val_item(self, idx):
         cumsum = np.cumsum(self.val_utterances_per_dialog)
         dialog_id = np.searchsorted(cumsum, idx)
         idx_within_dialog = idx - cumsum[dialog_id]
 
-        dialog = val_set[dialog_id]
+        dialog = self.raw_val_set[dialog_id]
         personality = dialog["personality"]
         utterance = dialog["utterances"][idx_within_dialog]
 
-        return self.utterance_to_input(personality, utterance)
+        # return something for client_id so the shape is what's
+        # expected, even though -1 is an invalid client_id and shouldn't
+        # be used
+        return (-1,) + self.utterance_to_input(personality, utterance)
 
-    def get_train_item(self, idx):
+    def _get_train_item(self, idx):
         # idx refers to an utterance, which is part of a dialog,
         # which itself belongs to a certain client
+
+        # we achieve iid sampling by randomly permuting the data
+        # and returning a fake client_id below
+        orig_idx = idx
+        if self.do_iid:
+            idx = self.iid_shuffle[idx]
 
         # figure out which dialog idx is in
         cumsum = np.cumsum(self.train_utterances_per_dialog)
@@ -201,6 +241,13 @@ class PersonaChatDataset(torch.utils.data.Dataset):
         # associated with the client the record is on, so we can assign
         # forward/backward passes to the correct client later on
         model_input = self.utterance_to_input(personality, utterance)
+
+        # when do_iid, we pretend there are only self.num_clients
+        # clients. So we have to remap idx to client_id
+        if self.do_iid:
+            cumsum = np.cumsum(self.data_per_client)
+            client_id = np.searchsorted(cumsum, orig_idx, side="right")
+
         return (client_id,) + model_input
 
     def utterance_to_input(self, personality, utterance):
@@ -226,7 +273,7 @@ class PersonaChatDataset(torch.utils.data.Dataset):
         return os.path.join(self.dataset_dir, "validation.json")
 
     def stats_fn(self):
-        return os.path.join(self.dataset_dir, "train_stats.json")
+        return os.path.join(self.dataset_dir, "stats.json")
 
 def tokenize(obj, tokenizer):
     """ Recursively tokenize all strings in obj """
@@ -319,7 +366,7 @@ def build_input_from_segments(persona, history, reply, tokenizer,
         instance["lm_labels"] += [-1] + sequence[-1][1:]
     return instance
 
-def collate_fn(records):
+def personachat_collate_fn(records):
     # records is a list of tuples, where each tuple contains columns
     # (client_id,) + MODEL_INPUTS
 
@@ -346,97 +393,4 @@ def collate_fn(records):
                                       for record in records]))
 
     return tuple(batch)
-
-class FedSampler:
-    """ Samples from a federated dataset
-
-    Shuffles the data order within each client, and then for every
-    batch requested, samples num_workers clients, and returns
-    local_batch_size data from each client.
-    """
-    def __init__(self, dataset, num_workers, local_batch_size,
-                 shuffle_clients=True):
-        self.dataset = dataset
-        self.num_workers = num_workers
-        self.local_batch_size = local_batch_size
-        self.shuffle_clients = shuffle_clients
-
-    def __iter__(self):
-        data_per_client = self.dataset.data_per_client
-        cumsum = np.cumsum(data_per_client)
-        cumsum = np.hstack([[0], cumsum])
-        # permute the data indices within each client
-        permuted_data = np.hstack([
-                s + np.random.choice(u, u, replace=False)
-                for s, u in zip(cumsum, data_per_client)
-            ])
-        # need to keep track of where we are within each client
-        cur_idx_within_client = np.zeros(self.dataset.num_clients,
-                                         dtype=int)
-        def sampler():
-            while True:
-                # only choose clients that have any data left
-                nonexhausted_clients = np.where(
-                        cur_idx_within_client < data_per_client
-                    )[0]
-                if len(nonexhausted_clients) == 0:
-                    break
-                num_workers = min(self.num_workers,
-                                  len(nonexhausted_clients))
-                # choose randomly from the clients that have data left
-                workers = np.random.choice(nonexhausted_clients,
-                                           num_workers,
-                                           replace=False)
-                # figure out how much data each chosen client has left
-                records_remaining = (data_per_client[workers]
-                                     - cur_idx_within_client[workers])
-
-                # choose up to local_batch_size elements from each worker
-                actual_batch_sizes = np.clip(records_remaining,
-                                             0,
-                                             self.local_batch_size)
-                r = np.hstack([
-                    permuted_data[s:s + actual_batch_sizes[i]]
-                    for i, s in enumerate(cumsum[workers] +
-                                          cur_idx_within_client[workers])
-                ])
-                assert r.size <= self.num_workers * self.local_batch_size
-                yield r
-                cur_idx_within_client[workers] += records_remaining
-
-        return sampler()
-
-    def __len__(self):
-        return len(self.dataset)
-
-def get_data_loaders(args, tokenizer):
-    train_dataset = PersonaChatDataset(args.dataset_dir,
-                                       tokenizer,
-                                       args.num_candidates,
-                                       args.max_history,
-                                       train=True)
-    val_dataset = PersonaChatDataset(args.dataset_dir,
-                                     tokenizer,
-                                     args.num_candidates,
-                                     args.max_history,
-                                     train=False)
-    if args.do_iid:
-        train_loader = DataLoader(train_dataset,
-                                  batch_size=args.batch_size,
-                                  collate_fn=collate_fn,
-                                  shuffle=True,
-                                  num_workers=4)
-    else:
-        train_sampler = FedSampler(train_dataset,
-                                   args.num_workers,
-                                   args.local_batch_size)
-        train_loader = DataLoader(train_dataset,
-                                  batch_sampler=train_sampler,
-                                  collate_fn=collate_fn,
-                                  num_workers=4)
-
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size,
-                            shuffle=False)
-
-    return train_loader, val_loader
 

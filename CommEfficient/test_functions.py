@@ -1,4 +1,4 @@
-from dp_functions import DPGaussianOptimizer
+from fed_aggregator import FedModel, FedOptimizer, FedCriterion, FedAccuracy
 import torch
 from functions import FedCommEffModel, FedCommEffOptimizer, \
         FedCommEffCriterion, FedCommEffMetric

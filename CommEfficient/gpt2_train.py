@@ -1,25 +1,26 @@
 import os
-import logging
 from pprint import pformat
 
 from pytorch_transformers import (AdamW, OpenAIGPTDoubleHeadsModel,
                                   OpenAIGPTTokenizer, GPT2DoubleHeadsModel,
                                   GPT2Tokenizer, WEIGHTS_NAME, CONFIG_NAME)
 
-from gpt2_dataloader import get_data_loaders
-
-from CommEfficient.functions import FedCommEffOptimizer, FedCommEffCriterion, FedCommEffModel, FedCommEffMetric
+from fed_aggregator import FedOptimizer, FedCriterion, FedModel, FedMetric
 from utils import make_logdir
-from CommEfficient.minimal import PiecewiseLinear, TableLogger, Timer, union
+from utils import PiecewiseLinear, TableLogger, Timer, union
 import torch
 from torch.optim import SGD
 from torch.utils.tensorboard import SummaryWriter
-from utils import parse_args
+from utils import parse_args, Logger
+
+from torch.utils.data import DataLoader
+from data_utils import FedSampler
+from data_utils import personachat_collate_fn, FedPersonaChat
 
 import numpy as np
-import multiprocessing
+import torch.multiprocessing as multiprocessing
 
-logger = logging.getLogger(__file__)
+logger = Logger()
 
 ATTR_TO_SPECIAL_TOKEN = {
                          'bos_token': '<bos>',
@@ -83,7 +84,7 @@ def run_batches(model, opt, scheduler, loader, args,
     clients = np.arange(num_clients)
 
     if training:
-        model.train(training)
+        model.train(True)
         losses = []
         for batch_idx, batch in enumerate(loader):
             loss = model(batch)
@@ -109,20 +110,10 @@ def run_batches(model, opt, scheduler, loader, args,
         return np.mean(losses)
 
     else:
+        model.train(False)
         nlls, accs, ppls = [], [], []
         for batch_idx, batch in enumerate(loader):
-            indices = np.arange(args.num_workers)
-            minibatches = []
-            batch_len = batch[3].size()[0]
-            for i, _ in enumerate(indices):
-                start = i * args.batch_size // args.num_workers
-                if start >= batch_len:
-                    break
-                end = (i+1) * args.batch_size // args.num_workers
-                minibatch = [b[start:end] for b in batch]
-                minibatches.append(minibatch)
-            indices = indices[:len(minibatches)]
-            nll, acc = model(minibatches, indices)
+            nll, acc = model(batch)
             """
             nll, acc, ppl = model(minibatches, indices)
             ppl = np.mean(ppl)
@@ -149,7 +140,6 @@ def run_batches(model, opt, scheduler, loader, args,
 def train():
     args = parse_args(default_lr=4e-2)
 
-    logging.basicConfig(level=logging.INFO)
     logger.info("Arguments: %s", pformat(args))
 
     timer = Timer()
@@ -185,11 +175,11 @@ def train():
 
     logger.info('Finished in {:.2f} seconds'.format(timer()))
     logger.info("Initializing everything")
-    model = FedCommEffModel(model, args)
-    optimizer = FedCommEffOptimizer(optimizer, args)
+    model = FedModel(model, args)
+    optimizer = FedOptimizer(optimizer, args)
     criterion = torch.nn.CrossEntropyLoss(ignore_index=-1)
-    metric = FedCommEffMetric(criterion, args)
-    criterion = FedCommEffCriterion(criterion, args)
+    metric = FedMetric(criterion, args)
+    criterion = FedCriterion(criterion, args)
     lr_schedule = PiecewiseLinear(
             [0, args.num_epochs * len(train_loader)],
             [args.lr_scale, 0.0])
@@ -198,7 +188,35 @@ def train():
                                                   lr_lambda=[lambda_step])
     train_gpt2(model, optimizer, scheduler, train_loader, val_loader, args,
                log_dir, logger=TableLogger(), timer=timer, writer=writer)
+    model.finalize()
 
+def get_data_loaders(args, tokenizer):
+    train_dataset = FedPersonaChat(args.dataset_dir,
+                                   tokenizer,
+                                   args.num_candidates,
+                                   args.max_history,
+                                   do_iid=args.do_iid,
+                                   num_clients=args.num_clients,
+                                   train=True)
+    val_dataset = FedPersonaChat(args.dataset_dir,
+                                 tokenizer,
+                                 args.num_candidates,
+                                 args.max_history,
+                                 train=False)
+    train_sampler = FedSampler(train_dataset,
+                               args.num_workers,
+                               args.local_batch_size)
+    train_loader = DataLoader(train_dataset,
+                              batch_sampler=train_sampler,
+                              collate_fn=personachat_collate_fn,
+                              num_workers=4)
+
+    val_batch_size = args.local_batch_size * args.num_workers
+    val_loader = DataLoader(val_dataset, batch_size=val_batch_size,
+                            collate_fn=personachat_collate_fn,
+                            shuffle=False)
+
+    return train_loader, val_loader
 
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")

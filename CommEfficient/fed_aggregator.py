@@ -12,12 +12,17 @@ import cProfile
 import ctypes
 import torch.multiprocessing as multiprocessing
 
-import functions_worker as worker
+import fed_worker as worker
 from utils import get_param_vec, set_param_vec, get_grad, _topk
 
-from line_profiler import LineProfiler
-import atexit
-profile = LineProfiler()
+#from mpi4py import MPI
+#comm = MPI.COMM_WORLD
+#rank = comm.Get_rank()
+#world_size = comm.Get_size()
+
+#from line_profiler import LineProfiler
+#import atexit
+#profile = LineProfiler()
 #atexit.register(profile.print_stats)
 
 g_client_errors = None
@@ -42,10 +47,9 @@ def profile_helper(*args):
                     )
                    )
 
-class FedCommEffModel:
-    def __init__(self, input_model, args, hook=None):
+class FedModel:
+    def __init__(self, input_model, args):
         num_clients = args.num_clients
-        participation = args.participation
         device = args.device
         cpu = "cpu"
         self.model = input_model
@@ -113,7 +117,7 @@ class FedCommEffModel:
         self.hook = hook
 
 
-    def __del__(self):
+    def finalize(self):
         self.process_pool.close()
         self.process_pool.join()
 
@@ -129,10 +133,11 @@ class FedCommEffModel:
         global g_metric
         args = self.args
 
+        # batch is a tuple, with the client ids as the first tensor
+        client_indices = batch[0]
+        batch = batch[1:]
+
         if self.training:
-            # batch is a tuple, with the client ids as the first tensor
-            client_indices = batch[0]
-            batch = batch[1:]
 
             unique_clients = torch.unique(client_indices)
 
@@ -145,7 +150,6 @@ class FedCommEffModel:
                                     for t in batch)
                               for i in unique_clients]
 
-            #self.args.lr = lr
             args_tuples = [(i, idx,
                             worker_batches[i], self.args,
                             g_criterion, g_metric, self.hook)
@@ -160,9 +164,10 @@ class FedCommEffModel:
             return split_results(results, self.args.num_results_train)
 
         else:
-            split = [t.split(self.n_worker_gpus) for t in batch]
+            split = [t.split(args.local_batch_size) for t in batch]
+            num_shards = len(split[0])
             batch_shards = [tuple(l[i] for l in split)
-                            for i in range(self.n_worker_gpus)]
+                            for i in range(num_shards)]
             args_tuples = [(batch_shard, self.args,
                             g_criterion, g_metric)
                            for batch_shard in batch_shards]
@@ -183,14 +188,14 @@ class FedCommEffModel:
                               [() for _ in range(self.args.num_workers)])
         self.model.zero_grad()
 
-class FedCommEffOptimizer(torch.optim.Optimizer):
+class FedOptimizer(torch.optim.Optimizer):
     def __init__(self, optimizer, args):
         # use the last GPU for the PS
         if args.device[:4] == "cuda":
             torch.cuda.set_device(args.num_devices-1)
         device = args.device
 
-        # this was probably already calculated in FedCommEffModel,
+        # this was probably already calculated in FedModel,
         # but just in case not, we recompute it here
         grad_size = 0
         for group in optimizer.param_groups:
@@ -256,7 +261,7 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
     def zero_grad(self):
         raise NotImplementedError("Please call zero_grad() on the model instead")
 
-class FedCommEffCriterion:
+class FedCriterion:
     def __init__(self, input_criterion, args):
         global g_criterion
         g_criterion = input_criterion
@@ -265,7 +270,7 @@ class FedCommEffCriterion:
         out = g_criterion(*args)
         return out
 
-class FedCommEffMetric:
+class FedMetric:
     def __init__(self, input_metric, args):
         global g_metric
         g_metric = input_metric
@@ -328,7 +333,7 @@ def _server_helper_true_topk(transmitted, Vvelocity, Verror, args, lr):
 
     # error feedback
     Verror[update.nonzero()] = 0
-    
+
     # momentum factor masking
     Vvelocity[update.nonzero()] = 0
 

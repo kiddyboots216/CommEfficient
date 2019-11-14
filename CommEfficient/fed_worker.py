@@ -3,7 +3,7 @@ import numpy as np
 import ctypes
 from utils import get_param_vec, set_param_vec, get_grad, _topk
 import copy
-import multiprocessing
+import torch.multiprocessing as multiprocessing
 from csvec import CSVec
 
 def init_pool(input_model, device, num_worker_gpus,
@@ -41,7 +41,6 @@ def update_forward_grad(worker_id, client_id,
     # pull PS and client weights out of the shared memory block
     grad_size = args.grad_size
     num_clients = args.num_clients
-    participation = args.participation
 
     global model
     global gw_ps_weights
@@ -147,7 +146,7 @@ def forward_grad(model, weights, batch,
         outs = model(ins)
         results = compute_loss(outs, targets, criterion, metric, True, args)
     else:
-    	microbatch_size = args.local_batch_size // args.num_train_batch_shards
+        microbatch_size = args.local_batch_size // args.num_train_batch_shards
         train_batch_size = batch[3].size()[0]
         accum_loss = None
         n_iters = train_batch_size // microbatch_size
@@ -251,8 +250,6 @@ def forward_multiprocessed(batch, args, criterion, metric):
 
 def compute_loss(outs, targets, criterion, metric, train, args):
     num_clients = args.num_clients
-    participation = args.participation
-    n_workers = int(num_clients * participation)
     loss = criterion(outs, targets)
     if train:
         loss.backward()
