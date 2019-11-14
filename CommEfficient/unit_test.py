@@ -1,9 +1,6 @@
 import torch
 import nose
-from CommEfficient.fed_sketched_classes import FedSketchedModel, FedSketchedLoss, FedSketchedOptimizer, FedSketchedWorker
-from CommEfficient.fed_param_server import FedParamServer
-from CommEfficient.functions import FedCommEffModel, FedCommEffOptimizer, \
-        FedCommEffCriterion, FedCommEffAccuracy
+from fed_aggregator import FedModel, FedOptimizer, FedCriterion, FedAccuracy
 def makeSketchers(nWeights, nWorkers, k, r, c, p2, device):
     lr = 0.005
     #model = torch.nn.Linear(nWeights, 1, bias=False).to(device)
@@ -18,9 +15,9 @@ def makeSketchers(nWeights, nWorkers, k, r, c, p2, device):
         'local_momentum': False} 
     model_cls = torch.nn.Linear
     model_config = {'in_features': nWeights, 'out_features': 1, 'bias': False}
-    fed_model = FedCommEffModel(model_cls, model_config, sketched_params)
+    fed_model = FedModel(model_cls, model_config, sketched_params)
     opt = torch.optim.SGD(fed_model.parameters(), lr=lr)
-    fed_opt = FedCommEffOptimizer(opt, sketched_params)
+    fed_opt = FedOptimizer(opt, sketched_params)
     return fed_model, fed_opt
 
 def makeData(nRows, nDims, device):
@@ -63,8 +60,8 @@ def runTest(nData, nWeights, nWorkers, k, r, c, p2,
         minibatch = [in_batch, target_batch]
         minibatches.append(minibatch)
     criterion = torch.nn.MSELoss(reduction='sum')
-    fed_criterion = FedCommEffCriterion(criterion, {})
-    fake_criterion = FedCommEffAccuracy(criterion, {})
+    fed_criterion = FedCriterion(criterion, {})
+    fake_criterion = FedAccuracy(criterion, {})
     model.train(True)
     outs, loss, acc, grads = model(minibatches, idx)
     opt.step(grads, idx)

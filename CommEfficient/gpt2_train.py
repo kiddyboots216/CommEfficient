@@ -7,7 +7,7 @@ from pytorch_transformers import (AdamW, OpenAIGPTDoubleHeadsModel,
 
 from gpt2_dataloader import get_data_loaders
 
-from CommEfficient.functions import FedCommEffOptimizer, FedCommEffCriterion, FedCommEffModel, FedCommEffMetric
+from fed_aggregator import FedOptimizer, FedCriterion, FedModel, FedMetric
 from utils import make_logdir
 from CommEfficient.minimal import PiecewiseLinear, TableLogger, Timer, union
 import torch
@@ -173,11 +173,11 @@ def train():
 
     logger.info('Finished in {:.2f} seconds'.format(timer()))
     logger.info("Initializing everything")
-    model = FedCommEffModel(model, args)
-    optimizer = FedCommEffOptimizer(optimizer, args)
+    model = FedModel(model, args)
+    optimizer = FedOptimizer(optimizer, args)
     criterion = torch.nn.CrossEntropyLoss(ignore_index=-1)
-    metric = FedCommEffMetric(criterion, args)
-    criterion = FedCommEffCriterion(criterion, args)
+    metric = FedMetric(criterion, args)
+    criterion = FedCriterion(criterion, args)
     lr_schedule = PiecewiseLinear(
             [0, args.num_epochs * len(train_loader)],
             [args.lr_scale, 0.0])

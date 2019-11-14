@@ -5,8 +5,7 @@ import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 
 from minimal import Net, Correct, union, PiecewiseLinear, Timer, TableLogger
-from functions import FedCommEffModel, FedCommEffOptimizer, \
-        FedCommEffCriterion, FedCommEffMetric
+from fed_aggregator import FedModel, FedOptimizer, FedCriterion, FedMetric
 from utils import make_logdir
 from gen_data import gen_data
 from data_utils import get_data_loaders
@@ -217,10 +216,10 @@ if __name__ == "__main__":
     accuracy = Correct()
 
     # FedComm-ify everything
-    criterion = FedCommEffCriterion(criterion, args)
-    accuracy = FedCommEffMetric(accuracy, args)
-    model = FedCommEffModel(model, args)
-    opt = FedCommEffOptimizer(opt, args)
+    criterion = FedCriterion(criterion, args)
+    accuracy = FedMetric(accuracy, args)
+    model = FedModel(model, args)
+    opt = FedOptimizer(opt, args)
 
     lr_scheduler = optim.lr_scheduler.LambdaLR(opt,
                                                lr_lambda=[lambda_step])

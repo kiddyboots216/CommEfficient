@@ -12,7 +12,7 @@ import cProfile
 import ctypes
 import torch.multiprocessing as multiprocessing
 
-import functions_worker as worker
+import fed_worker as worker
 from utils import get_param_vec, set_param_vec, get_grad, _topk
 
 #from mpi4py import MPI
@@ -47,7 +47,7 @@ def profile_helper(*args):
                     )
                    )
 
-class FedCommEffModel:
+class FedModel:
     def __init__(self, input_model, args):
         num_clients = args.num_clients
         participation = args.participation
@@ -188,14 +188,14 @@ class FedCommEffModel:
                               [() for _ in range(self.args.num_workers)])
         self.model.zero_grad()
 
-class FedCommEffOptimizer(torch.optim.Optimizer):
+class FedOptimizer(torch.optim.Optimizer):
     def __init__(self, optimizer, args):
         # use the last GPU for the PS
         if args.device[:4] == "cuda":
             torch.cuda.set_device(args.num_devices-1)
         device = args.device
 
-        # this was probably already calculated in FedCommEffModel,
+        # this was probably already calculated in FedModel,
         # but just in case not, we recompute it here
         grad_size = 0
         for group in optimizer.param_groups:
@@ -261,7 +261,7 @@ class FedCommEffOptimizer(torch.optim.Optimizer):
     def zero_grad(self):
         raise NotImplementedError("Please call zero_grad() on the model instead")
 
-class FedCommEffCriterion:
+class FedCriterion:
     def __init__(self, input_criterion, args):
         global g_criterion
         g_criterion = input_criterion
@@ -270,7 +270,7 @@ class FedCommEffCriterion:
         out = g_criterion(*args)
         return out
 
-class FedCommEffMetric:
+class FedMetric:
     def __init__(self, input_metric, args):
         global g_metric
         g_metric = input_metric
@@ -333,7 +333,7 @@ def _server_helper_true_topk(transmitted, Vvelocity, Verror, args, lr):
 
     # error feedback
     Verror[update.nonzero()] = 0
-    
+
     # momentum factor masking
     Vvelocity[update.nonzero()] = 0
 
