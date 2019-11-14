@@ -15,7 +15,7 @@ from utils import parse_args, Logger
 
 from torch.utils.data import DataLoader
 from data_utils import FedSampler
-from data_utils import personachat_collate_fn, PersonaChatDataset
+from data_utils import personachat_collate_fn, FedPersonaChat
 
 import numpy as np
 import torch.multiprocessing as multiprocessing
@@ -191,25 +191,25 @@ def train():
     model.finalize()
 
 def get_data_loaders(args, tokenizer):
-    train_dataset = PersonaChatDataset(args.dataset_dir,
-                                       tokenizer,
-                                       args.num_candidates,
-                                       args.max_history,
-                                       do_iid=args.do_iid,
-                                       num_clients=args.num_clients,
-                                       train=True)
-    val_dataset = PersonaChatDataset(args.dataset_dir,
-                                     tokenizer,
-                                     args.num_candidates,
-                                     args.max_history,
-                                     train=False)
+    train_dataset = FedPersonaChat(args.dataset_dir,
+                                   tokenizer,
+                                   args.num_candidates,
+                                   args.max_history,
+                                   do_iid=args.do_iid,
+                                   num_clients=args.num_clients,
+                                   train=True)
+    val_dataset = FedPersonaChat(args.dataset_dir,
+                                 tokenizer,
+                                 args.num_candidates,
+                                 args.max_history,
+                                 train=False)
     train_sampler = FedSampler(train_dataset,
                                args.num_workers,
                                args.local_batch_size)
     train_loader = DataLoader(train_dataset,
                               batch_sampler=train_sampler,
                               collate_fn=personachat_collate_fn,
-                              num_workers=0)
+                              num_workers=4)
 
     val_batch_size = args.local_batch_size * args.num_workers
     val_loader = DataLoader(val_dataset, batch_size=val_batch_size,

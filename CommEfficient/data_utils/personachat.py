@@ -27,7 +27,7 @@ MODEL_INPUTS = ["input_ids", "mc_token_ids", "lm_labels",
                 "mc_labels", "token_type_ids"]
 PADDED_INPUTS = ["input_ids", "lm_labels", "token_type_ids"]
 
-class PersonaChatDataset(torch.utils.data.Dataset):
+class FedPersonaChat(torch.utils.data.Dataset):
     def __init__(self, dataset_dir, tokenizer, num_candidates, max_history,
                  do_iid=False, num_clients=None, train=True,download=True):
         self.dataset_dir = dataset_dir
@@ -44,7 +44,7 @@ class PersonaChatDataset(torch.utils.data.Dataset):
         if download and not os.path.exists(dataset_dir):
             self.download_and_split_data(dataset_dir)
 
-        self.load_stats(train)
+        self._load_meta(train)
 
         if self.do_iid:
             self.iid_shuffle = np.random.permutation(len(self))
@@ -86,7 +86,7 @@ class PersonaChatDataset(torch.utils.data.Dataset):
         else:
             return len(self.dialogs_per_client)
 
-    def load_stats(self, train):
+    def _load_meta(self, train):
         with open(self.stats_fn(), "r") as f:
             stats = json.load(f)
             self.dialogs_per_client = stats["dialogs_per_client"]
@@ -186,11 +186,11 @@ class PersonaChatDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         if self.type == "train":
-            return self.get_train_item(idx)
+            return self._get_train_item(idx)
         elif self.type == "val":
-            return self.get_val_item(idx)
+            return self._get_val_item(idx)
 
-    def get_val_item(self, idx):
+    def _get_val_item(self, idx):
         cumsum = np.cumsum(self.val_utterances_per_dialog)
         dialog_id = np.searchsorted(cumsum, idx)
         idx_within_dialog = idx - cumsum[dialog_id]
@@ -204,7 +204,7 @@ class PersonaChatDataset(torch.utils.data.Dataset):
         # be used
         return (-1,) + self.utterance_to_input(personality, utterance)
 
-    def get_train_item(self, idx):
+    def _get_train_item(self, idx):
         # idx refers to an utterance, which is part of a dialog,
         # which itself belongs to a certain client
 
@@ -273,7 +273,7 @@ class PersonaChatDataset(torch.utils.data.Dataset):
         return os.path.join(self.dataset_dir, "validation.json")
 
     def stats_fn(self):
-        return os.path.join(self.dataset_dir, "train_stats.json")
+        return os.path.join(self.dataset_dir, "stats.json")
 
 def tokenize(obj, tokenizer):
     """ Recursively tokenize all strings in obj """
