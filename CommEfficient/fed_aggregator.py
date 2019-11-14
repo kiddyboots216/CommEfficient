@@ -50,7 +50,6 @@ def profile_helper(*args):
 class FedModel:
     def __init__(self, input_model, args):
         num_clients = args.num_clients
-        participation = args.participation
         device = args.device
         cpu = "cpu"
         self.model = input_model

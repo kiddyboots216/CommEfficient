@@ -41,7 +41,6 @@ def update_forward_grad(worker_id, client_id,
     # pull PS and client weights out of the shared memory block
     grad_size = args.grad_size
     num_clients = args.num_clients
-    participation = args.participation
 
     global model
     global gw_ps_weights
@@ -247,8 +246,6 @@ def forward_multiprocessed(batch, args, criterion, metric):
 
 def compute_loss(outs, targets, criterion, metric, train, args):
     num_clients = args.num_clients
-    participation = args.participation
-    n_workers = int(num_clients * participation)
     loss = criterion(outs, targets)
     if train:
         loss.backward()

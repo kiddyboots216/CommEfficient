@@ -185,7 +185,6 @@ def parse_args(default_lr):
 
 
     args = parser.parse_args()
-    args.participation = args.num_workers / args.num_clients
     args.weight_decay = args.weight_decay
 
     return args
