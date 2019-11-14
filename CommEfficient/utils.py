@@ -131,7 +131,7 @@ def parse_args(default_lr):
     parser.add_argument("--pivot_epoch", type=int, default=5)
 
     # parallelization args
-    parser.add_argument("--num_clients", type=int, default=1)
+    parser.add_argument("--num_clients", type=int)
     parser.add_argument("--num_workers", type=int, default=1)
     parser.add_argument("--balancedness", type=float, default=1.0)
     default_device = "cuda" if torch.cuda.is_available() else "cpu"
