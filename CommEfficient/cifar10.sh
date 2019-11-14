@@ -6,10 +6,20 @@ OMP_NUM_THREADS=8 python fed_train.py \
     --virtual_momentum 0.9 \
     --error_type virtual \
     --mode sketch \
-    --num_devices 4 \
-    --num_workers 4 \
+    --num_clients 1 \
+    --num_workers 1 \
+    --num_devices 1 \
     --k 50000 \
-    --num_rows 3 \
-    --num_cols 1000000 \
+    --num_rows 1 \
+    --num_cols 6500000 \
     --supervised \
-    --share_ps_gpu
+    --static_datasets \
+    --num_classes 10 \
+    --iid \
+    --share_ps_gpu \
+    --dp \
+    --ledger \
+    --l2_norm_clip 1 \
+    --epsilon 2.0 \
+    --delta 0.00001 \
+    --test \
