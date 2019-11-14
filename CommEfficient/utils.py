@@ -6,6 +6,7 @@ from datetime import datetime
 import ctypes
 import numpy as np
 from collections import namedtuple
+import torchvision
 
 class Logger:
     def debug(self, msg, args=None):
@@ -92,6 +93,10 @@ def parse_args(default_lr):
     parser.add_argument("--num_results_val", type=int, default=2)
     parser.add_argument("--supervised", action="store_true",
                         dest="is_supervised")
+    torchvision_names = torchvision.datasets.__all__
+    parser.add_argument("--dataset_name", type=str, default="",
+                        help="Name of the dataset.",
+                        choices=torchvision_names)
     parser.add_argument("--dataset_path", type=str, default="",
                         help=("Path or url of the dataset."
                               " If empty, download from the internet."))

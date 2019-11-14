@@ -1,5 +1,6 @@
 OMP_NUM_THREADS=8 python fed_train.py \
-    --dataset_path /data/drothchild/datasets/cifar10/ \
+    --dataset_path ~/github_downloads/datasets/cifar10/ \
+    --dataset_name CIFAR10 \
     --local_batch_size 128 \
     --local_momentum 0.0 \
     --virtual_momentum 0.9 \
