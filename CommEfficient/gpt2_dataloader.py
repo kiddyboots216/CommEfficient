@@ -5,7 +5,6 @@ import os
 import json
 import tarfile
 import tempfile
-import logging
 from collections import defaultdict
 from itertools import chain
 
@@ -17,6 +16,10 @@ from torch.nn.utils.rnn import pad_sequence
 
 from pytorch_transformers import cached_path
 
+from utils import Logger
+
+logger = Logger()
+
 PERSONACHAT_URL = "https://s3.amazonaws.com/datasets.huggingface.co/personachat/personachat_self_original.json"
 HF_FINETUNED_MODEL = "https://s3.amazonaws.com/models.huggingface.co/transfer-learning-chatbot/finetuned_chatbot_gpt.tar.gz"
 
@@ -24,8 +27,6 @@ SPECIAL_TOKENS = ["<bos>", "<eos>", "<speaker1>", "<speaker2>", "<pad>"]
 MODEL_INPUTS = ["input_ids", "mc_token_ids", "lm_labels",
                 "mc_labels", "token_type_ids"]
 PADDED_INPUTS = ["input_ids", "lm_labels", "token_type_ids"]
-
-logger = logging.getLogger(__file__)
 
 class PersonaChatDataset(torch.utils.data.Dataset):
     def __init__(self, dataset_dir, tokenizer, num_candidates, max_history,

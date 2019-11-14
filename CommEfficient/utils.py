@@ -5,6 +5,18 @@ from datetime import datetime
 import ctypes
 import numpy as np
 
+class Logger:
+    def debug(self, msg, args=None):
+        print(msg.format(args))
+    def info(self, msg, args=None):
+        print(msg.format(args))
+    def warn(self, msg, args=None):
+        print(msg.format(args))
+    def error(self, msg, args=None):
+        print(msg.format(args))
+    def critical(self, msg, args=None):
+        print(msg.format(args))
+
 def make_logdir(args: dict):
     rows = args.num_rows
     cols = args.num_cols

@@ -1,5 +1,4 @@
 import os
-import logging
 from pprint import pformat
 
 from pytorch_transformers import (AdamW, OpenAIGPTDoubleHeadsModel,
@@ -14,12 +13,12 @@ from CommEfficient.minimal import PiecewiseLinear, TableLogger, Timer, union
 import torch
 from torch.optim import SGD
 from torch.utils.tensorboard import SummaryWriter
-from utils import parse_args
+from utils import parse_args, Logger
 
 import numpy as np
-import multiprocessing
+import torch.multiprocessing as multiprocessing
 
-logger = logging.getLogger(__file__)
+logger = Logger()
 
 ATTR_TO_SPECIAL_TOKEN = {
                          'bos_token': '<bos>',
@@ -139,7 +138,6 @@ def run_batches(model, opt, scheduler, loader, args,
 def train():
     args = parse_args(default_lr=4e-2)
 
-    logging.basicConfig(level=logging.INFO)
     logger.info("Arguments: %s", pformat(args))
 
     timer = Timer()
@@ -188,6 +186,7 @@ def train():
                                                   lr_lambda=[lambda_step])
     train_gpt2(model, optimizer, scheduler, train_loader, val_loader, args,
                log_dir, logger=TableLogger(), timer=timer, writer=writer)
+    model.finalize()
 
 
 if __name__ == "__main__":

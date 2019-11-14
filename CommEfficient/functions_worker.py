@@ -3,7 +3,7 @@ import numpy as np
 import ctypes
 from utils import get_param_vec, set_param_vec, get_grad, _topk
 import copy
-import multiprocessing
+import torch.multiprocessing as multiprocessing
 from csvec import CSVec
 
 def init_pool(input_model, device, num_worker_gpus,

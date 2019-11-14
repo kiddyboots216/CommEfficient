@@ -117,7 +117,7 @@ class FedCommEffModel:
             )
 
 
-    def __del__(self):
+    def finalize(self):
         self.process_pool.close()
         self.process_pool.join()
 
