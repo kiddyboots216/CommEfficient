@@ -1,7 +1,7 @@
-from data_utils import split_image_data, get_cifar10, transpose
-from minimal import Timer, normalise, pad, Crop, FlipLR, Cutout, Transform, Batches, cifar10
+from minimal import split_image_data, get_cifar10, transpose
+from minimal import normalise, pad, Crop, FlipLR, Cutout, Transform, Batches, cifar10
 import numpy as np
-from utils import parse_args
+from utils import parse_args, Timer
 DATA_DIR = "sample_data"
 
 def gen_data(args):

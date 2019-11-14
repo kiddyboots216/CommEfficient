@@ -11,7 +11,6 @@ from itertools import chain
 import torch
 import numpy as np
 
-from torch.utils.data import DataLoader
 from torch.nn.utils.rnn import pad_sequence
 
 from pytorch_transformers import cached_path
@@ -53,7 +52,7 @@ class PersonaChatDataset(torch.utils.data.Dataset):
         # keep the entire val set in memory, since why not
         if self.type == "val":
             with open(self.validation_fn(), "r") as val_f:
-                self.raw_val_set = json.load(val_f)
+                self.raw_val_set = json.load(val_f)[:44]
 
     @property
     def data_per_client(self):
@@ -94,7 +93,7 @@ class PersonaChatDataset(torch.utils.data.Dataset):
             self.train_utterances_per_dialog = \
                     stats["train_utterances_per_dialog"]
             self.val_utterances_per_dialog = \
-                    stats["val_utterances_per_dialog"]
+                    stats["val_utterances_per_dialog"][:44]
 
     def download_and_split_data(self, dataset_dir):
         # download the dataset
@@ -367,7 +366,7 @@ def build_input_from_segments(persona, history, reply, tokenizer,
         instance["lm_labels"] += [-1] + sequence[-1][1:]
     return instance
 
-def collate_fn(records):
+def personachat_collate_fn(records):
     # records is a list of tuples, where each tuple contains columns
     # (client_id,) + MODEL_INPUTS
 
@@ -394,93 +393,4 @@ def collate_fn(records):
                                       for record in records]))
 
     return tuple(batch)
-
-class FedSampler:
-    """ Samples from a federated dataset
-
-    Shuffles the data order within each client, and then for every
-    batch requested, samples num_workers clients, and returns
-    local_batch_size data from each client.
-    """
-    def __init__(self, dataset, num_workers, local_batch_size,
-                 shuffle_clients=True):
-        self.dataset = dataset
-        self.num_workers = num_workers
-        self.local_batch_size = local_batch_size
-        self.shuffle_clients = shuffle_clients
-
-    def __iter__(self):
-        data_per_client = self.dataset.data_per_client
-        cumsum = np.cumsum(data_per_client)
-        cumsum = np.hstack([[0], cumsum])
-        # permute the data indices within each client
-        permuted_data = np.hstack([
-                s + np.random.permutation(u)
-                for s, u in zip(cumsum, data_per_client)
-            ])
-        # need to keep track of where we are within each client
-        cur_idx_within_client = np.zeros(self.dataset.num_clients,
-                                         dtype=int)
-        def sampler():
-            while True:
-                # only choose clients that have any data left
-                nonexhausted_clients = np.where(
-                        cur_idx_within_client < data_per_client
-                    )[0]
-                if len(nonexhausted_clients) == 0:
-                    break
-                num_workers = min(self.num_workers,
-                                  len(nonexhausted_clients))
-                # choose randomly from the clients that have data left
-                workers = np.random.choice(nonexhausted_clients,
-                                           num_workers,
-                                           replace=False)
-                # figure out how much data each chosen client has left
-                records_remaining = (data_per_client[workers]
-                                     - cur_idx_within_client[workers])
-
-                # choose up to local_batch_size elements from each worker
-                actual_batch_sizes = np.clip(records_remaining,
-                                             0,
-                                             self.local_batch_size)
-                r = np.hstack([
-                    permuted_data[s:s + actual_batch_sizes[i]]
-                    for i, s in enumerate(cumsum[workers] +
-                                          cur_idx_within_client[workers])
-                ])
-                assert r.size <= self.num_workers * self.local_batch_size
-                yield r
-                cur_idx_within_client[workers] += actual_batch_sizes
-
-        return sampler()
-
-    def __len__(self):
-        return len(self.dataset)
-
-def get_data_loaders(args, tokenizer):
-    train_dataset = PersonaChatDataset(args.dataset_dir,
-                                       tokenizer,
-                                       args.num_candidates,
-                                       args.max_history,
-                                       do_iid=args.do_iid,
-                                       num_clients=args.num_clients,
-                                       train=True)
-    val_dataset = PersonaChatDataset(args.dataset_dir,
-                                     tokenizer,
-                                     args.num_candidates,
-                                     args.max_history,
-                                     train=False)
-    train_sampler = FedSampler(train_dataset,
-                               args.num_workers,
-                               args.local_batch_size)
-    train_loader = DataLoader(train_dataset,
-                              batch_sampler=train_sampler,
-                              collate_fn=collate_fn,
-                              num_workers=4)
-
-    val_batch_size = args.local_batch_size * args.num_workers
-    val_loader = DataLoader(val_dataset, batch_size=val_batch_size,
-                            collate_fn=collate_fn, shuffle=False)
-
-    return train_loader, val_loader
 

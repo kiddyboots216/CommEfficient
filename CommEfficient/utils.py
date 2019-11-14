@@ -1,9 +1,11 @@
 import os
 import argparse
+import time
 import torch
 from datetime import datetime
 import ctypes
 import numpy as np
+from collections import namedtuple
 
 class Logger:
     def debug(self, msg, args=None):
@@ -32,6 +34,46 @@ def make_logdir(args: dict):
     logdir = os.path.join(
         'runs', current_time + '_' + clients_str + '_' + sketch_str + '_' + k_str)
     return logdir
+
+class TableLogger():
+    def append(self, output):
+        if not hasattr(self, 'keys'):
+            self.keys = output.keys()
+            print(*('{:>12s}'.format(k) for k in self.keys))
+        filtered = [output[k] for k in self.keys]
+        print(*('{:12.4f}'.format(v)
+                 if isinstance(v, np.float) or isinstance(v, np.float32) else '{:12}'.format(v)
+                for v in filtered))
+
+class TSVLogger():
+    def __init__(self):
+        self.log = ['epoch,hours,top1Accuracy']
+    def append(self, output):
+        epoch = output['epoch']
+        hours = output['total_time']/3600
+        acc = output['test_acc']*100
+        self.log.append('{},{:.8f},{:.2f}'.format(epoch, hours, acc))
+    def __str__(self):
+        return '\n'.join(self.log)
+
+union = lambda *dicts: {k: v for d in dicts for (k, v) in d.items()}
+
+class PiecewiseLinear(namedtuple('PiecewiseLinear', ('knots', 'vals'))):
+    def __call__(self, t):
+        return np.interp([t], self.knots, self.vals)[0]
+
+class Timer():
+    def __init__(self):
+        self.times = [time.time()]
+        self.total_time = 0.0
+
+    def __call__(self, include_in_total=True):
+        self.times.append(time.time())
+        delta_t = self.times[-1] - self.times[-2]
+        if include_in_total:
+            self.total_time += delta_t
+        return delta_t
+
 
 def parse_args(default_lr):
     parser = argparse.ArgumentParser()

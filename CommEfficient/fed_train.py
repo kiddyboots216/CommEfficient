@@ -4,11 +4,11 @@ import torch.optim as optim
 import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 
-from minimal import Net, Correct, union, PiecewiseLinear, Timer, TableLogger
+from models import ResNet9
 from fed_aggregator import FedModel, FedOptimizer, FedCriterion, FedMetric
-from utils import make_logdir
+from utils import make_logdir, union, PiecewiseLinear, Timer, TableLogger
 from gen_data import gen_data
-from data_utils import get_data_loaders
+from minimal import get_data_loaders
 from utils import parse_args
 
 import multiprocessing
@@ -16,6 +16,11 @@ if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
 global start_idx
 start_idx = 0
+
+# module for computing accuracy
+class Correct(nn.Module):
+    def forward(self, classifier, target):
+        return classifier.max(dim = 1)[1] == target
 
 def train(model, opt, lr_scheduler, train_loader, val_loader,
           args, writer, loggers=(), timer=None):
@@ -175,7 +180,7 @@ if __name__ == "__main__":
 
     # model class and config
     torch.random.manual_seed(21)
-    model_cls = Net
+    model_cls = ResNet9
     if args.do_test:
         model_config = {
             'channels': {'prep': 1, 'layer1': 1,
