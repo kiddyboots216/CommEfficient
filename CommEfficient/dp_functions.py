@@ -17,7 +17,7 @@ class DPHook:
         self._global_parameters = self.dp_sum_query.initial_global_state()
         self._derived_records_data = defaultdict(list)
 
-    def client_hook(grad, args):
+    def client_hook(self, grad, args):
         # NOTE: Because we're doing client level DP, we don't need to
         # microbatch. This only works for client level DP.
         record = grad
