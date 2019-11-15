@@ -11,7 +11,7 @@ from fed_aggregator import FedModel, FedOptimizer, FedCriterion, FedMetric
 from utils import make_logdir, union, PiecewiseLinear, Timer, TableLogger
 from utils import parse_args
 from data_utils import FedCIFAR10, FedSampler
-from data_utils import cifar_train_transforms, cifar_test_transforms
+from data_utils import cifar_train_transforms, cifar_test_transforms, Correct
 
 import torch.multiprocessing as multiprocessing
 if __name__ == "__main__":
@@ -21,11 +21,6 @@ from line_profiler import LineProfiler
 import atexit
 profile = LineProfiler()
 #atexit.register(profile.print_stats)
-
-# module for computing accuracy
-class Correct(nn.Module):
-    def forward(self, classifier, target):
-        return classifier.max(dim = 1)[1] == target
 
 def train(model, opt, lr_scheduler, train_loader, test_loader,
           args, writer, loggers=(), timer=None):
