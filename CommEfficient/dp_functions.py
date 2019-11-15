@@ -54,6 +54,8 @@ class DPHook:
 
 class DPGaussianHook(DPHook):
     def __init__(self, args):
+        if args.num_clients is None:
+            args.num_clients = args.num_workers
         args.participation = args.num_workers / args.num_clients
         args.noise_multiplier = (8 * args.participation ** 2 * args.l2_norm_clip ** 2 * np.log(1.25 / args.delta)) / (args.epsilon ** 2 * args.num_clients ** 2)
         dp_sum_query = GaussianSumQuery(args.l2_norm_clip, args.noise_multiplier)

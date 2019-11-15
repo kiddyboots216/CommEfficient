@@ -412,7 +412,6 @@ def _server_helper_sketched(transmitted, Vvelocity, Verror, args, lr):
 def get_lr(optimizer_param_groups):
     if len(optimizer_param_groups) == 1:
         lr = optimizer_param_groups[0]["lr"]
-        #print(f"Lr is {lr}")
         return lr
 
 def split_results(results, n_results):

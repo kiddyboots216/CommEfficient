@@ -8,7 +8,7 @@ OMP_NUM_THREADS=8 python fed_train.py \
     --mode sketch \
     --num_clients 1 \
     --num_workers 1 \
-    --num_devices 1 \
+    --num_devices 8 \
     --k 50000 \
     --num_rows 1 \
     --num_cols 6500000 \
@@ -17,7 +17,6 @@ OMP_NUM_THREADS=8 python fed_train.py \
     --num_classes 10 \
     --iid \
     --share_ps_gpu \
-    --dp \
     --ledger \
     --l2_norm_clip 1 \
     --epsilon 2.0 \

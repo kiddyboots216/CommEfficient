@@ -127,8 +127,6 @@ def get_new_worker_weights(ps_weights, worker_weights, args):
         weight_update = diff_vec
 
     new_worker_weights = worker_weights + weight_update
-    #print(f"{torch.norm(weight_update, 2)}")
-    #print(f"{updated_vec} = {client_weights} + {weight_update}")
     return new_worker_weights
 
 def forward_grad(model, weights, batch,
@@ -160,7 +158,6 @@ def forward_grad(model, weights, batch,
                 mc_labels=mc_labels, lm_labels=lm_labels
             )
             loss = (lm_loss * args.lm_coef + mc_loss * args.mc_coef) / args.num_train_batch_shards
-            #print(f"Loss: {loss} from {lm_loss} and {mc_loss}")
             loss.backward()
             # TODO: Make sure this is ok for GPT2
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_norm * args.num_workers)
@@ -168,7 +165,6 @@ def forward_grad(model, weights, batch,
                 accum_loss += loss
             else:
                 accum_loss = loss
-            #print(f"accum loss: {accum_loss} from {loss}")
         if accum_loss is not None:
             loss = accum_loss.item()/max(args.num_train_batch_shards, 1)
         else:
@@ -283,7 +279,6 @@ def forward_grad_gpt2(model, weights, batch, criterion,
             mc_labels=mc_labels, lm_labels=lm_labels
         )
         loss = (lm_loss * args.lm_coef + mc_loss * args.mc_coef) / args.num_train_batch_shards
-        #print(f"Loss: {loss} from {lm_loss} and {mc_loss}")
         loss.backward()
         # TODO: Make sure this is ok for GPT2
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_norm * args.num_workers)
@@ -291,8 +286,6 @@ def forward_grad_gpt2(model, weights, batch, criterion,
             accum_loss += loss
         else:
             accum_loss = loss
-        #print(f"accum loss: {accum_loss} from {loss}")
-    #print(f"accum loss: {accum_loss}")
     grad = get_grad(model, weights, args)
     # compress the gradient if needed
     if args.mode == "sketch":
