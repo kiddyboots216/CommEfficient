@@ -1,5 +1,5 @@
 OMP_NUM_THREADS=8 python fed_train.py \
-    --dataset_path ~/github_downloads/datasets/cifar10/ \
+    --dataset_path /data/ashwineep/datasets \
     --dataset_name CIFAR10 \
     --local_batch_size 128 \
     --local_momentum 0.0 \
@@ -13,3 +13,6 @@ OMP_NUM_THREADS=8 python fed_train.py \
     --num_cols 1000000 \
     --supervised \
     --share_ps_gpu
+    --static_datasets \
+    --num_classes 10 \
+    --iid \
