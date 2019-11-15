@@ -11,7 +11,7 @@ from fed_aggregator import FedModel, FedOptimizer, FedCriterion, FedMetric
 from utils import make_logdir, union, PiecewiseLinear, Timer, TableLogger
 from utils import parse_args
 from dp_functions import DPGaussianHook
-from data_utils import FedCIFAR10, FedSampler, FedFactory
+from data_utils import FedSampler, FedFactory
 from data_utils import cifar_train_transforms, cifar_test_transforms
 
 import torch.multiprocessing as multiprocessing

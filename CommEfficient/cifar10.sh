@@ -1,7 +1,7 @@
 OMP_NUM_THREADS=8 python fed_train.py \
-    --dataset_path ~/github_downloads/datasets/cifar10/ \
+    --dataset_path /data/ashwineep/datasets/ \
     --dataset_name CIFAR10 \
-    --local_batch_size 128 \
+    --local_batch_size 512 \
     --local_momentum 0.0 \
     --virtual_momentum 0.9 \
     --error_type virtual \

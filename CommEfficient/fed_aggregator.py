@@ -48,7 +48,7 @@ def profile_helper(*args):
                    )
 
 class FedModel:
-    def __init__(self, input_model, args):
+    def __init__(self, input_model, args, hook):
         num_clients = args.num_clients
         device = args.device
         cpu = "cpu"
