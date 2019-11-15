@@ -154,7 +154,7 @@ class FedFactory(torch.utils.data.Dataset):
         target = client_id
 
         if self.do_iid:
-            cumsum = np.cumsum(self.images_per_client)
+            cumsum = np.cumsum(self.data_per_client)
             client_id = np.searchsorted(cumsum, orig_idx, side="right")
 
         return client_id, raw_image, target
