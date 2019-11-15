@@ -14,8 +14,6 @@ from data_utils import FedCIFAR10, FedSampler
 from data_utils import cifar_train_transforms, cifar_test_transforms, Correct
 
 import torch.multiprocessing as multiprocessing
-if __name__ == "__main__":
-    multiprocessing.set_start_method("spawn")
 
 from line_profiler import LineProfiler
 import atexit
@@ -97,18 +95,22 @@ def get_data_loaders(args):
 
     train_loader = DataLoader(train_dataset,
                               batch_sampler=train_sampler,
-                              num_workers=0)
+                              num_workers=0,
+                              pin_memory=True)
     test_batch_size = args.local_batch_size * args.num_workers
     test_loader = DataLoader(test_dataset,
                              batch_size=test_batch_size,
                              shuffle=False,
-                             num_workers=0)
+                             num_workers=0,
+                             pin_memory=True)
 
     return train_loader, test_loader
 
 
 if __name__ == "__main__":
     args = parse_args(default_lr=0.4)
+    multiprocessing.set_start_method("spawn")
+
     timer = Timer()
 
     # model class and config
