@@ -42,7 +42,7 @@ g_num_valid_workers = 0
 def profile_helper(*args):
     cProfile.runctx("worker.update_forward_grad(*args)",
                     globals(), locals(),
-                    "profile/cifar_ltk.{:d}.prof".format(
+                    "profile/cifar_fedsampler.{:d}.prof".format(
                         multiprocessing.current_process()._identity[0]
                     )
                    )
@@ -51,9 +51,8 @@ class FedModel:
     def __init__(self, input_model, args):
         num_clients = args.num_clients
         device = args.device
-        cpu = "cpu"
         self.model = input_model
-        param_vec = get_param_vec(self.model, cpu)
+        param_vec = get_param_vec(self.model, "cpu")
         grad_size = 0
         for p in self.model.parameters():
             if p.requires_grad:
