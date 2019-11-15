@@ -1,1 +1,2 @@
-from .resnet9 import ResNet9
+from .resnet9 import *
+from .fixup_resnet9 import *

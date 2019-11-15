@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+__all__ = ["ResNet9"]
+
 class Mul(nn.Module):
     def __init__(self, weight):
         super().__init__()

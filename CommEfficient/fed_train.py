@@ -6,7 +6,8 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
-from models import ResNet9
+from models import ResNet9, FixupResNet9
+from fixup.cifar.models import fixup_resnet56
 from fed_aggregator import FedModel, FedOptimizer, FedCriterion, FedMetric
 from utils import make_logdir, union, PiecewiseLinear, Timer, TableLogger
 from utils import parse_args
@@ -108,9 +109,10 @@ def get_data_loaders(args):
 
 
 if __name__ == "__main__":
-    args = parse_args(default_lr=0.4)
     multiprocessing.set_start_method("spawn")
 
+    args = parse_args(default_lr=0.4)
+    #args = parse_args(default_lr=0.2)
     timer = Timer()
 
     # model class and config
@@ -130,6 +132,8 @@ if __name__ == "__main__":
                 'channels': {'prep': 64, 'layer1': 128,
                 'layer2': 256, 'layer3': 512},
         }
+
+    # comment out for Fixup
     model_config["iid"] = args.do_iid
 
 
@@ -148,10 +152,13 @@ if __name__ == "__main__":
 
     # instantiate ALL the things
     model = ResNet9(**model_config)
+    #model = FixupResNet9(**model_config)
+    #model = fixup_resnet56()
     opt = optim.SGD(model.parameters(), lr=1)
     # whether args.grad_reduction is median or mean,
     # each worker still means gradients locally
     criterion = torch.nn.CrossEntropyLoss(reduction='mean')
+
     accuracy = Correct()
 
     # Fed-ify everything
