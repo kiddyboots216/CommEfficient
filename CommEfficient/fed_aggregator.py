@@ -20,9 +20,9 @@ from utils import get_param_vec, set_param_vec, get_grad, _topk
 #rank = comm.Get_rank()
 #world_size = comm.Get_size()
 
-from line_profiler import LineProfiler
-import atexit
-profile = LineProfiler()
+#from line_profiler import LineProfiler
+#import atexit
+#profile = LineProfiler()
 #atexit.register(profile.print_stats)
 
 g_client_errors = None
