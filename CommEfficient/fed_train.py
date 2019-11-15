@@ -141,7 +141,7 @@ if __name__ == "__main__":
     # workers are combined
     # so the lr is multiplied by num_workers for mean and median
     batch_size = args.local_batch_size * args.num_workers
-    steps_per_epoch = len(train_loader) / batch_size
+    steps_per_epoch = np.ceil(len(train_loader) / batch_size)
     lambda_step = lambda step: (lr_schedule(step / steps_per_epoch))
 
     # instantiate ALL the things
