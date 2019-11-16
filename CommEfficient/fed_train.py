@@ -5,13 +5,14 @@ from torch.optim.lr_scheduler import LambdaLR
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+import torchvision
 
 from models import ResNet9, FixupResNet9
 from fixup.cifar.models import fixup_resnet56
 from fed_aggregator import FedModel, FedOptimizer, FedCriterion, FedMetric
 from utils import make_logdir, union, PiecewiseLinear, Timer, TableLogger
 from utils import parse_args
-from data_utils import FedCIFAR10, FedSampler, FedFactory
+from data_utils import FedCIFAR10, FedSampler, FedDataset
 from data_utils import cifar_train_transforms, cifar_test_transforms, Correct
 
 import torch.multiprocessing as multiprocessing
@@ -84,11 +85,12 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
     return np.mean(losses), np.mean(accs)
 
 def get_data_loaders(args):
-    train_dataset = FedFactory(args.dataset_name, args.dataset_path, cifar_train_transforms,
-                               args.do_iid, args.num_clients,
-                               train=True, download=True)
-    test_dataset = FedFactory(args.dataset_name, args.dataset_path, cifar_test_transforms,
-                              train=False)
+    dataset_class = getattr(torchvision.datasets, args.dataset_name)
+    train_dataset = FedDataset(dataset_class, args.dataset_path,
+                               cifar_train_transforms, args.do_iid,
+                               args.num_clients, train=True, download=True)
+    test_dataset = FedDataset(dataset_class, args.dataset_path,
+                              cifar_test_transforms, train=False)
 
     train_sampler = FedSampler(train_dataset,
                                args.num_workers,
