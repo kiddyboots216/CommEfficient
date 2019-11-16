@@ -8,6 +8,9 @@ from torchvision import transforms
 
 from PIL import Image
 
+__all__ = ["FedCIFAR10", "cifar_train_transforms",
+           "cifar_test_transforms", "Correct"]
+
 # module for computing accuracy
 class Correct(torch.nn.Module):
     def forward(self, classifier, target):

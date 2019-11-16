@@ -38,6 +38,7 @@ def zero_grad():
 def update_forward_grad(worker_id, client_id,
                         batch, args, criterion, metric):
 
+    zero_grad()
     # pull PS and client weights out of the shared memory block
     grad_size = args.grad_size
     num_clients = args.num_clients

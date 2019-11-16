@@ -8,6 +8,8 @@ from torchvision import transforms
 
 from PIL import Image
 
+__all__ = ["FedDataset"]
+
 class FedDataset(torch.utils.data.Dataset):
     def __init__(self, dataset_class, dataset_dir, transform=None,
                  do_iid=False, num_clients=None,
@@ -70,7 +72,6 @@ class FedDataset(torch.utils.data.Dataset):
 
     def download_and_split_data(self):
         os.makedirs(self.dataset_dir, exist_ok=True)
-        # TODO: Maybe this should be in a try-except?
         vanilla_train = self.dataset_class(self.dataset_dir,
                                            train=True,
                                            download=True)

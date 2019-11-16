@@ -71,7 +71,7 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
             else:
                 lr_scheduler.step()
             opt.step()
-            model.zero_grad()
+            #model.zero_grad()
             losses.extend(loss)
             accs.extend(acc)
             if args.do_test:

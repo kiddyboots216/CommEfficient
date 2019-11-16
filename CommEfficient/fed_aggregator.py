@@ -6,6 +6,7 @@ from csvec import CSVec
 import copy
 import time
 import math
+import warnings
 
 import cProfile
 
@@ -182,8 +183,10 @@ class FedModel:
             return getattr(self.model, name)
 
     def zero_grad(self):
+        warnings.warn("workers already zero out their gradient by " +
+                      "necessity before every forward pass")
         self.process_pool.starmap(worker.zero_grad,
-                              [() for _ in range(self.args.num_workers)])
+                              [() for _ in range(self.n_worker_gpus)])
         self.model.zero_grad()
 
 class FedOptimizer(torch.optim.Optimizer):
