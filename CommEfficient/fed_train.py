@@ -5,28 +5,23 @@ from torch.optim.lr_scheduler import LambdaLR
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+import torchvision
 
-from models import ResNet9
+from models import ResNet9, FixupResNet9
+from fixup.cifar.models import fixup_resnet56
 from fed_aggregator import FedModel, FedOptimizer, FedCriterion, FedMetric
 from utils import make_logdir, union, PiecewiseLinear, Timer, TableLogger
 from utils import parse_args
 from dp_functions import DPGaussianHook
 from data_utils import FedSampler, FedFactory
-from data_utils import cifar_train_transforms, cifar_test_transforms
+from data_utils import cifar_train_transforms, cifar_test_transforms, Correct
 
 import torch.multiprocessing as multiprocessing
-if __name__ == "__main__":
-    multiprocessing.set_start_method("spawn")
 
 #from line_profiler import LineProfiler
 #import atexit
 #profile = LineProfiler()
 #atexit.register(profile.print_stats)
-
-# module for computing accuracy
-class Correct(nn.Module):
-    def forward(self, classifier, target):
-        return classifier.max(dim = 1)[1] == target
 
 def train(model, opt, lr_scheduler, train_loader, test_loader,
           args, writer, loggers=(), timer=None):
@@ -77,7 +72,7 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
             else:
                 lr_scheduler.step()
             opt.step()
-            model.zero_grad()
+            #model.zero_grad()
             losses.extend(loss)
             accs.extend(acc)
             if args.do_test:
@@ -91,11 +86,12 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
     return np.mean(losses), np.mean(accs)
 
 def get_data_loaders(args):
-    train_dataset = FedFactory(args.dataset_name, args.dataset_path, cifar_train_transforms,
-                               args.do_iid, args.num_clients,
-                               train=True, download=True)
-    test_dataset = FedFactory(args.dataset_name, args.dataset_path, cifar_test_transforms,
-                              train=False)
+    dataset_class = getattr(torchvision.datasets, args.dataset_name)
+    train_dataset = FedDataset(dataset_class, args.dataset_path,
+                               cifar_train_transforms, args.do_iid,
+                               args.num_clients, train=True, download=True)
+    test_dataset = FedDataset(dataset_class, args.dataset_path,
+                              cifar_test_transforms, train=False)
 
     train_sampler = FedSampler(train_dataset,
                                args.num_workers,
@@ -103,18 +99,23 @@ def get_data_loaders(args):
 
     train_loader = DataLoader(train_dataset,
                               batch_sampler=train_sampler,
-                              num_workers=0)
+                              num_workers=0,
+                              pin_memory=True)
     test_batch_size = args.local_batch_size * args.num_workers
     test_loader = DataLoader(test_dataset,
                              batch_size=test_batch_size,
                              shuffle=False,
-                             num_workers=0)
+                             num_workers=0,
+                             pin_memory=True)
 
     return train_loader, test_loader
 
 
 if __name__ == "__main__":
+    multiprocessing.set_start_method("spawn")
+
     args = parse_args(default_lr=0.4)
+    #args = parse_args(default_lr=0.2)
     timer = Timer()
 
     # model class and config
@@ -134,6 +135,8 @@ if __name__ == "__main__":
                 'channels': {'prep': 64, 'layer1': 128,
                 'layer2': 256, 'layer3': 512},
         }
+
+    # comment out for Fixup
     model_config["iid"] = args.do_iid
 
 
@@ -147,15 +150,18 @@ if __name__ == "__main__":
     # workers are combined
     # so the lr is multiplied by num_workers for mean and median
     batch_size = args.local_batch_size * args.num_workers
-    steps_per_epoch = len(train_loader) / batch_size
+    steps_per_epoch = np.ceil(len(train_loader) / batch_size)
     lambda_step = lambda step: (lr_schedule(step / steps_per_epoch))
 
     # instantiate ALL the things
     model = ResNet9(**model_config)
+    #model = FixupResNet9(**model_config)
+    #model = fixup_resnet56()
     opt = optim.SGD(model.parameters(), lr=1)
     # whether args.grad_reduction is median or mean,
     # each worker still means gradients locally
     criterion = torch.nn.CrossEntropyLoss(reduction='mean')
+
     accuracy = Correct()
 
     # Fed-ify everything

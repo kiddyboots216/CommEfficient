@@ -6,6 +6,7 @@ from csvec import CSVec
 import copy
 import time
 import math
+import warnings
 
 import cProfile
 
@@ -42,7 +43,7 @@ g_num_valid_workers = 0
 def profile_helper(*args):
     cProfile.runctx("worker.update_forward_grad(*args)",
                     globals(), locals(),
-                    "profile/cifar_ltk.{:d}.prof".format(
+                    "profile/cifar_fedsampler.{:d}.prof".format(
                         multiprocessing.current_process()._identity[0]
                     )
                    )
@@ -51,9 +52,8 @@ class FedModel:
     def __init__(self, input_model, args, hook):
         num_clients = args.num_clients
         device = args.device
-        cpu = "cpu"
         self.model = input_model
-        param_vec = get_param_vec(self.model, cpu)
+        param_vec = get_param_vec(self.model, "cpu")
         grad_size = 0
         for p in self.model.parameters():
             if p.requires_grad:
@@ -184,8 +184,10 @@ class FedModel:
             return getattr(self.model, name)
 
     def zero_grad(self):
+        warnings.warn("workers already zero out their gradient by " +
+                      "necessity before every forward pass")
         self.process_pool.starmap(worker.zero_grad,
-                              [() for _ in range(self.args.num_workers)])
+                              [() for _ in range(self.n_worker_gpus)])
         self.model.zero_grad()
 
 class FedOptimizer(torch.optim.Optimizer):

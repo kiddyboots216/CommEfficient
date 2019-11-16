@@ -8,6 +8,9 @@ from torchvision import transforms
 
 from PIL import Image
 
+__all__ = ["FedCIFAR10", "cifar_train_transforms",
+           "cifar_test_transforms", "Correct"]
+
 # module for computing accuracy
 class Correct(torch.nn.Module):
     def forward(self, classifier, target):
@@ -24,7 +27,6 @@ class FedCIFAR10(torch.utils.data.Dataset):
 
         if not do_iid and num_clients is not None:
             raise ValueErorr("can't specify # clients when non-iid")
-        self._nm_clients = num_clients
 
         if download and not os.path.exists(dataset_dir):
             self.download_and_split_data(dataset_dir)
@@ -156,7 +158,7 @@ class FedCIFAR10(torch.utils.data.Dataset):
         target = client_id
 
         if self.do_iid:
-            cumsum = np.cumsum(self.images_per_client)
+            cumsum = np.cumsum(self.data_per_client)
             client_id = np.searchsorted(cumsum, orig_idx, side="right")
 
         return client_id, raw_image, target

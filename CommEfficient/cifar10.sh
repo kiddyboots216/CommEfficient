@@ -1,3 +1,4 @@
+#OMP_NUM_THREADS=8 python -m cProfile -o profile/cifar_fedsampler.pstats fed_train.py \
 OMP_NUM_THREADS=8 python fed_train.py \
     --dataset_path /data/ashwineep/datasets/ \
     --dataset_name CIFAR10 \
@@ -21,4 +22,3 @@ OMP_NUM_THREADS=8 python fed_train.py \
     --l2_norm_clip 1 \
     --epsilon 2.0 \
     --delta 0.00001 \
-    --test \
