@@ -248,7 +248,7 @@ class FedOptimizer(torch.optim.Optimizer):
         # on the worker momentum vectors for true_topk
         # which we can't do in the worker because we don't know the
         # global topk yet
-        if self.args.mode == "true_topk" and args.local_momentum > 0:
+        if self.args.mode == "true_topk" and self.args.local_momentum > 0:
             global g_client_velocities
             rows = torch.arange(g_num_valid_workers).view(-1,1)
             g_client_velocities[rows, weight_update.nonzero()[:,0]].zero_()
