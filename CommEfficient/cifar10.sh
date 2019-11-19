@@ -2,23 +2,22 @@
 OMP_NUM_THREADS=8 python fed_train.py \
     --dataset_path /data/ashwineep/datasets/ \
     --dataset_name CIFAR10 \
-    --local_batch_size 512 \
+    --local_batch_size 64 \
     --local_momentum 0.0 \
     --virtual_momentum 0.9 \
     --error_type virtual \
-    --mode sketch \
-    --num_clients 1 \
-    --num_workers 1 \
+    --mode true_topk \
+    --num_clients 800 \
+    --num_workers 8 \
     --num_devices 8 \
-    --k 50000 \
+    --k 6500000 \
     --num_rows 1 \
-    --num_cols 6500000 \
+    --num_cols 650000 \
     --supervised \
-    --static_datasets \
-    --num_classes 10 \
     --iid \
     --share_ps_gpu \
     --ledger \
     --l2_norm_clip 1 \
     --epsilon 2.0 \
     --delta 0.00001 \
+    --dp \

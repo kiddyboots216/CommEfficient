@@ -7,13 +7,13 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import torchvision
 
-from models import ResNet9, FixupResNet9
-from fixup.cifar.models import fixup_resnet56
+from models import ResNet9
+#from fixup.cifar.models import fixup_resnet56
 from fed_aggregator import FedModel, FedOptimizer, FedCriterion, FedMetric
 from utils import make_logdir, union, PiecewiseLinear, Timer, TableLogger
 from utils import parse_args
 from dp_functions import DPGaussianHook
-from data_utils import FedSampler, FedFactory
+from data_utils import FedSampler, FedDataset
 from data_utils import cifar_train_transforms, cifar_test_transforms, Correct
 
 import torch.multiprocessing as multiprocessing
