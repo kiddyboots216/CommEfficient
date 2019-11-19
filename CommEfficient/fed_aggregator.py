@@ -220,7 +220,19 @@ class FedOptimizer(torch.optim.Optimizer):
         self.Verror = torch.zeros(shape).to(device)
 
     def get_lr(self):
-        return get_lr(self.param_groups)
+        # return a scalar if all params have the same LR
+        if len(self.param_groups) == 1:
+            return self.param_groups[0]["lr"]
+
+        # if there are multiple param groups, then each group may
+        # have a different learning rate
+        lr_vec = []
+        for group in self.param_groups:
+            lr = group["lr"]
+            for p in group["params"]:
+                if p.requires_grad:
+                    lr_vec.append(torch.ones_like(p.view(-1)).float() * lr)
+        return torch.cat(lr_vec).to(self.args.device)
 
     #@profile
     def step(self):
@@ -409,12 +421,6 @@ def _server_helper_sketched(transmitted, Vvelocity, Verror, args, lr):
     Vvelocity[nz[:,0], nz[:,1]].zero_()
 
     return update * lr, Vvelocity, Verror
-
-def get_lr(optimizer_param_groups):
-    if len(optimizer_param_groups) == 1:
-        lr = optimizer_param_groups[0]["lr"]
-        #print(f"Lr is {lr}")
-        return lr
 
 def split_results(results, n_results):
     return [np.array([r[i] for r in results]) for i in range(n_results)]
