@@ -27,7 +27,8 @@ def train(model, opt, lr_scheduler, train_loader, val_loader,
     if isinstance(train_loader, np.ndarray):
         run = run_batches_fed
     for epoch in range(args.num_epochs):
-        args.lr_epoch = lr_schedule(epoch)
+        # args.lr_epoch = lr_schedule(epoch)
+        args.lr_epoch = 0.1/args.batch_size
         train_loss, train_acc = run(model, opt, lr_scheduler,
             train_loader, True, args)
         train_time = timer()
