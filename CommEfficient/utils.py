@@ -1,9 +1,24 @@
 import os
 import argparse
+import time
 import torch
 from datetime import datetime
 import ctypes
 import numpy as np
+from collections import namedtuple
+import torchvision
+
+class Logger:
+    def debug(self, msg, args=None):
+        print(msg.format(args))
+    def info(self, msg, args=None):
+        print(msg.format(args))
+    def warn(self, msg, args=None):
+        print(msg.format(args))
+    def error(self, msg, args=None):
+        print(msg.format(args))
+    def critical(self, msg, args=None):
+        print(msg.format(args))
 
 def make_logdir(args: dict):
     rows = args.num_rows
@@ -20,6 +35,46 @@ def make_logdir(args: dict):
     logdir = os.path.join(
         'runs', current_time + '_' + clients_str + '_' + sketch_str + '_' + k_str)
     return logdir
+
+class TableLogger():
+    def append(self, output):
+        if not hasattr(self, 'keys'):
+            self.keys = output.keys()
+            print(*('{:>12s}'.format(k) for k in self.keys))
+        filtered = [output[k] for k in self.keys]
+        print(*('{:12.4f}'.format(v)
+                 if isinstance(v, np.float) or isinstance(v, np.float32) else '{:12}'.format(v)
+                for v in filtered))
+
+class TSVLogger():
+    def __init__(self):
+        self.log = ['epoch,hours,top1Accuracy']
+    def append(self, output):
+        epoch = output['epoch']
+        hours = output['total_time']/3600
+        acc = output['test_acc']*100
+        self.log.append('{},{:.8f},{:.2f}'.format(epoch, hours, acc))
+    def __str__(self):
+        return '\n'.join(self.log)
+
+union = lambda *dicts: {k: v for d in dicts for (k, v) in d.items()}
+
+class PiecewiseLinear(namedtuple('PiecewiseLinear', ('knots', 'vals'))):
+    def __call__(self, t):
+        return np.interp([t], self.knots, self.vals)[0]
+
+class Timer():
+    def __init__(self):
+        self.times = [time.time()]
+        self.total_time = 0.0
+
+    def __call__(self, include_in_total=True):
+        self.times.append(time.time())
+        delta_t = self.times[-1] - self.times[-2]
+        if include_in_total:
+            self.total_time += delta_t
+        return delta_t
+
 
 def parse_args(default_lr):
     parser = argparse.ArgumentParser()
@@ -38,11 +93,15 @@ def parse_args(default_lr):
     parser.add_argument("--num_results_val", type=int, default=2)
     parser.add_argument("--supervised", action="store_true",
                         dest="is_supervised")
+    torchvision_names = torchvision.datasets.__all__
+    parser.add_argument("--dataset_name", type=str, default="",
+                        help="Name of the dataset.",
+                        choices=torchvision_names)
     parser.add_argument("--dataset_path", type=str, default="",
                         help=("Path or url of the dataset."
                               " If empty, download from the internet."))
-    parser.add_argument("--dataset_cache", type=str,
-                        default='./dataset_cache',
+    parser.add_argument("--dataset_dir", type=str,
+                        default='./dataset',
                         help="Path or url of the dataset cache")
 
     # compression args
@@ -77,8 +136,8 @@ def parse_args(default_lr):
     parser.add_argument("--pivot_epoch", type=int, default=5)
 
     # parallelization args
-    parser.add_argument("--num_clients", type=int, default=1)
-    parser.add_argument("--participation", type=float, default=1.0)
+    parser.add_argument("--num_clients", type=int)
+    parser.add_argument("--num_workers", type=int, default=1)
     parser.add_argument("--balancedness", type=float, default=1.0)
     default_device = "cuda" if torch.cuda.is_available() else "cpu"
     parser.add_argument("--device", type=str, choices=["cpu", "cuda"],
@@ -90,6 +149,7 @@ def parse_args(default_lr):
     parser.add_argument("--num_local_iters", type=int, default=1)
     parser.add_argument("--local_sched", action="store_true", dest="use_local_sched")
     parser.add_argument("--share_ps_gpu", action="store_true")
+    parser.add_argument("--iid", action="store_true", dest="do_iid")
 
     # GPT2 args
     parser.add_argument("--num_dialogs", type=int, default=1)
@@ -100,7 +160,7 @@ def parse_args(default_lr):
     parser.add_argument("--max_history", type=int, default=2,
                         help=("Number of previous exchanges to keep"
                               " in history"))
-    parser.add_argument("--train_batch_size", type=int, default=8,
+    parser.add_argument("--local_batch_size", type=int, default=8,
                         help="Batch size for training")
     parser.add_argument("--valid_batch_size", type=int, default=8,
                         help="Batch size for validation")
@@ -138,10 +198,9 @@ def parse_args(default_lr):
 
 
     args = parser.parse_args()
-    args.num_workers = int(args.num_clients * args.participation)
     args.weight_decay = args.weight_decay
     # args.iid = args.num_classes == 10
-    args.iid = True
+    # args.iid = True
 
     return args
 
@@ -160,14 +219,11 @@ def _topk(vec, k):
         ret[rows, topkIndices] = vec[rows, topkIndices]
     return ret
 
-def get_grad(model, weights, args, train=True, device='cpu'):
-    if train:
-        grad_vec = get_grad_vec(model)
-        if args.weight_decay != 0:
-            grad_vec.add_(args.weight_decay / args.num_workers, weights)
-        return grad_vec.to(device)
-    else:
-        return 0
+def get_grad(model, weights, args):
+    grad_vec = get_grad_vec(model)
+    if args.weight_decay != 0:
+        grad_vec.add_(args.weight_decay / args.num_workers, weights)
+    return grad_vec.to(args.device)
 
 def get_grad_vec(model):
     grad_vec = []

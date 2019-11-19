@@ -3,17 +3,17 @@ import numpy as np
 import ctypes
 from utils import get_param_vec, set_param_vec, get_grad, _topk
 import copy
-import multiprocessing
+import torch.multiprocessing as multiprocessing
 from csvec import CSVec
 
 def init_pool(input_model, device, num_worker_gpus,
-              worker_errors, worker_velocities,
+              client_errors, client_velocities,
               worker_transmitted, client_weights, ps_weights):
     global model
     global gw_ps_weights
     global gw_client_weights
-    global gw_worker_errors
-    global gw_worker_velocities
+    global gw_client_errors
+    global gw_client_velocities
     global gw_worker_transmitted
 
     # use the first num_worker_gpus gpus
@@ -27,8 +27,8 @@ def init_pool(input_model, device, num_worker_gpus,
     model.to(device)
     gw_ps_weights = ps_weights
     gw_client_weights = client_weights
-    gw_worker_velocities = worker_velocities
-    gw_worker_errors = worker_errors
+    gw_client_velocities = client_velocities
+    gw_client_errors = client_errors
     gw_worker_transmitted = worker_transmitted
 
 def zero_grad():
@@ -38,16 +38,16 @@ def zero_grad():
 def update_forward_grad(worker_id, client_id,
                         batch, args, criterion, metric):
 
+    zero_grad()
     # pull PS and client weights out of the shared memory block
     grad_size = args.grad_size
     num_clients = args.num_clients
-    participation = args.participation
 
     global model
     global gw_ps_weights
     global gw_client_weights
-    global gw_worker_velocities
-    global gw_worker_errors
+    global gw_client_velocities
+    global gw_client_errors
     global gw_worker_transmitted
 
     mal_update_flag = False
@@ -66,58 +66,49 @@ def update_forward_grad(worker_id, client_id,
         new_worker_weights = ps_weights
 
     # g is a (possibly compressed) gradient
-    if args.model == "gpt2":
-        f = forward_grad_gpt2
-    else:
-        f = forward_grad
-    g, results = f(
+    g, results = forward_grad(
             model, new_worker_weights,
             batch, criterion, metric, args, mal_update_flag
         )
 
     # figure out what to send, and store it in the transmitted
     # shared tensor in spot worker_id
-    """
-    elif args.mode == "local_topk":
-        worker_topk_shape = (args.num_workers, args.k)
-        worker_topk_i = sm2np(gw_worker_topk_i_sm, worker_topk_shape,
-                              dtype=ctypes.c_long)
-        worker_topk_v = sm2np(gw_worker_topk_v_sm, worker_topk_shape)
-        worker_topk_i[worker_id,:] = g[1].cpu().numpy()[:]
-        worker_topk_v[worker_id,:] = g[2].cpu().numpy()[:]
-
-        # store the full gradient too (which is in g[0])
-        # so the server can do error accumulation
-        worker_grads_shape = (args.num_workers, args.grad_size)
-        worker_grads = sm2np(gw_worker_grads_sm, worker_grads_shape)
-        worker_grads[worker_id,:] = g[0].cpu().numpy()[:]
-    """
-
-    # get SM arrays as np arrays
-    worker_velocity = gw_worker_velocities[client_id]
-    worker_error = gw_worker_errors[client_id]
+    # get our specific local velocity/local error/transmitted vectors
+    velocity = None
+    error = None
+    if gw_client_velocities is not None:
+        velocity = gw_client_velocities[client_id]
+    if gw_client_errors is not None:
+        error = gw_client_errors[client_id]
     transmitted = gw_worker_transmitted[worker_id]
 
-    # do local momentum & error accumulation
     g = g.cpu()
-    # this does worker_velocity[:] = m * worker_velocity + g, but twice
-    # as fast
-    torch.add(g, worker_velocity, alpha=args.local_momentum,
-              out=worker_velocity)
+
+    # if needed, do local momentum
+    # this does velocity[:] = m * velocity + g,
+    # but twice as fast
+    if args.local_momentum > 0:
+        torch.add(g, velocity, alpha=args.local_momentum,
+                  out=velocity)
+
+    # if needed, do local error correction
     if args.error_type == "local":
-        worker_error += worker_velocity
-        to_transmit = worker_error
+        error += velocity if velocity is not None else g
+        to_transmit = error
     else:
-        to_transmit = worker_velocity
+        to_transmit = velocity if velocity is not None else g
 
     if args.mode == "local_topk":
+        assert args.error_type == "local"
         # topk is impossibly slow on CPU, very fast on GPU
         to_transmit = _topk(to_transmit.to(args.device), k=args.k).cpu()
         nz = to_transmit.nonzero()
         # error feedback
-        worker_error[nz] = 0
-        # momentum factor masking
-        worker_velocity[nz] = 0
+        error[nz] = 0
+
+        # if we're doing local momentum, do momentum factor masking
+        if args.local_momentum > 0:
+            velocity[nz] = 0
 
     transmitted[:] = to_transmit
 
@@ -156,7 +147,37 @@ def forward_grad(model, weights, batch,
         ins, targets = batch
         outs = model(ins)
         results = compute_loss(outs, targets, criterion, metric, True, args)
-    grad = get_grad(model, weights, args, train=True, device=device)
+    else:
+        microbatch_size = args.local_batch_size // args.num_train_batch_shards
+        train_batch_size = batch[3].size()[0]
+        accum_loss = None
+        n_iters = train_batch_size // microbatch_size
+        for i in range(n_iters):
+            start = i * microbatch_size
+            end = (i+1) * microbatch_size
+            microbatch = [b[start:end] for b in batch]
+            input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids = microbatch
+            (lm_loss), (mc_loss), *_ = model(
+                input_ids, token_type_ids=token_type_ids, mc_token_ids=mc_token_ids,
+                mc_labels=mc_labels, lm_labels=lm_labels
+            )
+            loss = (lm_loss * args.lm_coef + mc_loss * args.mc_coef) / args.num_train_batch_shards
+            #print(f"Loss: {loss} from {lm_loss} and {mc_loss}")
+            loss.backward()
+            # TODO: Make sure this is ok for GPT2
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_norm * args.num_workers)
+            if accum_loss is not None:
+                accum_loss += loss
+            else:
+                accum_loss = loss
+            #print(f"accum loss: {accum_loss} from {loss}")
+        if accum_loss is not None:
+            loss = accum_loss.item()/max(args.num_train_batch_shards, 1)
+        else:
+            loss = 0
+        results = [loss]
+
+    grad = get_grad(model, weights, args)
 
     # compress the gradient if needed
     if args.mode == "sketch":
@@ -205,7 +226,7 @@ def forward_multiprocessed(batch, args, criterion, metric):
         results = compute_loss(outs, targets, criterion, metric, False, args)
     else:
         batch = tuple(input_tensor.to(device) for input_tensor in batch)
-        microbatch_size = args.batch_size // (args.num_workers * args.num_train_batch_shards)
+        microbatch_size = args.local_batch_size // args.num_train_batch_shards
         accum_loss = None
         accum_acc = None
         val_batch_size = batch[3].size()[0]
@@ -232,8 +253,6 @@ def forward_multiprocessed(batch, args, criterion, metric):
 
 def compute_loss(outs, targets, criterion, metric, train, args):
     num_clients = args.num_clients
-    participation = args.participation
-    n_workers = int(num_clients * participation)
     loss = criterion(outs, targets)
     if train:
         loss.backward()
@@ -251,7 +270,7 @@ def forward_grad_gpt2(model, weights, batch, criterion,
     weights = weights.to(device)
     set_param_vec(model, weights)
     batch = tuple(input_tensor.to(device) for input_tensor in batch)
-    microbatch_size = args.batch_size // (args.num_workers * args.num_train_batch_shards)
+    microbatch_size = args.local_batch_size // args.num_train_batch_shards
     train_batch_size = batch[3].size()[0]
     accum_loss = None
     n_iters = train_batch_size // microbatch_size

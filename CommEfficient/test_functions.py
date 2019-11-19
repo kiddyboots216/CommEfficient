@@ -1,4 +1,4 @@
-from functions import FedCommEffModel, FedCommEffOptimizer, FedCommEffCriterion, FedCommEffAccuracy
+from fed_aggregator import FedModel, FedOptimizer, FedCriterion, FedAccuracy
 import torch
 import ray
 
@@ -49,12 +49,12 @@ if __name__ == "__main__":
     minibatch = [xs, ys]
     minibatches = [minibatch for _ in range(n_clients)]
     idx = [i for i in range(n_clients)]
-    model = FedCommEffModel(model_cls, model_config, params)
+    model = FedModel(model_cls, model_config, params)
     optimizer = torch.optim.SGD(model.parameters(), lr=1)
-    opt = FedCommEffOptimizer(optimizer, params)
+    opt = FedOptimizer(optimizer, params)
     criterion = torch.nn.MSELoss()
-    comm_criterion = FedCommEffCriterion(criterion, params)
-    fake_acc = FedCommEffAccuracy(criterion, params)
+    comm_criterion = FedCriterion(criterion, params)
+    fake_acc = FedAccuracy(criterion, params)
     scheduler = torch.optim.lr_scheduler.LambdaLR(opt, 
             lambda x: x)
     for _ in range(epochs):
