@@ -7,8 +7,9 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import torchvision
 
-from models import ResNet9, FixupResNet9
-from fixup.cifar.models import fixup_resnet56
+from models import ResNet9, FixupResNet9#, fixup_resnet56, FixupResNet
+#from fixup.cifar.models import fixup_resnet56
+from fixup.imagenet.models.fixup_resnet_imagenet import FixupResNet, FixupBasicBlock, fixup_resnet50
 from fed_aggregator import FedModel, FedOptimizer, FedCriterion, FedMetric
 from utils import make_logdir, union, PiecewiseLinear, Timer, TableLogger
 from utils import parse_args
@@ -113,8 +114,15 @@ def get_data_loaders(args):
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
 
-    args = parse_args(default_lr=0.4)
-    #args = parse_args(default_lr=0.2)
+    # fixup
+    #args = parse_args(default_lr=0.4)
+
+    # fixup_resnet50
+    #args = parse_args(default_lr=0.002)
+
+    # fixupresnet9
+    args = parse_args(default_lr=0.06)
+
     timer = Timer()
 
     # model class and config
@@ -136,27 +144,33 @@ if __name__ == "__main__":
         }
 
     # comment out for Fixup
-    model_config["iid"] = args.do_iid
+    #model_config["iid"] = args.do_iid
 
 
     # make data loaders
     train_loader, test_loader = get_data_loaders(args)
 
-    # set up learning rate stuff
-    lr_schedule = PiecewiseLinear([0, args.pivot_epoch, args.num_epochs],
-                                  [0, args.lr_scale, 0])
-    # grad_reduction only controlls how gradients from different
-    # workers are combined
-    # so the lr is multiplied by num_workers for mean and median
-    batch_size = args.local_batch_size * args.num_workers
-    steps_per_epoch = np.ceil(len(train_loader) / batch_size)
-    lambda_step = lambda step: (lr_schedule(step / steps_per_epoch))
-
     # instantiate ALL the things
-    model = ResNet9(**model_config)
-    #model = FixupResNet9(**model_config)
+    #model = ResNet9(**model_config)
+    #opt = optim.SGD(model.parameters(), lr=1)
+
+    model = FixupResNet9(**model_config)
     #model = fixup_resnet56()
-    opt = optim.SGD(model.parameters(), lr=1)
+    #model = FixupResNet(None, [9, 9, 9])
+    #model = FixupResNet(FixupBasicBlock, [0, 1, 0, 1], num_classes=10)
+    #model = fixup_resnet50()
+    params_bias = [p[1] for p in model.named_parameters()
+                        if 'bias' in p[0]]
+    params_scale = [p[1] for p in model.named_parameters()
+                         if 'scale' in p[0]]
+    params_other = [p[1] for p in model.named_parameters()
+                         if not ('bias' in p[0] or 'scale' in p[0])]
+    opt = optim.SGD([
+            {"params": params_bias, "lr": 0.1},
+            {"params": params_scale, "lr": 0.1},
+            {"params": params_other, "lr": 1}
+        ], lr=1)
+
     # whether args.grad_reduction is median or mean,
     # each worker still means gradients locally
     criterion = torch.nn.CrossEntropyLoss(reduction='mean')
@@ -169,7 +183,17 @@ if __name__ == "__main__":
     model = FedModel(model, args)
     opt = FedOptimizer(opt, args)
 
-    lr_scheduler = LambdaLR(opt, lr_lambda=[lambda_step])
+    # set up learning rate stuff
+    lr_schedule = PiecewiseLinear([0, args.pivot_epoch, args.num_epochs],
+                                  [0, args.lr_scale, 0])
+
+    # grad_reduction only controls how gradients from different
+    # workers are combined
+    # so the lr is multiplied by num_workers for both mean and median
+    batch_size = args.local_batch_size * args.num_workers
+    steps_per_epoch = np.ceil(len(train_loader) / batch_size)
+    lambda_step = lambda step: lr_schedule(step / steps_per_epoch)
+    lr_scheduler = LambdaLR(opt, lr_lambda=lambda_step)
 
     # set up output
     log_dir = make_logdir(args)
