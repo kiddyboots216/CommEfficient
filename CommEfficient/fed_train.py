@@ -178,8 +178,8 @@ if __name__ == "__main__":
     accuracy = Correct()
 
     # Fed-ify everything
-    criterion = FedCriterion(criterion, args)
-    accuracy = FedMetric(accuracy, args)
+    criterion = FedCriterion(criterion)
+    accuracy = FedMetric(accuracy)
     model = FedModel(model, args)
     opt = FedOptimizer(opt, args)
 

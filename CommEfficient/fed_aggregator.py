@@ -275,7 +275,7 @@ class FedOptimizer(torch.optim.Optimizer):
         raise NotImplementedError("Please call zero_grad() on the model instead")
 
 class FedCriterion:
-    def __init__(self, input_criterion, args):
+    def __init__(self, input_criterion):
         global g_criterion
         g_criterion = input_criterion
     def __call__(self, *args):
@@ -284,7 +284,7 @@ class FedCriterion:
         return out
 
 class FedMetric:
-    def __init__(self, input_metric, args):
+    def __init__(self, input_metric):
         global g_metric
         g_metric = input_metric
     def __call__(self, *args):
