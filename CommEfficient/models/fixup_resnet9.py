@@ -5,7 +5,7 @@ import numpy as np
 
 from fixup.cifar.models.fixup_resnet_cifar import FixupBasicBlock, conv3x3
 
-__all__ = ["FixupResNet9", "fixup_resnet56", "FixupResNet"]
+__all__ = ["FixupResNet9"]
 
 class FixupLayer(nn.Module):
     """ conv, bias, relu, pool, followed by num_blocks FixupBasicBlocks """
