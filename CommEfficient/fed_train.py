@@ -13,8 +13,8 @@ from fixup.imagenet.models.fixup_resnet_imagenet import FixupResNet, FixupBasicB
 from fed_aggregator import FedModel, FedOptimizer, FedCriterion, FedMetric
 from utils import make_logdir, union, PiecewiseLinear, Timer, TableLogger
 from utils import parse_args
-from data_utils import FedCIFAR10, FedSampler, FedDataset
-from data_utils import cifar_train_transforms, cifar_test_transforms, Correct
+from data_utils import FedSampler, FedDataset
+from data_utils import cifar_train_transforms, cifar_test_transforms
 
 import torch.multiprocessing as multiprocessing
 
@@ -22,6 +22,11 @@ import torch.multiprocessing as multiprocessing
 #import atexit
 #profile = LineProfiler()
 #atexit.register(profile.print_stats)
+
+# module for computing accuracy
+class Correct(torch.nn.Module):
+    def forward(self, classifier, target):
+        return classifier.max(dim = 1)[1] == target
 
 def train(model, opt, lr_scheduler, train_loader, test_loader,
           args, writer, loggers=(), timer=None):
