@@ -221,7 +221,19 @@ class FedOptimizer(torch.optim.Optimizer):
         self.Verror = torch.zeros(shape).to(device)
 
     def get_lr(self):
-        return get_lr(self.param_groups)
+        # return a scalar if all params have the same LR
+        if len(self.param_groups) == 1:
+            return self.param_groups[0]["lr"]
+
+        # if there are multiple param groups, then each group may
+        # have a different learning rate
+        lr_vec = []
+        for group in self.param_groups:
+            lr = group["lr"]
+            for p in group["params"]:
+                if p.requires_grad:
+                    lr_vec.append(torch.ones_like(p.view(-1)).float() * lr)
+        return torch.cat(lr_vec).to(self.args.device)
 
     #@profile
     def step(self):
@@ -264,7 +276,7 @@ class FedOptimizer(torch.optim.Optimizer):
         raise NotImplementedError("Please call zero_grad() on the model instead")
 
 class FedCriterion:
-    def __init__(self, input_criterion, args):
+    def __init__(self, input_criterion):
         global g_criterion
         g_criterion = input_criterion
     def __call__(self, *args):
@@ -273,7 +285,7 @@ class FedCriterion:
         return out
 
 class FedMetric:
-    def __init__(self, input_metric, args):
+    def __init__(self, input_metric):
         global g_metric
         g_metric = input_metric
     def __call__(self, *args):
@@ -410,11 +422,6 @@ def _server_helper_sketched(transmitted, Vvelocity, Verror, args, lr):
     Vvelocity[nz[:,0], nz[:,1]].zero_()
 
     return update * lr, Vvelocity, Verror
-
-def get_lr(optimizer_param_groups):
-    if len(optimizer_param_groups) == 1:
-        lr = optimizer_param_groups[0]["lr"]
-        return lr
 
 def split_results(results, n_results):
     return [np.array([r[i] for r in results]) for i in range(n_results)]

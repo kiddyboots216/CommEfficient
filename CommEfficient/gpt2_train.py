@@ -178,8 +178,8 @@ def train():
     model = FedModel(model, args)
     optimizer = FedOptimizer(optimizer, args)
     criterion = torch.nn.CrossEntropyLoss(ignore_index=-1)
-    metric = FedMetric(criterion, args)
-    criterion = FedCriterion(criterion, args)
+    metric = FedMetric(criterion)
+    criterion = FedCriterion(criterion)
     lr_schedule = PiecewiseLinear(
             [0, args.num_epochs * len(train_loader)],
             [args.lr_scale, 0.0])

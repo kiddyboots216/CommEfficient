@@ -17,6 +17,8 @@ from pytorch_transformers import cached_path
 
 from utils import Logger
 
+__all__ = ["FedPersonaChat", "personachat_collate_fn"]
+
 logger = Logger()
 
 PERSONACHAT_URL = "https://s3.amazonaws.com/datasets.huggingface.co/personachat/personachat_self_original.json"
