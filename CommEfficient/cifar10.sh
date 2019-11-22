@@ -7,8 +7,8 @@ OMP_NUM_THREADS=8 python fed_train.py \
     --virtual_momentum 0.9 \
     --error_type virtual \
     --mode true_topk \
-    --num_clients 800 \
-    --num_workers 8 \
+    --num_clients 8000 \
+    --num_workers 80 \
     --num_devices 8 \
     --k 6500000 \
     --num_rows 1 \
