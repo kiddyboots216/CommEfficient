@@ -7,14 +7,13 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import torchvision
 
-from models import ResNet9, FixupResNet9#, fixup_resnet56, FixupResNet
-#from fixup.cifar.models import fixup_resnet56
+from models import configs
+import models
+from fixup.cifar.models import fixup_resnet56
 from fixup.imagenet.models.fixup_resnet_imagenet import FixupResNet, FixupBasicBlock, fixup_resnet50
 from fed_aggregator import FedModel, FedOptimizer, FedCriterion, FedMetric
-from utils import make_logdir, union, PiecewiseLinear, Timer, TableLogger
-from utils import parse_args
-from data_utils import FedSampler, FedDataset
-from data_utils import cifar_train_transforms, cifar_test_transforms
+from utils import make_logdir, union, Timer, TableLogger, parse_args
+from data_utils import FedSampler, FedDataset, cifar_train_transforms, cifar_test_transforms
 
 import torch.multiprocessing as multiprocessing
 
@@ -118,6 +117,12 @@ def get_data_loaders(args):
 
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
+    
+    args = parse_args()
+    config_class = getattr(configs, args.model + "Config")
+    config = config_class()
+    config.set_args(args)
+    print(args)
 
     # fixup
     #args = parse_args(default_lr=0.4)
@@ -126,7 +131,7 @@ if __name__ == "__main__":
     #args = parse_args(default_lr=0.002)
 
     # fixupresnet9
-    args = parse_args(default_lr=0.06)
+    #args = parse_args(default_lr=0.06)
 
     timer = Timer()
 
@@ -159,7 +164,8 @@ if __name__ == "__main__":
     #model = ResNet9(**model_config)
     #opt = optim.SGD(model.parameters(), lr=1)
 
-    model = FixupResNet9(**model_config)
+    model_cls = getattr(models, args.model)
+    model = model_cls(**config.model_config)
     #model = fixup_resnet56()
     #model = FixupResNet(None, [9, 9, 9])
     #model = FixupResNet(FixupBasicBlock, [0, 1, 0, 1], num_classes=10)
@@ -189,8 +195,9 @@ if __name__ == "__main__":
     opt = FedOptimizer(opt, args)
 
     # set up learning rate stuff
-    lr_schedule = PiecewiseLinear([0, args.pivot_epoch, args.num_epochs],
-                                  [0, args.lr_scale, 0])
+    #lr_schedule = PiecewiseLinear([0, args.pivot_epoch, args.num_epochs],
+    #                              [0, args.lr_scale, 0])
+    lr_schedule = config.lr_schedule
 
     # grad_reduction only controls how gradients from different
     # workers are combined

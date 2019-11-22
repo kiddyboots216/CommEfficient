@@ -8,6 +8,8 @@ import numpy as np
 from collections import namedtuple
 import torchvision
 
+import models
+
 class Logger:
     def debug(self, msg, args=None):
         print(msg.format(args))
@@ -59,10 +61,6 @@ class TSVLogger():
 
 union = lambda *dicts: {k: v for d in dicts for (k, v) in d.items()}
 
-class PiecewiseLinear(namedtuple('PiecewiseLinear', ('knots', 'vals'))):
-    def __call__(self, t):
-        return np.interp([t], self.knots, self.vals)[0]
-
 class Timer():
     def __init__(self):
         self.times = [time.time()]
@@ -76,7 +74,7 @@ class Timer():
         return delta_t
 
 
-def parse_args(default_lr):
+def parse_args(default_lr=None):
     parser = argparse.ArgumentParser()
 
     # meta-args
@@ -85,10 +83,11 @@ def parse_args(default_lr):
     parser.add_argument("--mode", choices=modes, default="sketch")
 
     # data/model args
-    parser.add_argument("--static_datasets", action="store_true")
-    parser.add_argument("--num_classes", type=int, default=10)
     parser.add_argument("--num_data", type=int, default=50000)
-    parser.add_argument("--model", default="resnet9")
+    model_names = models.__all__
+    parser.add_argument("--model", default="resnet9",
+                        help="Name of the model.",
+                        choices=model_names)
     parser.add_argument("--num_results_train", type=int, default=2)
     parser.add_argument("--num_results_val", type=int, default=2)
     parser.add_argument("--supervised", action="store_true",
@@ -138,7 +137,6 @@ def parse_args(default_lr):
     # parallelization args
     parser.add_argument("--num_clients", type=int)
     parser.add_argument("--num_workers", type=int, default=1)
-    parser.add_argument("--balancedness", type=float, default=1.0)
     default_device = "cuda" if torch.cuda.is_available() else "cpu"
     parser.add_argument("--device", type=str, choices=["cpu", "cuda"],
                         default=default_device,
@@ -190,7 +188,6 @@ def parse_args(default_lr):
 
 
     args = parser.parse_args()
-    args.weight_decay = args.weight_decay
 
     return args
 
