@@ -22,12 +22,17 @@ class ResNet9Config(ModelConfig):
                 'layer2': 256, 'layer3': 512},
         }
         self.lr_scale = 0.4
+        self.batch_size = 512
+        self.weight_decay = 5e-4
+        self.set_lr_schedule()
+
+    def set_lr_schedule(self):
         self.lr_schedule = PiecewiseLinear([0, 5, 24],
                                   [0, self.lr_scale, 0])
-        self.batch_size = 512,
-        self.weight_decay = 5e-4
 
 class FixupResNet9Config(ResNet9Config):
     def __init__(self):
-        self.lr_scale = 0.06
         super().__init__()
+        self.lr_scale = 0.06
+        # Override lr schedule set by ResNet9Config
+        self.set_lr_schedule()
