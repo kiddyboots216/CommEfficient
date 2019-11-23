@@ -85,7 +85,7 @@ def parse_args(default_lr=None):
     # data/model args
     parser.add_argument("--num_data", type=int, default=50000)
     model_names = models.__all__
-    parser.add_argument("--model", default="resnet9",
+    parser.add_argument("--model", default="ResNet9",
                         help="Name of the model.",
                         choices=model_names)
     parser.add_argument("--num_results_train", type=int, default=2)
