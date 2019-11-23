@@ -1,5 +1,7 @@
 import numpy as np
 
+__all__ = ["FedSampler"]
+
 class FedSampler:
     """ Samples from a federated dataset
 

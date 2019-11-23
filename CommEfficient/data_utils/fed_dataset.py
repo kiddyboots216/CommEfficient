@@ -8,10 +8,13 @@ from torchvision import transforms
 
 from PIL import Image
 
-class FedFactory(torch.utils.data.Dataset):
-    def __init__(self, dataset_name, dataset_dir, transform=None, do_iid=False,
-                 num_clients=None, train=True, download=True):
-        self.dataset_name = dataset_name
+__all__ = ["FedDataset"]
+
+class FedDataset(torch.utils.data.Dataset):
+    def __init__(self, dataset_class, dataset_dir, transform=None,
+                 do_iid=False, num_clients=None,
+                 train=True, download=True):
+        self.dataset_class = dataset_class
         self.dataset_dir = dataset_dir
         self.transform = transform
         self.do_iid = do_iid
@@ -20,7 +23,6 @@ class FedFactory(torch.utils.data.Dataset):
 
         if not do_iid and num_clients is not None:
             raise ValueErorr("can't specify # clients when non-iid")
-        self._nm_clients = num_clients
 
         if download and not os.path.exists(self.dataset_dir):
             self.download_and_split_data()
@@ -69,15 +71,12 @@ class FedFactory(torch.utils.data.Dataset):
 
     def download_and_split_data(self):
         os.makedirs(self.dataset_dir, exist_ok=True)
-        # TODO: Maybe this should be in a try-except?
-        dataset_factory = getattr(datasets, self.dataset_name)
-
-        vanilla_train = dataset_factory(self.dataset_dir,
-                                                 train=True,
-                                                 download=True)
-        vanilla_test = dataset_factory(self.dataset_dir,
-                                                train=False,
-                                                download=True)
+        vanilla_train = self.dataset_class(self.dataset_dir,
+                                           train=True,
+                                           download=True)
+        vanilla_test = self.dataset_class(self.dataset_dir,
+                                          train=False,
+                                          download=True)
 
         train_images = vanilla_train.data
         train_targets = np.array(vanilla_train.targets)

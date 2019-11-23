@@ -6,6 +6,7 @@ from csvec import CSVec
 import copy
 import time
 import math
+import warnings
 
 import cProfile
 
@@ -42,7 +43,7 @@ g_num_valid_workers = 0
 def profile_helper(*args):
     cProfile.runctx("worker.update_forward_grad(*args)",
                     globals(), locals(),
-                    "profile/cifar_ltk.{:d}.prof".format(
+                    "profile/cifar_fedsampler.{:d}.prof".format(
                         multiprocessing.current_process()._identity[0]
                     )
                    )
@@ -51,9 +52,8 @@ class FedModel:
     def __init__(self, input_model, args):
         num_clients = args.num_clients
         device = args.device
-        cpu = "cpu"
         self.model = input_model
-        param_vec = get_param_vec(self.model, cpu)
+        param_vec = get_param_vec(self.model, "cpu")
         grad_size = 0
         for p in self.model.parameters():
             if p.requires_grad:
@@ -183,8 +183,10 @@ class FedModel:
             return getattr(self.model, name)
 
     def zero_grad(self):
+        warnings.warn("workers already zero out their gradient by " +
+                      "necessity before every forward pass")
         self.process_pool.starmap(worker.zero_grad,
-                              [() for _ in range(self.args.num_workers)])
+                              [() for _ in range(self.n_worker_gpus)])
         self.model.zero_grad()
 
 class FedOptimizer(torch.optim.Optimizer):
@@ -218,7 +220,19 @@ class FedOptimizer(torch.optim.Optimizer):
         self.Verror = torch.zeros(shape).to(device)
 
     def get_lr(self):
-        return get_lr(self.param_groups)
+        # return a scalar if all params have the same LR
+        if len(self.param_groups) == 1:
+            return self.param_groups[0]["lr"]
+
+        # if there are multiple param groups, then each group may
+        # have a different learning rate
+        lr_vec = []
+        for group in self.param_groups:
+            lr = group["lr"]
+            for p in group["params"]:
+                if p.requires_grad:
+                    lr_vec.append(torch.ones_like(p.view(-1)).float() * lr)
+        return torch.cat(lr_vec).to(self.args.device)
 
     #@profile
     def step(self):
@@ -246,7 +260,7 @@ class FedOptimizer(torch.optim.Optimizer):
         # on the worker momentum vectors for true_topk
         # which we can't do in the worker because we don't know the
         # global topk yet
-        if self.args.mode == "true_topk" and args.local_momentum > 0:
+        if self.args.mode == "true_topk" and self.args.local_momentum > 0:
             global g_client_velocities
             rows = torch.arange(g_num_valid_workers).view(-1,1)
             g_client_velocities[rows, weight_update.nonzero()[:,0]].zero_()
@@ -261,7 +275,7 @@ class FedOptimizer(torch.optim.Optimizer):
         raise NotImplementedError("Please call zero_grad() on the model instead")
 
 class FedCriterion:
-    def __init__(self, input_criterion, args):
+    def __init__(self, input_criterion):
         global g_criterion
         g_criterion = input_criterion
     def __call__(self, *args):
@@ -270,7 +284,7 @@ class FedCriterion:
         return out
 
 class FedMetric:
-    def __init__(self, input_metric, args):
+    def __init__(self, input_metric):
         global g_metric
         g_metric = input_metric
     def __call__(self, *args):
@@ -407,12 +421,6 @@ def _server_helper_sketched(transmitted, Vvelocity, Verror, args, lr):
     Vvelocity[nz[:,0], nz[:,1]].zero_()
 
     return update * lr, Vvelocity, Verror
-
-def get_lr(optimizer_param_groups):
-    if len(optimizer_param_groups) == 1:
-        lr = optimizer_param_groups[0]["lr"]
-        #print(f"Lr is {lr}")
-        return lr
 
 def split_results(results, n_results):
     return [np.array([r[i] for r in results]) for i in range(n_results)]

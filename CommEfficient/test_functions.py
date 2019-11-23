@@ -53,8 +53,8 @@ if __name__ == "__main__":
     optimizer = torch.optim.SGD(model.parameters(), lr=1)
     opt = FedOptimizer(optimizer, params)
     criterion = torch.nn.MSELoss()
-    comm_criterion = FedCriterion(criterion, params)
-    fake_acc = FedAccuracy(criterion, params)
+    comm_criterion = FedCriterion(criterion)
+    fake_acc = FedAccuracy(criterion)
     scheduler = torch.optim.lr_scheduler.LambdaLR(opt, 
             lambda x: x)
     for _ in range(epochs):
