@@ -132,6 +132,8 @@ def parse_args(default_lr=None):
                         help="How to combine gradients from workers")
     parser.add_argument("--lr_scale", type=float, default=default_lr)
     parser.add_argument("--pivot_epoch", type=int, default=5)
+    parser.add_argument("--mixup_alpha", type=float, default=1)
+    parser.add_argument("--mixup", action="store_true", dest="do_mixup")
 
     # parallelization args
     parser.add_argument("--num_clients", type=int)
