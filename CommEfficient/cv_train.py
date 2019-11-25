@@ -11,7 +11,7 @@ from models import configs
 import models
 from fixup.cifar.models import fixup_resnet56
 from fixup.imagenet.models.fixup_resnet_imagenet import FixupResNet, FixupBasicBlock, fixup_resnet50
-from fed_aggregator import FedModel, FedOptimizer, FedCriterion, FedMetric
+from fed_aggregator import FedModel, FedOptimizer
 from utils import make_logdir, union, Timer, TableLogger, parse_args
 from data_utils import FedSampler, FedDataset, cifar_train_transforms, cifar_test_transforms
 
@@ -25,7 +25,17 @@ import torch.multiprocessing as multiprocessing
 # module for computing accuracy
 class Correct(torch.nn.Module):
     def forward(self, classifier, target):
-        return classifier.max(dim = 1)[1] == target
+        return (classifier.max(dim = 1)[1] == target).float().mean()
+
+accuracy_metric = Correct()
+criterion = torch.nn.CrossEntropyLoss(reduction='mean')
+
+def compute_loss(model, batch, args):
+    images, targets = batch
+    pred = model(images)
+    loss = criterion(pred, targets)
+    accuracy = accuracy_metric(pred, targets)
+    return loss, accuracy
 
 def train(model, opt, lr_scheduler, train_loader, test_loader,
           args, writer, loggers=(), timer=None):
@@ -118,12 +128,6 @@ def get_data_loaders(args):
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
     
-    args = parse_args()
-    config_class = getattr(configs, args.model + "Config")
-    config = config_class()
-    config.set_args(args)
-    print(args)
-
     # fixup
     #args = parse_args(default_lr=0.4)
 
@@ -132,6 +136,13 @@ if __name__ == "__main__":
 
     # fixupresnet9
     #args = parse_args(default_lr=0.06)
+
+    args = parse_args()
+    config_class = getattr(configs, args.model + "Config")
+    config = config_class()
+    config.set_args(args)
+    print(args)
+
 
     timer = Timer()
 
@@ -184,14 +195,9 @@ if __name__ == "__main__":
 
     # whether args.grad_reduction is median or mean,
     # each worker still means gradients locally
-    criterion = torch.nn.CrossEntropyLoss(reduction='mean')
-
-    accuracy = Correct()
 
     # Fed-ify everything
-    criterion = FedCriterion(criterion)
-    accuracy = FedMetric(accuracy)
-    model = FedModel(model, args)
+    model = FedModel(model, compute_loss, args)
     opt = FedOptimizer(opt, args)
 
     # set up learning rate stuff
