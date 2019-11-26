@@ -3,19 +3,19 @@ import numpy as np
 import torch.optim as optim
 from torch.optim.lr_scheduler import LambdaLR
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import torchvision
 
-from dp_functions import DPGaussianHook
-from models import ResNet9, #FixupResNet9, fixup_resnet56, FixupResNet
-#from fixup.cifar.models import fixup_resnet56
-#from fixup.imagenet.models.fixup_resnet_imagenet import FixupResNet, FixupBasicBlock, fixup_resnet50
-from fed_aggregator import FedModel, FedOptimizer, FedCriterion, FedMetric
-from utils import make_logdir, union, PiecewiseLinear, Timer, TableLogger
-from utils import parse_args
-from data_utils import FedSampler, FedDataset
-from data_utils import cifar_train_transforms, cifar_test_transforms
+from models import configs
+import models
+from fixup.cifar.models import fixup_resnet56
+from fixup.cifar.utils import mixup_data
+from fixup.imagenet.models.fixup_resnet_imagenet import FixupResNet, FixupBasicBlock, fixup_resnet50
+from fed_aggregator import FedModel, FedOptimizer
+from utils import make_logdir, union, Timer, TableLogger, parse_args
+from data_utils import FedSampler, FedDataset, cifar_train_transforms, cifar_test_transforms
 
 import torch.multiprocessing as multiprocessing
 
@@ -27,7 +27,54 @@ import torch.multiprocessing as multiprocessing
 # module for computing accuracy
 class Correct(torch.nn.Module):
     def forward(self, classifier, target):
-        return classifier.max(dim = 1)[1] == target
+        return (classifier.max(dim = 1)[1] == target).float().mean()
+
+def criterion_helper(outputs, target, lam):
+    ce = -F.log_softmax(outputs, dim=1)
+    mixed = torch.zeros_like(outputs).scatter_(
+                1, target.data.view(-1, 1), lam.view(-1, 1)
+            )
+    return (ce * mixed).sum(dim=1).mean()
+
+def mixup_criterion(outputs, y_a, y_b, lam):
+    return (criterion_helper(outputs, y_a, lam)
+            + criterion_helper(outputs, y_b, 1 - lam))
+
+# whether args.grad_reduction is median or mean,
+# each worker still means gradients locally
+ce_criterion = torch.nn.CrossEntropyLoss(reduction='mean')
+
+accuracy_metric = Correct()
+
+def compute_loss_mixup(model, batch, args):
+    images, targets = batch
+    inputs, targets_a, targets_b, lam = mixup_data(
+            images, targets, args.mixup_alpha,
+            use_cuda="cuda" in args.device
+        )
+    outputs = model(inputs)
+    pred = torch.max(outputs, 1)[1]
+    loss = mixup_criterion(outputs, targets_a, targets_b, lam)
+    correct = (lam * pred.eq(targets_a)
+               + (1 - lam) * pred.eq(targets_b)).float().sum()
+    accuracy = correct / targets.size()[0]
+    return loss, accuracy
+
+def compute_loss_ce(model, batch, args):
+    images, targets = batch
+    pred = model(images)
+    loss = ce_criterion(pred, targets)
+    accuracy = accuracy_metric(pred, targets)
+    return loss, accuracy
+
+def compute_loss_train(model, batch, args):
+    if args.do_mixup:
+        return compute_loss_mixup(model, batch, args)
+    else:
+        return compute_loss_ce(model, batch, args)
+
+def compute_loss_val(model, batch, args):
+    return compute_loss_ce(model, batch, args)
 
 def train(model, opt, lr_scheduler, train_loader, test_loader,
           args, writer, loggers=(), timer=None):
@@ -127,7 +174,14 @@ if __name__ == "__main__":
     #args = parse_args(default_lr=0.002)
 
     # fixupresnet9
-    args = parse_args(default_lr=0.06)
+    #args = parse_args(default_lr=0.06)
+
+    args = parse_args()
+    config_class = getattr(configs, args.model + "Config")
+    config = config_class()
+    config.set_args(args)
+    print(args)
+
 
     timer = Timer()
 
@@ -160,7 +214,8 @@ if __name__ == "__main__":
     #model = ResNet9(**model_config)
     #opt = optim.SGD(model.parameters(), lr=1)
 
-    model = FixupResNet9(**model_config)
+    model_cls = getattr(models, args.model)
+    model = model_cls(**config.model_config)
     #model = fixup_resnet56()
     #model = FixupResNet(None, [9, 9, 9])
     #model = FixupResNet(FixupBasicBlock, [0, 1, 0, 1], num_classes=10)
@@ -177,27 +232,15 @@ if __name__ == "__main__":
             {"params": params_other, "lr": 1}
         ], lr=1)
 
-    # whether args.grad_reduction is median or mean,
-    # each worker still means gradients locally
-    criterion = torch.nn.CrossEntropyLoss(reduction='mean')
-
-    accuracy = Correct()
 
     # Fed-ify everything
-    criterion = FedCriterion(criterion)
-    accuracy = FedMetric(accuracy)
-
-    # Potentially DP-ify
-    hook = None
-    if args.do_dp:
-        DPHook = DPGaussianHook(args)
-        hook = DPHook.client_hook
-    model = FedModel(model, args, hook)
+    model = FedModel(model, compute_loss_train, args, compute_loss_val)
     opt = FedOptimizer(opt, args)
 
     # set up learning rate stuff
-    lr_schedule = PiecewiseLinear([0, args.pivot_epoch, args.num_epochs],
-                                  [0, args.lr_scale, 0])
+    #lr_schedule = PiecewiseLinear([0, args.pivot_epoch, args.num_epochs],
+    #                              [0, args.lr_scale, 0])
+    lr_schedule = config.lr_schedule
 
     # grad_reduction only controls how gradients from different
     # workers are combined

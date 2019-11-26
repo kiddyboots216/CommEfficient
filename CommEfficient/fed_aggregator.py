@@ -49,11 +49,16 @@ def profile_helper(*args):
                    )
 
 class FedModel:
-    def __init__(self, input_model, args, hook):
+    def __init__(self, input_model, compute_loss, args,
+                 compute_loss_val=None):
         num_clients = args.num_clients
         device = args.device
         self.model = input_model
-        param_vec = get_param_vec(self.model, "cpu")
+        self.compute_loss_train = compute_loss
+        self.compute_loss_val = (compute_loss_val
+                                 if compute_loss_val is not None
+                                 else compute_loss)
+        param_vec = get_param_vec(self.model).cpu()
         grad_size = 0
         for p in self.model.parameters():
             if p.requires_grad:
@@ -150,9 +155,8 @@ class FedModel:
                                     for t in batch)
                               for i in unique_clients]
 
-            args_tuples = [(i, idx,
-                            worker_batches[i], self.args,
-                            g_criterion, g_metric, self.hook)
+            args_tuples = [(i, idx, worker_batches[i],
+                            self.compute_loss_train, self.args)
                            for i, idx in enumerate(unique_clients)]
 
             results = self.process_pool.starmap(
@@ -168,11 +172,10 @@ class FedModel:
             num_shards = len(split[0])
             batch_shards = [tuple(l[i] for l in split)
                             for i in range(num_shards)]
-            args_tuples = [(batch_shard, self.args,
-                            g_criterion, g_metric)
+            args_tuples = [(batch_shard, self.compute_loss_val, self.args)
                            for batch_shard in batch_shards]
             results = self.process_pool.starmap(
-                            worker.forward_multiprocessed,
+                            worker.forward,
                             args_tuples
                         )
             return split_results(results, self.args.num_results_val)
@@ -275,23 +278,6 @@ class FedOptimizer(torch.optim.Optimizer):
     def zero_grad(self):
         raise NotImplementedError("Please call zero_grad() on the model instead")
 
-class FedCriterion:
-    def __init__(self, input_criterion):
-        global g_criterion
-        g_criterion = input_criterion
-    def __call__(self, *args):
-        global g_criterion
-        out = g_criterion(*args)
-        return out
-
-class FedMetric:
-    def __init__(self, input_metric):
-        global g_metric
-        g_metric = input_metric
-    def __call__(self, *args):
-        global g_metric
-        out = g_metric(*args)
-        return out
 
 def args2sketch(args):
     return CSVec(d=args.grad_size, c=args.num_cols,
