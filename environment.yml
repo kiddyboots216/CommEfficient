@@ -2,12 +2,11 @@ name: comm
 channels:
   - pytorch
   - anaconda
+  - conda-forge
   - defaults
 dependencies:
-  - pytorch=1.1
-  - cython=0.29.0
-  - numpy=1.15.1
-  - torchvision=0.2.1
-  - pip:
-    - ray
-    - track-ml
+  - pytorch
+  - numpy
+  - torchvision
+  - tensorboard
+  - scipy
