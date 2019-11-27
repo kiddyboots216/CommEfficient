@@ -45,7 +45,7 @@ def forward(batch, compute_loss, args):
     return forward_grad(model, batch, compute_loss, args,
                         compute_grad=False)
 
-def update_forward_grad(worker_id, client_id, batch, compute_loss, args):
+def update_forward_grad(worker_id, client_id, batch, compute_loss, args, hook=None):
 
     zero_grad()
     # pull PS and client weights out of the shared memory block

@@ -10,14 +10,16 @@ import torchvision
 
 from models import configs
 import models
-from fixup.cifar.models import fixup_resnet56
-from fixup.cifar.utils import mixup_data
-from fixup.imagenet.models.fixup_resnet_imagenet import FixupResNet, FixupBasicBlock, fixup_resnet50
+#from fixup.cifar.models import fixup_resnet56
+#from fixup.cifar.utils import mixup_data
+#from fixup.imagenet.models.fixup_resnet_imagenet import FixupResNet, FixupBasicBlock, fixup_resnet50
 from fed_aggregator import FedModel, FedOptimizer
 from utils import make_logdir, union, Timer, TableLogger, parse_args
 from data_utils import FedSampler, FedDataset, cifar_train_transforms, cifar_test_transforms
 
 import torch.multiprocessing as multiprocessing
+
+from dp_functions import DPGaussianHook
 
 #from line_profiler import LineProfiler
 #import atexit
@@ -233,6 +235,10 @@ if __name__ == "__main__":
         ], lr=1)
 
 
+    hook = None
+    if args.do_dp:
+        hook_cls = DPGaussianHook(args)
+        hook = hook_cls.client_hook
     # Fed-ify everything
     model = FedModel(model, compute_loss_train, args, compute_loss_val)
     opt = FedOptimizer(opt, args)

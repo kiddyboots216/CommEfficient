@@ -1,14 +1,14 @@
 #OMP_NUM_THREADS=8 python -m cProfile -o profile/cifar_fedsampler.pstats fed_train.py \
-OMP_NUM_THREADS=8 python fed_train.py \
+OMP_NUM_THREADS=8 python cv_train.py \
     --dataset_path /data/ashwineep/datasets/ \
     --dataset_name CIFAR10 \
-    --local_batch_size 64 \
+    --local_batch_size 1 \
     --local_momentum 0.0 \
     --virtual_momentum 0.9 \
     --error_type virtual \
-    --mode true_topk \
-    --num_clients 8000 \
-    --num_workers 80 \
+    --mode sketch \
+    --num_clients 50000 \
+    --num_workers 512 \
     --num_devices 8 \
     --k 6500000 \
     --num_rows 1 \
@@ -17,7 +17,7 @@ OMP_NUM_THREADS=8 python fed_train.py \
     --iid \
     --share_ps_gpu \
     --ledger \
-    --l2_norm_clip 1 \
+    --l2_norm_clip 3 \
     --epsilon 2.0 \
     --delta 0.00001 \
     --dp \
