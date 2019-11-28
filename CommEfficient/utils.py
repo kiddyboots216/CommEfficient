@@ -79,7 +79,7 @@ def parse_args(default_lr=None):
 
     # meta-args
     parser.add_argument("--test", action="store_true", dest="do_test")
-    modes = ["sketch", "true_topk", "local_topk", "localSGD"]
+    modes = ["sketch", "true_topk", "local_topk", "localSGD", "uncompressed"]
     parser.add_argument("--mode", choices=modes, default="sketch")
 
     # data/model args

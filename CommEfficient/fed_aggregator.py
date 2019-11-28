@@ -94,7 +94,7 @@ class FedModel:
         shape = None
         if args.mode == "sketch":
             shape = (args.num_clients, args.num_rows, args.num_cols)
-        elif args.mode in ["local_topk", "true_topk", "localSGD"]:
+        elif args.mode in ["local_topk", "true_topk", "localSGD", "uncompressed"]:
             shape = (args.num_clients, args.grad_size)
 
         # don't make these arrays unless we need them
@@ -216,7 +216,7 @@ class FedOptimizer(torch.optim.Optimizer):
         # client depending on whether we're doing virtual momentum
         if args.mode == "sketch":
             shape = (args.num_rows, args.num_cols)
-        elif args.mode in ["true_topk", "local_topk", "localSGD"]:
+        elif args.mode in ["true_topk", "local_topk", "localSGD", "uncompressed"]:
             shape = (args.grad_size,)
 
         device = args.device
@@ -289,7 +289,8 @@ def get_server_update(transmitted, Vvelocity, Verror, args, lr):
     helper = {"sketch": _server_helper_sketched,
               "local_topk": _server_helper_local_topk,
               "true_topk": _server_helper_true_topk,
-              "localSGD": _server_helper_localSGD
+              "localSGD": _server_helper_localSGD,
+              "uncompressed": _server_helper_uncompressed,
              }[args.mode]
 
     weight_update, new_Vvelocity, new_Verror = helper(
@@ -317,6 +318,16 @@ def agg_grads(grads, args):
 def _server_helper_localSGD(transmitted, Vvelocity, Verror, args, lr):
     update = agg_grads(transmitted, args)
     return update, Vvelocity, Verror
+
+def _server_helper_uncompressed(transmitted, Vvelocity, Verror, args, lr):
+
+    rho = args.virtual_momentum
+    torch.add(agg_grads(transmitted, args).to(args.device),
+              Vvelocity,
+              alpha=rho,
+              out=Vvelocity)
+    update = Vvelocity
+    return update * lr, Vvelocity, Verror
 
 def _server_helper_true_topk(transmitted, Vvelocity, Verror, args, lr):
     assert args.error_type == "virtual"
