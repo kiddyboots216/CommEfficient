@@ -49,11 +49,16 @@ def profile_helper(*args):
                    )
 
 class FedModel:
-    def __init__(self, input_model, args):
+    def __init__(self, input_model, compute_loss, args,
+                 compute_loss_val=None):
         num_clients = args.num_clients
         device = args.device
         self.model = input_model
-        param_vec = get_param_vec(self.model, "cpu")
+        self.compute_loss_train = compute_loss
+        self.compute_loss_val = (compute_loss_val
+                                 if compute_loss_val is not None
+                                 else compute_loss)
+        param_vec = get_param_vec(self.model).cpu()
         grad_size = 0
         for p in self.model.parameters():
             if p.requires_grad:
@@ -89,7 +94,7 @@ class FedModel:
         shape = None
         if args.mode == "sketch":
             shape = (args.num_clients, args.num_rows, args.num_cols)
-        elif args.mode in ["local_topk", "true_topk", "localSGD"]:
+        elif args.mode in ["local_topk", "true_topk", "localSGD", "uncompressed"]:
             shape = (args.num_clients, args.grad_size)
 
         # don't make these arrays unless we need them
@@ -149,9 +154,8 @@ class FedModel:
                                     for t in batch)
                               for i in unique_clients]
 
-            args_tuples = [(i, idx,
-                            worker_batches[i], self.args,
-                            g_criterion, g_metric)
+            args_tuples = [(i, idx, worker_batches[i],
+                            self.compute_loss_train, self.args)
                            for i, idx in enumerate(unique_clients)]
 
             results = self.process_pool.starmap(
@@ -167,11 +171,10 @@ class FedModel:
             num_shards = len(split[0])
             batch_shards = [tuple(l[i] for l in split)
                             for i in range(num_shards)]
-            args_tuples = [(batch_shard, self.args,
-                            g_criterion, g_metric)
+            args_tuples = [(batch_shard, self.compute_loss_val, self.args)
                            for batch_shard in batch_shards]
             results = self.process_pool.starmap(
-                            worker.forward_multiprocessed,
+                            worker.forward,
                             args_tuples
                         )
             return split_results(results, self.args.num_results_val)
@@ -212,7 +215,7 @@ class FedOptimizer(torch.optim.Optimizer):
         # client depending on whether we're doing virtual momentum
         if args.mode == "sketch":
             shape = (args.num_rows, args.num_cols)
-        elif args.mode in ["true_topk", "local_topk", "localSGD"]:
+        elif args.mode in ["true_topk", "local_topk", "localSGD", "uncompressed"]:
             shape = (args.grad_size,)
 
         device = args.device
@@ -274,23 +277,6 @@ class FedOptimizer(torch.optim.Optimizer):
     def zero_grad(self):
         raise NotImplementedError("Please call zero_grad() on the model instead")
 
-class FedCriterion:
-    def __init__(self, input_criterion):
-        global g_criterion
-        g_criterion = input_criterion
-    def __call__(self, *args):
-        global g_criterion
-        out = g_criterion(*args)
-        return out
-
-class FedMetric:
-    def __init__(self, input_metric):
-        global g_metric
-        g_metric = input_metric
-    def __call__(self, *args):
-        global g_metric
-        out = g_metric(*args)
-        return out
 
 def args2sketch(args):
     return CSVec(d=args.grad_size, c=args.num_cols,
@@ -302,7 +288,8 @@ def get_server_update(transmitted, Vvelocity, Verror, args, lr):
     helper = {"sketch": _server_helper_sketched,
               "local_topk": _server_helper_local_topk,
               "true_topk": _server_helper_true_topk,
-              "localSGD": _server_helper_localSGD
+              "localSGD": _server_helper_localSGD,
+              "uncompressed": _server_helper_uncompressed,
              }[args.mode]
 
     weight_update, new_Vvelocity, new_Verror = helper(
@@ -330,6 +317,16 @@ def agg_grads(grads, args):
 def _server_helper_localSGD(transmitted, Vvelocity, Verror, args, lr):
     update = agg_grads(transmitted, args)
     return update, Vvelocity, Verror
+
+def _server_helper_uncompressed(transmitted, Vvelocity, Verror, args, lr):
+
+    rho = args.virtual_momentum
+    torch.add(agg_grads(transmitted, args).to(args.device),
+              Vvelocity,
+              alpha=rho,
+              out=Vvelocity)
+    update = Vvelocity
+    return update * lr, Vvelocity, Verror
 
 def _server_helper_true_topk(transmitted, Vvelocity, Verror, args, lr):
     assert args.error_type == "virtual"

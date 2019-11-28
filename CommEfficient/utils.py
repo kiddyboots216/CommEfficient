@@ -79,13 +79,13 @@ def parse_args(default_lr=None):
 
     # meta-args
     parser.add_argument("--test", action="store_true", dest="do_test")
-    modes = ["sketch", "true_topk", "local_topk", "localSGD"]
+    modes = ["sketch", "true_topk", "local_topk", "localSGD", "uncompressed"]
     parser.add_argument("--mode", choices=modes, default="sketch")
 
     # data/model args
     parser.add_argument("--num_data", type=int, default=50000)
     model_names = models.__all__
-    parser.add_argument("--model", default="resnet9",
+    parser.add_argument("--model", default="ResNet9",
                         help="Name of the model.",
                         choices=model_names)
     parser.add_argument("--num_results_train", type=int, default=2)
@@ -112,7 +112,6 @@ def parse_args(default_lr=None):
                         dest="do_topk_down")
 
     # optimization args
-    parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--nesterov", action="store_true",
                         dest="do_nesterov")
     parser.add_argument("--local_momentum", type=float, default=0.9)
@@ -133,6 +132,8 @@ def parse_args(default_lr=None):
                         help="How to combine gradients from workers")
     parser.add_argument("--lr_scale", type=float, default=default_lr)
     parser.add_argument("--pivot_epoch", type=int, default=5)
+    parser.add_argument("--mixup_alpha", type=float, default=1)
+    parser.add_argument("--mixup", action="store_true", dest="do_mixup")
 
     # parallelization args
     parser.add_argument("--num_clients", type=int)
@@ -163,18 +164,18 @@ def parse_args(default_lr=None):
     parser.add_argument("--valid_batch_size", type=int, default=8,
                         help="Batch size for validation")
     parser.add_argument("--num_train_batch_shards", type=int,
-                        default=4,
+                        default=1,
                         help=("Split up each batch into shards"
                               " to save memory"))
     parser.add_argument("--num_val_batch_shards", type=int,
-                        default=4,
+                        default=1,
                         help=("Split up each batch into shards"
                               " to save memory"))
     parser.add_argument("--lm_coef", type=float, default=1.0,
                         help="LM loss coefficient")
     parser.add_argument("--mc_coef", type=float, default=1.0,
                         help="Multiple-choice loss coefficient")
-    parser.add_argument("--max_norm", type=float, default=1.0,
+    parser.add_argument("--max_grad_norm", type=float,
                         help="Clipping gradient norm, is per-worker")
     parser.add_argument("--personality_permutations", type=int, default=1,
                         help=("Number of permutations of personality"
@@ -206,7 +207,8 @@ def _topk(vec, k):
         ret[rows, topkIndices] = vec[rows, topkIndices]
     return ret
 
-def get_grad(model, weights, args):
+def get_grad(model, args):
+    weights = get_param_vec(model)
     grad_vec = get_grad_vec(model)
     if args.weight_decay != 0:
         grad_vec.add_(args.weight_decay / args.num_workers, weights)
@@ -231,12 +233,8 @@ def zero_grad(model):
             p.grad.detach_()
             p.grad.zero_()
 
-def get_param_vec(model, device):
-    return torch.cat([p.data.view(-1) for p in model.parameters()]).to(device)
-    param_vec = []
-    for p in model.parameters():
-        param_vec.append(p.data.view(-1))
-    return torch.cat(param_vec).to(device)
+def get_param_vec(model):
+    return torch.cat([p.data.view(-1) for p in model.parameters()])
 
 def set_param_vec(model, param_vec):
     start = 0
