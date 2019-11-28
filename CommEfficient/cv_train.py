@@ -53,8 +53,8 @@ def compute_loss_mixup(model, batch, args):
             use_cuda="cuda" in args.device
         )
     outputs = model(inputs)
-    pred = torch.max(outputs, 1)[1]
     loss = mixup_criterion(outputs, targets_a, targets_b, lam)
+    pred = torch.max(outputs, 1)[1]
     correct = (lam * pred.eq(targets_a)
                + (1 - lam) * pred.eq(targets_b)).float().sum()
     accuracy = correct / targets.size()[0]
