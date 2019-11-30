@@ -75,6 +75,9 @@ def accuracy(y_pred, y):
 
 nll_criterion = torch.nn.CrossEntropyLoss(ignore_index=-1)
 def compute_loss_val(model, batch, args):
+    (input_ids, mc_token_ids, lm_labels,
+            mc_labels, token_type_ids) = batch
+
     logits, labels = inference(model, batch, args)
     lm_logits, mc_logits = logits
     lm_labels, mc_labels = labels
@@ -151,7 +154,7 @@ def run_batches(model, opt, scheduler, loader, args,
         model.train(True)
         losses = []
         for batch_idx, batch in enumerate(loader):
-            loss = model(batch)
+            loss, = model(batch)
             scheduler.step()
             opt.step()
             loss = np.mean(loss)
