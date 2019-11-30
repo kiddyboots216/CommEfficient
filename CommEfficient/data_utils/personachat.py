@@ -54,7 +54,7 @@ class FedPersonaChat(torch.utils.data.Dataset):
         # keep the entire val set in memory, since why not
         if self.type == "val":
             with open(self.validation_fn(), "r") as val_f:
-                self.raw_val_set = json.load(val_f)[:44]
+                self.raw_val_set = json.load(val_f)
 
     @property
     def data_per_client(self):
@@ -95,7 +95,7 @@ class FedPersonaChat(torch.utils.data.Dataset):
             self.train_utterances_per_dialog = \
                     stats["train_utterances_per_dialog"]
             self.val_utterances_per_dialog = \
-                    stats["val_utterances_per_dialog"][:44]
+                    stats["val_utterances_per_dialog"]
 
     def download_and_split_data(self, dataset_dir):
         # download the dataset
