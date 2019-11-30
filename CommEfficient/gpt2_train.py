@@ -174,7 +174,7 @@ def run_batches(model, opt, scheduler, loader, args,
                              'lr': lr},
                             batch_stats)
             logger.append(summary)
-            if batch_idx > 10 and args.do_test:
+            if batch_idx > 5 and args.do_test:
                 break
         return np.mean(losses)
 
