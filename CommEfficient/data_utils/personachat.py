@@ -384,9 +384,15 @@ def personachat_collate_fn(records):
     for i, name in enumerate(["client_id"] + MODEL_INPUTS):
         if name in PADDED_INPUTS:
             pad_val = 0 if name != "lm_labels" else -1
-            sequences = [r for record in records for r in record[i]]
-            padded = pad_sequence(sequences)
-            # shape should be batch_size x num_candidates x seq_len
+            sequences = [s for record in records for s in record[i]]
+            padded = pad_sequence(sequences,
+                                  batch_first=True,
+                                  padding_value=pad_val)
+            # padded has shape len(sequences) x max_l, where
+            # len(sequences) = num_candidates * len(records)
+
+            # we want batch_size x num_candidates x seq_len
+            # where batch_size = len(records)
             reshaped = padded.view(len(records), len(records[0][1]), -1)
             batch.append(reshaped)
         else:
