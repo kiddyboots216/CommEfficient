@@ -218,5 +218,7 @@ def forward_grad(model, batch, compute_loss, args,
             results = [r + r_recursive for (r, r_recursive) in zip(results, results_recursive)]
         else:
             g = grad
+    elif args.mode == "uncompressed":
+        g = grad
 
     return g, results

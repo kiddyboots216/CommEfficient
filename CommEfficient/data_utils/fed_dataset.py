@@ -24,7 +24,7 @@ class FedDataset(torch.utils.data.Dataset):
         if not do_iid and num_clients is not None:
             raise ValueErorr("can't specify # clients when non-iid")
 
-        if download and not os.path.exists(self.dataset_dir):
+        if download and not os.path.exists(self.stats_fn()):
             self.download_and_split_data()
 
         self._load_meta(train)
