@@ -246,8 +246,9 @@ def train():
     logger.info("Initializing everything")
     model = FedModel(model, compute_loss_train, args, compute_loss_val)
     optimizer = FedOptimizer(optimizer, args)
+    batch_size = args.local_batch_size * args.num_workers
     lr_schedule = PiecewiseLinear(
-            [0, args.num_epochs * len(train_loader)],
+            [0, args.num_epochs * len(train_loader) / batch_size],
             [args.lr_scale, 0.0])
     lambda_step = lambda x: lr_schedule(x)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
@@ -275,7 +276,7 @@ def get_data_loaders(args, tokenizer):
     train_loader = DataLoader(train_dataset,
                               batch_sampler=train_sampler,
                               collate_fn=personachat_collate_fn,
-                              num_workers=4)
+                              num_workers=0)
 
     val_batch_size = args.local_batch_size * args.num_workers
     val_loader = DataLoader(val_dataset, batch_size=val_batch_size,
