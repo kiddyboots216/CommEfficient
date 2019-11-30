@@ -265,7 +265,7 @@ class FedPersonaChat(torch.utils.data.Dataset):
         history = utterance["history"][-(2 * self.max_history + 1):]
 
         return raw_to_input(self.tokenizer, personality,
-                            history, utterance, candidates)
+                            history, candidates)
 
     def client_fn(self, client_id):
         fn = "client{}.json".format(client_id)
@@ -288,7 +288,7 @@ def tokenize(obj, tokenizer):
     return list(tokenize(o, tokenizer) for o in obj)
 
 
-def raw_to_input(tokenizer, personality, history, utterance, candidates):
+def raw_to_input(tokenizer, personality, history, candidates):
     """ Converts from dict of strings to (almost) valid input for the model
 
     "Almost" since we still need the collate_fn to pad & combine
@@ -296,7 +296,6 @@ def raw_to_input(tokenizer, personality, history, utterance, candidates):
     """
     personality = tokenize(personality, tokenizer)
     history = tokenize(history, tokenizer)
-    utterance = tokenize(utterance, tokenizer)
     candidates = tokenize(candidates, tokenizer)
 
     model_input = defaultdict(list)
