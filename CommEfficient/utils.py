@@ -84,7 +84,8 @@ def parse_args(default_lr=None):
 
     # data/model args
     parser.add_argument("--num_data", type=int, default=50000)
-    model_names = models.__all__
+    model_names = [m for m in dir(models)
+                     if m[:2] != "__" and m[0].isupper()]
     parser.add_argument("--model", default="ResNet9",
                         help="Name of the model.",
                         choices=model_names)

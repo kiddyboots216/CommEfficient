@@ -179,10 +179,10 @@ def forward_grad(model, batch, compute_loss, args,
         if compute_grad:
             loss.backward()
 
-            # gradient clipping
-            if args.max_grad_norm is not None:
-                torch.nn.utils.clip_grad_norm_(model.parameters(),
-                                               args.max_grad_norm)
+    # gradient clipping
+    if compute_grad and args.max_grad_norm is not None:
+        torch.nn.utils.clip_grad_norm_(model.parameters(),
+                                       args.max_grad_norm)
 
     # "average" here is over the gradient accumulation steps
     average_loss = accum_loss / num_shards

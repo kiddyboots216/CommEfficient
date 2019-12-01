@@ -75,6 +75,9 @@ def accuracy(y_pred, y):
 
 nll_criterion = torch.nn.CrossEntropyLoss(ignore_index=-1)
 def compute_loss_val(model, batch, args):
+    (input_ids, mc_token_ids, lm_labels,
+            mc_labels, token_type_ids) = batch
+
     logits, labels = inference(model, batch, args)
     lm_logits, mc_logits = logits
     lm_labels, mc_labels = labels
@@ -140,7 +143,6 @@ def train_gpt2(model, opt, scheduler, train_loader, val_loader,
                          'lr': lr},
                         epoch_stats)
         logger.append(summary)
-        return summary
 
 def run_batches(model, opt, scheduler, loader, args,
                 timer, training, logger=None, writer=None):
@@ -151,7 +153,7 @@ def run_batches(model, opt, scheduler, loader, args,
         model.train(True)
         losses = []
         for batch_idx, batch in enumerate(loader):
-            loss = model(batch)
+            loss, = model(batch)
             scheduler.step()
             opt.step()
             loss = np.mean(loss)
@@ -171,7 +173,7 @@ def run_batches(model, opt, scheduler, loader, args,
                              'lr': lr},
                             batch_stats)
             logger.append(summary)
-            if batch_idx > 10 and args.do_test:
+            if batch_idx > 5 and args.do_test:
                 break
         return np.mean(losses)
 
@@ -243,8 +245,9 @@ def train():
     logger.info("Initializing everything")
     model = FedModel(model, compute_loss_train, args, compute_loss_val)
     optimizer = FedOptimizer(optimizer, args)
+    batch_size = args.local_batch_size * args.num_workers
     lr_schedule = PiecewiseLinear(
-            [0, args.num_epochs * len(train_loader)],
+            [0, args.num_epochs * len(train_loader) / batch_size],
             [args.lr_scale, 0.0])
     lambda_step = lambda x: lr_schedule(x)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
@@ -272,7 +275,7 @@ def get_data_loaders(args, tokenizer):
     train_loader = DataLoader(train_dataset,
                               batch_sampler=train_sampler,
                               collate_fn=personachat_collate_fn,
-                              num_workers=4)
+                              num_workers=0)
 
     val_batch_size = args.local_batch_size * args.num_workers
     val_loader = DataLoader(val_dataset, batch_size=val_batch_size,

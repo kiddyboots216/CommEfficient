@@ -333,6 +333,7 @@ def _server_helper_true_topk(transmitted, Vvelocity, Verror, args, lr):
     assert args.error_type == "virtual"
 
     rho = args.virtual_momentum
+
     # Vvelocity = rho * Vvelocity + agg_grads(transmitted)
     torch.add(agg_grads(transmitted, args).to(args.device),
               Vvelocity,
@@ -387,6 +388,7 @@ def _server_helper_sketched(transmitted, Vvelocity, Verror, args, lr):
         assert args.local_momentum == 0
 
     agg = agg_grads(transmitted, args)
+
     torch.add(agg, Vvelocity, alpha=rho, out=Vvelocity)
     if args.error_type == "local":
         Verror = Vvelocity
