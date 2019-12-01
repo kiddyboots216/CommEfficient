@@ -143,7 +143,6 @@ def train_gpt2(model, opt, scheduler, train_loader, val_loader,
                          'lr': lr},
                         epoch_stats)
         logger.append(summary)
-        return summary
 
 def run_batches(model, opt, scheduler, loader, args,
                 timer, training, logger=None, writer=None):
