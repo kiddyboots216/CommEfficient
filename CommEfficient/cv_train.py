@@ -10,9 +10,7 @@ import torchvision
 
 from models import configs
 import models
-from fixup.cifar.models import fixup_resnet56
 from fixup.cifar.utils import mixup_data
-from fixup.imagenet.models.fixup_resnet_imagenet import FixupResNet, FixupBasicBlock, fixup_resnet50
 from fed_aggregator import FedModel, FedOptimizer
 from utils import make_logdir, union, Timer, TableLogger, parse_args
 from data_utils import FedSampler, FedDataset, cifar_train_transforms, cifar_test_transforms
@@ -216,10 +214,7 @@ if __name__ == "__main__":
 
     model_cls = getattr(models, args.model)
     model = model_cls(**config.model_config)
-    #model = fixup_resnet56()
-    #model = FixupResNet(None, [9, 9, 9])
-    #model = FixupResNet(FixupBasicBlock, [0, 1, 0, 1], num_classes=10)
-    #model = fixup_resnet50()
+
     params_bias = [p[1] for p in model.named_parameters()
                         if 'bias' in p[0]]
     params_scale = [p[1] for p in model.named_parameters()
