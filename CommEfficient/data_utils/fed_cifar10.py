@@ -35,7 +35,7 @@ class FedCIFAR10(FedDataset):
 
         train_images = vanilla_train.data
         train_targets = np.array(vanilla_train.targets)
-        self.classes = vanilla_train.classes
+        classes = vanilla_train.classes
 
         test_images = vanilla_test.data
         test_targets = np.array(vanilla_test.targets)
@@ -43,7 +43,7 @@ class FedCIFAR10(FedDataset):
         images_per_client = []
 
         # split train_images/targets into client datasets, save to disk
-        for client_id in range(len(self.classes)):
+        for client_id in range(len(classes)):
             cur_client = np.where(train_targets == client_id)[0]
             client_images = train_images[cur_client]
             client_targets = train_targets[cur_client]
@@ -68,7 +68,7 @@ class FedCIFAR10(FedDataset):
         if os.path.exists(fn):
             raise RuntimeError("won't overwrite existing stats file")
         stats = {"images_per_client": images_per_client,
-                 "num_test_images": len(test_targets)}
+                 "num_val_images": len(test_targets)}
         with open(fn, "w") as f:
             json.dump(stats, f)
 
@@ -76,10 +76,15 @@ class FedCIFAR10(FedDataset):
         client_dataset = self.client_datasets[client_id]
         raw_image = client_dataset[idx_within_client]
         target = client_id
-        return raw_image, target
+
+        image = Image.fromarray(raw_image)
+
+        return image, target
 
     def _get_val_item(self, idx):
-        return self.test_images[idx], self.test_targets[idx]
+        raw_image = self.test_images[idx]
+        image = Image.fromarray(raw_image)
+        return image, self.test_targets[idx]
 
     def client_fn(self, client_id):
         fn = "client{}.npy".format(client_id)
