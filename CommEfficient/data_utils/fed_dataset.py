@@ -11,14 +11,11 @@ __all__ = ["FedDataset"]
 class FedDataset(torch.utils.data.Dataset):
     def __init__(self, dataset_dir, transform=None,
                  do_iid=False, num_clients=None,
-                 train=True, download=True, download_dir=None):
+                 train=True, download=True):
         self.dataset_dir = dataset_dir
         self.transform = transform
         self.do_iid = do_iid
         self._num_clients = num_clients
-        if download_dir is None:
-            download_dir = dataset_dir
-        self.download_dir = download_dir
         self.type = "train" if train else "val"
 
         if not do_iid and num_clients is not None:

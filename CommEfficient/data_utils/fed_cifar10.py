@@ -25,10 +25,10 @@ class FedCIFAR10(FedDataset):
 
     def prepare_datasets(self, download=True):
         os.makedirs(self.dataset_dir, exist_ok=True)
-        vanilla_train = CIFAR10(self.download_dir,
+        vanilla_train = CIFAR10(self.dataset_dir,
                                 train=True,
                                 download=download)
-        vanilla_test = CIFAR10(self.download_dir,
+        vanilla_test = CIFAR10(self.dataset_dir,
                                train=False,
                                download=download)
 
