@@ -4,14 +4,12 @@ import json
 import numpy as np
 import torch
 
-from PIL import Image
-
 __all__ = ["FedDataset"]
 
 class FedDataset(torch.utils.data.Dataset):
     def __init__(self, dataset_dir, transform=None,
                  do_iid=False, num_clients=None,
-                 train=True, download=True):
+                 train=True, download=False):
         self.dataset_dir = dataset_dir
         self.transform = transform
         self.do_iid = do_iid
@@ -76,17 +74,16 @@ class FedDataset(torch.utils.data.Dataset):
             cumsum = np.hstack([[0], cumsum[:-1]])
             idx_within_client = idx - cumsum[client_id]
 
-            raw_image, target = self._get_train_item(client_id,
-                                                     idx_within_client)
+            image, target = self._get_train_item(client_id,
+                                                 idx_within_client)
 
             if self.do_iid:
                 cumsum = np.cumsum(self.data_per_client)
                 client_id = np.searchsorted(cumsum, orig_idx, side="right")
         elif self.type == "val":
-            raw_image, target = self._get_val_item(idx)
+            image, target = self._get_val_item(idx)
             client_id = -1
 
-        image = Image.fromarray(raw_image)
 
         if self.transform is not None:
             image = self.transform(image)

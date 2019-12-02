@@ -5,6 +5,7 @@ import numpy as np
 
 from data_utils import FedDataset
 from torchvision.datasets import CIFAR10
+from PIL import Image
 
 __all__ = ["FedCIFAR10"]
 
