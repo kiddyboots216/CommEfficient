@@ -13,7 +13,7 @@ import models
 from fixup.cifar.utils import mixup_data
 from fed_aggregator import FedModel, FedOptimizer
 from utils import make_logdir, union, Timer, TableLogger, parse_args
-from data_utils import FedSampler, FedDataset, cifar_train_transforms, cifar_test_transforms
+from data_utils import FedSampler, FedCIFAR10, cifar_train_transforms, cifar_test_transforms
 
 import torch.multiprocessing as multiprocessing
 
@@ -138,11 +138,13 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
 
 def get_data_loaders(args):
     dataset_class = getattr(torchvision.datasets, args.dataset_name)
-    train_dataset = FedDataset(dataset_class, args.dataset_path,
+    train_dataset = FedCIFAR10(args.dataset_dir,
                                cifar_train_transforms, args.do_iid,
-                               args.num_clients, train=True, download=True)
-    test_dataset = FedDataset(dataset_class, args.dataset_path,
-                              cifar_test_transforms, train=False)
+                               args.num_clients, train=True,
+                               download=True)
+    test_dataset = FedCIFAR10(args.dataset_dir,
+                              cifar_test_transforms, train=False,
+                              download=False)
 
     train_sampler = FedSampler(train_dataset,
                                args.num_workers,

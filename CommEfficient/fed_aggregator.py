@@ -301,8 +301,6 @@ def get_server_update(transmitted, Vvelocity, Verror, args, lr):
 def agg_grads(grads, args):
     # aggregate the gradients
     if args.grad_reduction == "mean":
-        # faster or about the same speed to sum on CPU, and no worries
-        # about running out of memory
         if isinstance(grads, torch.sparse.FloatTensor):
             s = torch.sparse.sum
         else:
