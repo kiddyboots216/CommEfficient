@@ -2,13 +2,14 @@
 OMP_NUM_THREADS=8 python cv_train.py \
     --dataset_path /data/ashwineep/datasets/ \
     --dataset_name CIFAR10 \
-    --local_batch_size 1 \
+    --local_batch_size 64 \
     --local_momentum 0.0 \
     --virtual_momentum 0.9 \
     --error_type virtual \
-    --mode sketch \
-    --num_clients 50000 \
-    --num_workers 512 \
+    --mode uncompressed \
+    --model FixupResNet9 \
+    --num_clients 8 \
+    --num_workers 8 \
     --num_devices 8 \
     --k 6500000 \
     --num_rows 1 \
@@ -18,6 +19,5 @@ OMP_NUM_THREADS=8 python cv_train.py \
     --share_ps_gpu \
     --ledger \
     --l2_norm_clip 3 \
-    --epsilon 2.0 \
+    --epsilon 2 \
     --delta 0.00001 \
-    --dp \

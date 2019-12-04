@@ -20,7 +20,7 @@ class FixupLayer(nn.Module):
         self.pool = pool
 
     def forward(self, x):
-        out = F.relu(self.conv(x + self.bias))
+        out = F.relu(self.conv(x) + self.bias)
         for block in self.blocks:
             out = block(out)
         if self.pool is not None:
