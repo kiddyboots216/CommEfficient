@@ -10,12 +10,12 @@ import torchvision
 
 from models import configs
 import models
-from fixup.cifar.models import fixup_resnet56
 from fixup.cifar.utils import mixup_data
-from fixup.imagenet.models.fixup_resnet_imagenet import FixupResNet, FixupBasicBlock, fixup_resnet50
 from fed_aggregator import FedModel, FedOptimizer
 from utils import make_logdir, union, Timer, TableLogger, parse_args
-from data_utils import FedSampler, FedDataset, cifar_train_transforms, cifar_test_transforms
+from data_utils import FedSampler, FedCIFAR10, FedImageNet
+from data_utils import cifar_train_transforms, cifar_test_transforms
+from data_utils import imagenet_train_transforms, imagenet_val_transforms
 
 import torch.multiprocessing as multiprocessing
 
@@ -53,8 +53,8 @@ def compute_loss_mixup(model, batch, args):
             use_cuda="cuda" in args.device
         )
     outputs = model(inputs)
-    pred = torch.max(outputs, 1)[1]
     loss = mixup_criterion(outputs, targets_a, targets_b, lam)
+    pred = torch.max(outputs, 1)[1]
     correct = (lam * pred.eq(targets_a)
                + (1 - lam) * pred.eq(targets_b)).float().sum()
     accuracy = correct / targets.size()[0]
@@ -139,12 +139,17 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
     return np.mean(losses), np.mean(accs)
 
 def get_data_loaders(args):
-    dataset_class = getattr(torchvision.datasets, args.dataset_name)
-    train_dataset = FedDataset(dataset_class, args.dataset_path,
-                               cifar_train_transforms, args.do_iid,
-                               args.num_clients, train=True, download=True)
-    test_dataset = FedDataset(dataset_class, args.dataset_path,
-                              cifar_test_transforms, train=False)
+    train_transforms, val_transforms = {
+     "ImageNet": (imagenet_train_transforms, imagenet_val_transforms),
+     "CIFAR10": (cifar_train_transforms, cifar_test_transforms)
+    }[args.dataset_name]
+
+    dataset_class = globals()["Fed" + args.dataset_name]
+    train_dataset = dataset_class(args.dataset_dir, train_transforms,
+                                  args.do_iid, args.num_clients,
+                                  train=True, download=False)
+    test_dataset = dataset_class(args.dataset_dir, val_transforms,
+                                 train=False, download=False)
 
     train_sampler = FedSampler(train_dataset,
                                args.num_workers,
@@ -216,10 +221,7 @@ if __name__ == "__main__":
 
     model_cls = getattr(models, args.model)
     model = model_cls(**config.model_config)
-    #model = fixup_resnet56()
-    #model = FixupResNet(None, [9, 9, 9])
-    #model = FixupResNet(FixupBasicBlock, [0, 1, 0, 1], num_classes=10)
-    #model = fixup_resnet50()
+
     params_bias = [p[1] for p in model.named_parameters()
                         if 'bias' in p[0]]
     params_scale = [p[1] for p in model.named_parameters()

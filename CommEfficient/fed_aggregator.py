@@ -301,8 +301,6 @@ def get_server_update(transmitted, Vvelocity, Verror, args, lr):
 def agg_grads(grads, args):
     # aggregate the gradients
     if args.grad_reduction == "mean":
-        # faster or about the same speed to sum on CPU, and no worries
-        # about running out of memory
         if isinstance(grads, torch.sparse.FloatTensor):
             s = torch.sparse.sum
         else:
@@ -332,6 +330,7 @@ def _server_helper_true_topk(transmitted, Vvelocity, Verror, args, lr):
     assert args.error_type == "virtual"
 
     rho = args.virtual_momentum
+
     # Vvelocity = rho * Vvelocity + agg_grads(transmitted)
     torch.add(agg_grads(transmitted, args).to(args.device),
               Vvelocity,
@@ -386,6 +385,7 @@ def _server_helper_sketched(transmitted, Vvelocity, Verror, args, lr):
         assert args.local_momentum == 0
 
     agg = agg_grads(transmitted, args)
+
     torch.add(agg, Vvelocity, alpha=rho, out=Vvelocity)
     if args.error_type == "local":
         Verror = Vvelocity
