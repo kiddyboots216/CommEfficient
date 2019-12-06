@@ -5,9 +5,10 @@ from pytorch_transformers import (AdamW, OpenAIGPTDoubleHeadsModel,
                                   OpenAIGPTTokenizer, GPT2DoubleHeadsModel,
                                   GPT2Tokenizer, WEIGHTS_NAME, CONFIG_NAME)
 
-from fed_aggregator import FedOptimizer, FedCriterion, FedModel, FedMetric
+from fed_aggregator import FedOptimizer, FedModel
 from utils import make_logdir
-from utils import PiecewiseLinear, TableLogger, Timer, union
+from utils import TableLogger, Timer, union
+from models.configs import PiecewiseLinear
 import torch
 from torch.optim import SGD
 from torch.utils.tensorboard import SummaryWriter
@@ -30,6 +31,74 @@ ATTR_TO_SPECIAL_TOKEN = {
                                                        '<speaker2>')
                         }
 
+def _check_shape(y_pred, y):
+    if y.ndimension() > 1 and y.shape[1] == 1:
+        # (N, 1, ...) -> (N, ...)
+        y = y.squeeze(dim=1)
+    if y_pred.ndimension() > 1 and y_pred.shape[1] == 1:
+        # (N, 1, ...) -> (N, ...)
+        y_pred = y_pred.squeeze(dim=1)
+    if not (y.ndimension() == y_pred.ndimension()
+            or y.ndimension() + 1 == y_pred.ndimension()):
+        raise ValueError("y must have shape of (batch_size, ...) and "
+                         "y_pred must have shape of (batch_size, "
+                         "num_categories, ...) or (batch_size, ...), but "
+                         "given {} vs {}.".format(y.shape, y_pred.shape))
+    y_shape = y.shape
+    y_pred_shape = y_pred.shape
+    if y.ndimension() + 1 == y_pred.ndimension():
+        y_pred_shape = (y_pred_shape[0],) + y_pred_shape[2:]
+    if not (y_shape == y_pred_shape):
+        raise ValueError("y and y_pred must have compatible shapes.")
+    return y_pred, y
+
+def inference(model, batch, args):
+    model.eval()
+    with torch.no_grad():
+        (input_ids, mc_token_ids, lm_labels,
+                mc_labels, token_type_ids) = batch
+        lm_logits, mc_logits, *_ = model(input_ids,
+                                         token_type_ids=token_type_ids,
+                                         mc_token_ids=mc_token_ids)
+        lm_logits_flat_shifted = lm_logits[..., :-1, :].contiguous().view(
+                -1, lm_logits.size(-1)
+            )
+        lm_labels_flat_shifted = lm_labels[..., 1:].contiguous().view(-1)
+        return ((lm_logits_flat_shifted, mc_logits),
+                (lm_labels_flat_shifted, mc_labels))
+
+def accuracy(y_pred, y):
+    y_pred, y = _check_shape(y_pred, y)
+    indices = torch.argmax(y_pred, dim=1)
+    correct = torch.eq(indices, y).view(-1)
+    return torch.sum(correct).float() / correct.shape[0]
+
+nll_criterion = torch.nn.CrossEntropyLoss(ignore_index=-1)
+def compute_loss_val(model, batch, args):
+    (input_ids, mc_token_ids, lm_labels,
+            mc_labels, token_type_ids) = batch
+
+    logits, labels = inference(model, batch, args)
+    lm_logits, mc_logits = logits
+    lm_labels, mc_labels = labels
+    nll = nll_criterion(lm_logits, lm_labels)
+    acc = accuracy(mc_logits, mc_labels)
+    return nll, acc
+
+def compute_loss_train(model, batch, args):
+    (input_ids, mc_token_ids, lm_labels,
+            mc_labels, token_type_ids) = batch
+
+    lm_loss, mc_loss, *_ = model(
+        input_ids, token_type_ids=token_type_ids,
+        mc_token_ids=mc_token_ids,
+        mc_labels=mc_labels, lm_labels=lm_labels
+    )
+    loss = ((lm_loss * args.lm_coef + mc_loss * args.mc_coef)
+            / args.num_train_batch_shards)
+    # there are no metrics, but still need to return a tuple
+    return loss,
+
 def add_special_tokens_(model, tokenizer):
     """ Add special tokens to the tokenizer and the model
 
@@ -49,18 +118,16 @@ def train_gpt2(model, opt, scheduler, train_loader, val_loader,
     timer = timer or Timer()
     epochs = args.num_epochs
     for epoch in range(epochs):
-        train_loss = run_batches(model, opt, scheduler, train_loader,
+        mean_train_loss = run_batches(model, opt, scheduler, train_loader,
                                  args, timer, training=True,
                                  logger=logger, writer=writer)
-        train_time = timer()
         model.save_pretrained(log_dir)
         nll, acc, ppl = run_batches(model, None, None, val_loader, args,
                                     timer, training=False,
                                     logger=TableLogger(), writer=writer)
         val_time = timer()
         epoch_stats = {
-            'train_time': train_time,
-            'train_loss': train_loss,
+            #'mean_train_loss': mean_train_loss,
             'val_nll': nll,
             'val_acc': acc,
             'val_ppl': ppl,
@@ -76,7 +143,6 @@ def train_gpt2(model, opt, scheduler, train_loader, val_loader,
                          'lr': lr},
                         epoch_stats)
         logger.append(summary)
-        return summary
 
 def run_batches(model, opt, scheduler, loader, args,
                 timer, training, logger=None, writer=None):
@@ -87,7 +153,7 @@ def run_batches(model, opt, scheduler, loader, args,
         model.train(True)
         losses = []
         for batch_idx, batch in enumerate(loader):
-            loss = model(batch)
+            loss, = model(batch)
             scheduler.step()
             opt.step()
             loss = np.mean(loss)
@@ -107,6 +173,8 @@ def run_batches(model, opt, scheduler, loader, args,
                              'lr': lr},
                             batch_stats)
             logger.append(summary)
+            if batch_idx > 5 and args.do_test:
+                break
         return np.mean(losses)
 
     else:
@@ -175,13 +243,11 @@ def train():
 
     logger.info('Finished in {:.2f} seconds'.format(timer()))
     logger.info("Initializing everything")
-    model = FedModel(model, args)
+    model = FedModel(model, compute_loss_train, args, compute_loss_val)
     optimizer = FedOptimizer(optimizer, args)
-    criterion = torch.nn.CrossEntropyLoss(ignore_index=-1)
-    metric = FedMetric(criterion, args)
-    criterion = FedCriterion(criterion, args)
+    batch_size = args.local_batch_size * args.num_workers
     lr_schedule = PiecewiseLinear(
-            [0, args.num_epochs * len(train_loader)],
+            [0, args.num_epochs * len(train_loader) / batch_size],
             [args.lr_scale, 0.0])
     lambda_step = lambda x: lr_schedule(x)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
@@ -209,7 +275,7 @@ def get_data_loaders(args, tokenizer):
     train_loader = DataLoader(train_dataset,
                               batch_sampler=train_sampler,
                               collate_fn=personachat_collate_fn,
-                              num_workers=4)
+                              num_workers=0)
 
     val_batch_size = args.local_batch_size * args.num_workers
     val_loader = DataLoader(val_dataset, batch_size=val_batch_size,

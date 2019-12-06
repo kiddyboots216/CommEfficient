@@ -33,18 +33,21 @@ class FixupResNet9(nn.Module):
         self.num_layers = 2
         self.channels = channels or {"prep": 64, "layer1": 128,
                                      "layer2": 256, "layer3": 512}
-        self.conv1 = conv3x3(3, channels["prep"])
+        self.conv1 = conv3x3(3, self.channels["prep"])
         self.bias1 = nn.Parameter(torch.zeros(1))
 
-        self.layer1 = FixupLayer(channels["prep"], channels["layer1"],
+        self.layer1 = FixupLayer(self.channels["prep"],
+                                 self.channels["layer1"],
                                  1, pool)
-        self.layer2 = FixupLayer(channels["layer1"], channels["layer2"],
+        self.layer2 = FixupLayer(self.channels["layer1"],
+                                 self.channels["layer2"],
                                  0, pool)
-        self.layer3 = FixupLayer(channels["layer2"], channels["layer3"],
+        self.layer3 = FixupLayer(self.channels["layer2"],
+                                 self.channels["layer3"],
                                  1, pool)
 
         self.pool = nn.MaxPool2d(4)
-        self.linear = nn.Linear(channels["layer3"], 10)
+        self.linear = nn.Linear(self.channels["layer3"], 10)
 
         for m in self.modules():
             if isinstance(m, FixupBasicBlock):
@@ -54,6 +57,12 @@ class FixupResNet9(nn.Module):
                       ) * self.num_layers ** (-0.5)
                 nn.init.normal_(m.conv1.weight, mean=0, std=std)
                 nn.init.constant_(m.conv2.weight, 0)
+            elif isinstance(m, FixupLayer):
+                std = np.sqrt(2 /
+                            (m.conv.weight.shape[0]
+                             * np.prod(m.conv.weight.shape[2:]))
+                      )
+                nn.init.normal_(m.conv.weight, mean=0, std=std)
             elif isinstance(m, nn.Linear):
                 nn.init.constant_(m.weight, 0)
                 nn.init.constant_(m.bias, 0)
