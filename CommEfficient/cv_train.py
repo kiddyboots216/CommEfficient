@@ -157,13 +157,13 @@ def get_data_loaders(args):
 
     train_loader = DataLoader(train_dataset,
                               batch_sampler=train_sampler,
-                              num_workers=0,
+                              num_workers=8,
                               pin_memory=True)
     test_batch_size = args.local_batch_size * args.num_workers
     test_loader = DataLoader(test_dataset,
                              batch_size=test_batch_size,
                              shuffle=False,
-                             num_workers=0,
+                             num_workers=4,
                              pin_memory=True)
 
     return train_loader, test_loader
