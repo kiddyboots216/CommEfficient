@@ -13,7 +13,9 @@ import models
 #from fixup.cifar.utils import mixup_data
 from fed_aggregator import FedModel, FedOptimizer
 from utils import make_logdir, union, Timer, TableLogger, parse_args
-from data_utils import FedSampler, FedDataset, cifar_train_transforms, cifar_test_transforms
+from data_utils import FedSampler, FedCIFAR10, FedImageNet
+from data_utils import cifar_train_transforms, cifar_test_transforms
+from data_utils import imagenet_train_transforms, imagenet_val_transforms
 
 import torch.multiprocessing as multiprocessing
 
@@ -139,12 +141,17 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
     return np.mean(losses), np.mean(accs)
 
 def get_data_loaders(args):
-    dataset_class = getattr(torchvision.datasets, args.dataset_name)
-    train_dataset = FedDataset(dataset_class, args.dataset_path,
-                               cifar_train_transforms, args.do_iid,
-                               args.num_clients, train=True, download=True)
-    test_dataset = FedDataset(dataset_class, args.dataset_path,
-                              cifar_test_transforms, train=False)
+    train_transforms, val_transforms = {
+     "ImageNet": (imagenet_train_transforms, imagenet_val_transforms),
+     "CIFAR10": (cifar_train_transforms, cifar_test_transforms)
+    }[args.dataset_name]
+
+    dataset_class = globals()["Fed" + args.dataset_name]
+    train_dataset = dataset_class(args.dataset_dir, train_transforms,
+                                  args.do_iid, args.num_clients,
+                                  train=True, download=False)
+    test_dataset = dataset_class(args.dataset_dir, val_transforms,
+                                 train=False, download=False)
 
     train_sampler = FedSampler(train_dataset,
                                args.num_workers,

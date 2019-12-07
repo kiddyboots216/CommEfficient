@@ -1,6 +1,7 @@
-#OMP_NUM_THREADS=8 python -m cProfile -o profile/cifar_fedsampler.pstats fed_train.py \
+#OMP_NUM_THREADS=8 python -m cProfile -o profile/cifar_fedsampler.pstats cv_train.py \
 OMP_NUM_THREADS=8 python cv_train.py \
-    --dataset_path /data/ashwineep/datasets/ \
+    --dataset_dir /data/ashwineep/datasets/ \
+    --local_batch_size 512 \
     --dataset_name CIFAR10 \
     --local_batch_size 64 \
     --local_momentum 0.0 \

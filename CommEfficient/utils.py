@@ -93,13 +93,10 @@ def parse_args(default_lr=None):
     parser.add_argument("--num_results_val", type=int, default=2)
     parser.add_argument("--supervised", action="store_true",
                         dest="is_supervised")
-    torchvision_names = torchvision.datasets.__all__
+    fed_datasets = ["CIFAR10", "ImageNet"]
     parser.add_argument("--dataset_name", type=str, default="",
                         help="Name of the dataset.",
-                        choices=torchvision_names)
-    parser.add_argument("--dataset_path", type=str, default="",
-                        help=("Path or url of the dataset."
-                              " If empty, download from the internet."))
+                        choices=fed_datasets)
     parser.add_argument("--dataset_dir", type=str,
                         default='./dataset',
                         help="Path or url of the dataset cache")
