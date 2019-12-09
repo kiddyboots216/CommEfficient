@@ -203,6 +203,10 @@ def parse_args(default_lr=None):
 
 
     args = parser.parse_args()
+<<<<<<< HEAD
+    args.weight_decay = args.weight_decay
+=======
+>>>>>>> 03e70bb060fae7769b23b66d596e6fb40f6695ca
 
     return args
 

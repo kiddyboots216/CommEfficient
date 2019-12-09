@@ -124,6 +124,7 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
     losses = []
     accs = []
 
+    # Not actually using the loader that has been passed!
     if training:
         for batch in train_loader:
             loss, acc = model(batch)
