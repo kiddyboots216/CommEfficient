@@ -83,10 +83,10 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
     timer = timer or Timer()
     for epoch in range(args.num_epochs):
         train_loss, train_acc = run_batches(model, opt, lr_scheduler,
-                                            train_loader, True, args)
-        train_time = timer()
+                                            train_loader, True, True, args)
         test_loss, test_acc = run_batches(model, None, None,
-                                          test_loader, False, args)
+                                          test_loader, False, False, args)
+        train_time = timer()
         test_time = timer()
         epoch_stats = {
             'train_time': train_time,
@@ -98,11 +98,10 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
         }
         if args.is_malicious:
             mal_loss, mal_acc = run_batches(model, opt, lr_scheduler,
-                mal_loader, True, args)
+                mal_loader, True, False, args)
             epoch_stats['mal_loss'] = mal_loss
             epoch_stats['mal_acc'] = mal_acc
-        # lr = lr_scheduler.get_lr()[0]
-        lr = args.lr_epoch
+        lr = lr_scheduler.get_lr()[0]
         summary = union({'epoch': epoch+1,
                          'lr': lr},
                         epoch_stats)
@@ -119,14 +118,14 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
     return summary
 
 #@profile
-def run_batches(model, opt, lr_scheduler, loader, training, args):
+def run_batches(model, opt, lr_scheduler, loader, training, step_scheduler, args):
     model.train(training)
     losses = []
     accs = []
 
     # Not actually using the loader that has been passed!
     if training:
-        for batch in train_loader:
+        for batch in loader:
             loss, acc = model(batch)
             if args.use_local_sched:
                 for _ in range(args.num_local_iters):
@@ -140,7 +139,7 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
             if args.do_test:
                 break
     else:
-        for batch in test_loader:
+        for batch in loader:
             loss, acc = model(batch)
             losses.extend(loss)
             accs.extend(acc)
@@ -179,9 +178,11 @@ def get_data_loaders(args):
     if args.is_malicious:
         mal_dataset = dataset_class(args, args.dataset_dir, train_transforms,
                                   args.do_iid, args.num_clients,
-                                  train=False, download=False, malicious=True)
-        mal_loader = DataLoader(mal_dataset, batch_size=args.mal_targets,
-                                num_workers=4, pin_memory=True)
+                                  train=True, download=False, malicious=True)
+        mal_loader = DataLoader(mal_dataset, 
+                                batch_size=args.mal_targets,
+                                num_workers=4, 
+                                pin_memory=True)
 
     return train_loader, test_loader, mal_loader
 
