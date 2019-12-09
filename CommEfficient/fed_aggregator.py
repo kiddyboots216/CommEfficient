@@ -309,8 +309,7 @@ def agg_grads(grads, args):
         else:
             s = torch.sum
         # To follow FedAvg, divide by args.num_clients?
-        # grad_agg = s(grads, dim=[0]) / args.num_workers
-        grad_agg = s(grads, dim=[0]) / args.num_clients
+        grad_agg = s(grads, dim=[0]) / args.num_workers
     if args.grad_reduction == "median":
         # numpy median is way faster than torch median
         grad_agg = torch.from_numpy(np.median(grads.cpu().numpy(), axis=0))
