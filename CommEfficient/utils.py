@@ -199,8 +199,6 @@ def parse_args(default_lr):
 
     args = parser.parse_args()
     args.weight_decay = args.weight_decay
-    # args.iid = args.num_classes == 10
-    # args.iid = True
 
     return args
 
