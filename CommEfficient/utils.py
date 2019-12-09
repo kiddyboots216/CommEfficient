@@ -8,6 +8,8 @@ import numpy as np
 from collections import namedtuple
 import torchvision
 
+import models
+
 class Logger:
     def debug(self, msg, args=None):
         print(msg.format(args))
@@ -59,10 +61,6 @@ class TSVLogger():
 
 union = lambda *dicts: {k: v for d in dicts for (k, v) in d.items()}
 
-class PiecewiseLinear(namedtuple('PiecewiseLinear', ('knots', 'vals'))):
-    def __call__(self, t):
-        return np.interp([t], self.knots, self.vals)[0]
-
 class Timer():
     def __init__(self):
         self.times = [time.time()]
@@ -76,30 +74,29 @@ class Timer():
         return delta_t
 
 
-def parse_args(default_lr):
+def parse_args(default_lr=None):
     parser = argparse.ArgumentParser()
 
     # meta-args
     parser.add_argument("--test", action="store_true", dest="do_test")
-    modes = ["sketch", "true_topk", "local_topk", "localSGD"]
-    parser.add_argument("--mode", choices=modes, default="localSGD")
+    modes = ["sketch", "true_topk", "local_topk", "localSGD", "uncompressed"]
+    parser.add_argument("--mode", choices=modes, default="uncompressed")
 
     # data/model args
-    parser.add_argument("--static_datasets", action="store_true")
-    parser.add_argument("--num_classes", type=int, default=10)
     parser.add_argument("--num_data", type=int, default=50000)
-    parser.add_argument("--model", default="resnet9")
+    model_names = [m for m in dir(models)
+                     if m[:2] != "__" and m[0].isupper()]
+    parser.add_argument("--model", default="ResNet9",
+                        help="Name of the model.",
+                        choices=model_names)
     parser.add_argument("--num_results_train", type=int, default=2)
     parser.add_argument("--num_results_val", type=int, default=2)
     parser.add_argument("--supervised", action="store_true",
                         dest="is_supervised")
-    torchvision_names = torchvision.datasets.__all__
+    fed_datasets = ["CIFAR10", "ImageNet"]
     parser.add_argument("--dataset_name", type=str, default="",
                         help="Name of the dataset.",
-                        choices=torchvision_names)
-    parser.add_argument("--dataset_path", type=str, default="",
-                        help=("Path or url of the dataset."
-                              " If empty, download from the internet."))
+                        choices=fed_datasets)
     parser.add_argument("--dataset_dir", type=str,
                         default='./dataset',
                         help="Path or url of the dataset cache")
@@ -113,7 +110,6 @@ def parse_args(default_lr):
                         dest="do_topk_down")
 
     # optimization args
-    parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--nesterov", action="store_true",
                         dest="do_nesterov")
     parser.add_argument("--local_momentum", type=float, default=0.9)
@@ -134,11 +130,12 @@ def parse_args(default_lr):
                         help="How to combine gradients from workers")
     parser.add_argument("--lr_scale", type=float, default=default_lr)
     parser.add_argument("--pivot_epoch", type=int, default=5)
+    parser.add_argument("--mixup_alpha", type=float, default=1)
+    parser.add_argument("--mixup", action="store_true", dest="do_mixup")
 
     # parallelization args
     parser.add_argument("--num_clients", type=int)
     parser.add_argument("--num_workers", type=int, default=1)
-    parser.add_argument("--balancedness", type=float, default=1.0)
     default_device = "cuda" if torch.cuda.is_available() else "cpu"
     parser.add_argument("--device", type=str, choices=["cpu", "cuda"],
                         default=default_device,
@@ -165,18 +162,18 @@ def parse_args(default_lr):
     parser.add_argument("--valid_batch_size", type=int, default=8,
                         help="Batch size for validation")
     parser.add_argument("--num_train_batch_shards", type=int,
-                        default=4,
+                        default=1,
                         help=("Split up each batch into shards"
                               " to save memory"))
     parser.add_argument("--num_val_batch_shards", type=int,
-                        default=4,
+                        default=1,
                         help=("Split up each batch into shards"
                               " to save memory"))
     parser.add_argument("--lm_coef", type=float, default=1.0,
                         help="LM loss coefficient")
     parser.add_argument("--mc_coef", type=float, default=1.0,
                         help="Multiple-choice loss coefficient")
-    parser.add_argument("--max_norm", type=float, default=1.0,
+    parser.add_argument("--max_grad_norm", type=float,
                         help="Clipping gradient norm, is per-worker")
     parser.add_argument("--personality_permutations", type=int, default=1,
                         help=("Number of permutations of personality"
@@ -198,7 +195,10 @@ def parse_args(default_lr):
 
 
     args = parser.parse_args()
+<<<<<<< HEAD
     args.weight_decay = args.weight_decay
+=======
+>>>>>>> 03e70bb060fae7769b23b66d596e6fb40f6695ca
 
     return args
 
@@ -217,7 +217,8 @@ def _topk(vec, k):
         ret[rows, topkIndices] = vec[rows, topkIndices]
     return ret
 
-def get_grad(model, weights, args):
+def get_grad(model, args):
+    weights = get_param_vec(model)
     grad_vec = get_grad_vec(model)
     if args.weight_decay != 0:
         grad_vec.add_(args.weight_decay / args.num_workers, weights)
@@ -242,12 +243,8 @@ def zero_grad(model):
             p.grad.detach_()
             p.grad.zero_()
 
-def get_param_vec(model, device):
-    return torch.cat([p.data.view(-1) for p in model.parameters()]).to(device)
-    param_vec = []
-    for p in model.parameters():
-        param_vec.append(p.data.view(-1))
-    return torch.cat(param_vec).to(device)
+def get_param_vec(model):
+    return torch.cat([p.data.view(-1) for p in model.parameters()])
 
 def set_param_vec(model, param_vec):
     start = 0

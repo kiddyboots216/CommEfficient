@@ -17,6 +17,8 @@ from pytorch_transformers import cached_path
 
 from utils import Logger
 
+__all__ = ["FedPersonaChat", "personachat_collate_fn"]
+
 logger = Logger()
 
 PERSONACHAT_URL = "https://s3.amazonaws.com/datasets.huggingface.co/personachat/personachat_self_original.json"
@@ -52,7 +54,7 @@ class FedPersonaChat(torch.utils.data.Dataset):
         # keep the entire val set in memory, since why not
         if self.type == "val":
             with open(self.validation_fn(), "r") as val_f:
-                self.raw_val_set = json.load(val_f)[:44]
+                self.raw_val_set = json.load(val_f)
 
     @property
     def data_per_client(self):
@@ -93,7 +95,7 @@ class FedPersonaChat(torch.utils.data.Dataset):
             self.train_utterances_per_dialog = \
                     stats["train_utterances_per_dialog"]
             self.val_utterances_per_dialog = \
-                    stats["val_utterances_per_dialog"][:44]
+                    stats["val_utterances_per_dialog"]
 
     def download_and_split_data(self, dataset_dir):
         # download the dataset
@@ -263,7 +265,7 @@ class FedPersonaChat(torch.utils.data.Dataset):
         history = utterance["history"][-(2 * self.max_history + 1):]
 
         return raw_to_input(self.tokenizer, personality,
-                            history, utterance, candidates)
+                            history, candidates)
 
     def client_fn(self, client_id):
         fn = "client{}.json".format(client_id)
@@ -286,7 +288,7 @@ def tokenize(obj, tokenizer):
     return list(tokenize(o, tokenizer) for o in obj)
 
 
-def raw_to_input(tokenizer, personality, history, utterance, candidates):
+def raw_to_input(tokenizer, personality, history, candidates):
     """ Converts from dict of strings to (almost) valid input for the model
 
     "Almost" since we still need the collate_fn to pad & combine
@@ -294,7 +296,6 @@ def raw_to_input(tokenizer, personality, history, utterance, candidates):
     """
     personality = tokenize(personality, tokenizer)
     history = tokenize(history, tokenizer)
-    utterance = tokenize(utterance, tokenizer)
     candidates = tokenize(candidates, tokenizer)
 
     model_input = defaultdict(list)
@@ -383,9 +384,15 @@ def personachat_collate_fn(records):
     for i, name in enumerate(["client_id"] + MODEL_INPUTS):
         if name in PADDED_INPUTS:
             pad_val = 0 if name != "lm_labels" else -1
-            sequences = [r for record in records for r in record[i]]
-            padded = pad_sequence(sequences)
-            # shape should be batch_size x num_candidates x seq_len
+            sequences = [s for record in records for s in record[i]]
+            padded = pad_sequence(sequences,
+                                  batch_first=True,
+                                  padding_value=pad_val)
+            # padded has shape len(sequences) x max_l, where
+            # len(sequences) = num_candidates * len(records)
+
+            # we want batch_size x num_candidates x seq_len
+            # where batch_size = len(records)
             reshaped = padded.view(len(records), len(records[0][1]), -1)
             batch.append(reshaped)
         else:

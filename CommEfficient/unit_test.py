@@ -60,8 +60,8 @@ def runTest(nData, nWeights, nWorkers, k, r, c, p2,
         minibatch = [in_batch, target_batch]
         minibatches.append(minibatch)
     criterion = torch.nn.MSELoss(reduction='sum')
-    fed_criterion = FedCriterion(criterion, {})
-    fake_criterion = FedAccuracy(criterion, {})
+    fed_criterion = FedCriterion(criterion)
+    fake_criterion = FedAccuracy(criterion)
     model.train(True)
     outs, loss, acc, grads = model(minibatches, idx)
     opt.step(grads, idx)
