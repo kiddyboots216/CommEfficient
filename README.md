@@ -8,3 +8,5 @@ There are a variety of command-line args which are best examined by looking at `
 All functions are in `functions.py`
 
 To use sketching, you need to install https://github.com/nikitaivkin/csh
+
+To use DP, you need to install https://github.com/kiddyboots216/pytorch_privacy

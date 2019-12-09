@@ -50,7 +50,7 @@ def profile_helper(*args):
 
 class FedModel:
     def __init__(self, input_model, compute_loss, args,
-                 compute_loss_val=None):
+                 compute_loss_val=None, hook=None):
         num_clients = args.num_clients
         device = args.device
         self.model = input_model
@@ -119,6 +119,7 @@ class FedModel:
                           g_worker_transmitted,
                           g_client_weights, g_ps_weights)
             )
+        self.hook = hook
 
 
     def finalize(self):
@@ -155,7 +156,7 @@ class FedModel:
                               for i in unique_clients]
 
             args_tuples = [(i, idx, worker_batches[i],
-                            self.compute_loss_train, self.args)
+                            self.compute_loss_train, self.args, self.hook)
                            for i, idx in enumerate(unique_clients)]
 
             results = self.process_pool.starmap(

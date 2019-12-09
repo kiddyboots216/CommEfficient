@@ -192,6 +192,14 @@ def parse_args(default_lr=None):
                         help=("Number of data samples targeted"))
     parser.add_argument("--mal_boost", type=float, default=10.0,
                         help=("Boosting malicious gradient"))
+    # Differential Privacy args
+    parser.add_argument("--dp", action="store_true", dest="do_dp", help=("Whether to do differentially private training)"))
+    parser.add_argument("--ledger", action="store_true", help=("Whether to use a ledger for DP"))
+    parser.add_argument("--l2_norm_clip", type=float, default=1.0, help=("What value to clip the l2 norm to"))
+    parser.add_argument("--noise_multiplier", type=float, default=0.0, help=("Sigma squared, i.e. standard dev of noise"))
+    parser.add_argument("--num_microbatches", type=int, default=1, help=("Number of microbatches to divide each megabatch into"))
+    parser.add_argument("--epsilon", type=float, default=1.0, help=("Epsilon in eps, delta DP"))
+    parser.add_argument("--delta", type=float, default=1e-5, help=("Delta in eps, delta DP"))
 
 
     args = parser.parse_args()

@@ -19,6 +19,8 @@ from data_utils import imagenet_train_transforms, imagenet_val_transforms
 
 import torch.multiprocessing as multiprocessing
 
+from dp_functions import DPGaussianHook
+
 #from line_profiler import LineProfiler
 #import atexit
 #profile = LineProfiler()
@@ -153,7 +155,7 @@ def get_data_loaders(args):
     dataset_class = globals()["Fed" + args.dataset_name]
     train_dataset = dataset_class(args, args.dataset_dir, train_transforms,
                                   args.do_iid, args.num_clients,
-                                  train=True, download=False)
+                                  train=True, download=True)
     test_dataset = dataset_class(args, args.dataset_dir, val_transforms,
                                  train=False, download=False)
 
@@ -260,6 +262,10 @@ if __name__ == "__main__":
         ], lr=1)
 
 
+    hook = None
+    if args.do_dp:
+        hook_cls = DPGaussianHook(args)
+        hook = hook_cls.client_hook
     # Fed-ify everything
     model = FedModel(model, compute_loss_train, args, compute_loss_val)
     opt = FedOptimizer(opt, args)

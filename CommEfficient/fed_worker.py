@@ -45,7 +45,7 @@ def forward(batch, compute_loss, args):
     return forward_grad(model, batch, compute_loss, args,
                         compute_grad=False)
 
-def update_forward_grad(worker_id, client_id, batch, compute_loss, args):
+def update_forward_grad(worker_id, client_id, batch, compute_loss, args, hook=None):
 
     zero_grad()
     # pull PS and client weights out of the shared memory block
@@ -120,6 +120,9 @@ def update_forward_grad(worker_id, client_id, batch, compute_loss, args):
         # if we're doing local momentum, do momentum factor masking
         if args.local_momentum > 0:
             velocity[nz] = 0
+    
+    if hook:
+        to_transmit = hook(to_transmit, args)
 
     transmitted[:] = to_transmit
 
@@ -140,8 +143,6 @@ def get_new_worker_weights(ps_weights, worker_weights, args):
         weight_update = diff_vec
 
     new_worker_weights = worker_weights + weight_update
-    #print(f"{torch.norm(weight_update, 2)}")
-    #print(f"{updated_vec} = {client_weights} + {weight_update}")
     return new_worker_weights
 
 def forward_grad(model, batch, compute_loss, args,
@@ -200,7 +201,7 @@ def forward_grad(model, batch, compute_loss, args,
     # compress the gradient if needed
     if args.mode == "sketch":
         sketch = CSVec(d=args.grad_size, c=args.num_cols,
-            r=args.num_rows, device=device,
+            r=args.num_rows, device=args.device,
             numBlocks=args.num_blocks)
         sketch.accumulateVec(grad)
         g = sketch.table

@@ -1,23 +1,24 @@
-OMP_NUM_THREADS=4 python gpt2_train.py \
-    --model gpt2 \
+OMP_NUM_THREADS=8 python gpt2_train.py \
     --num_results_train 1 \
     --num_results_val 2 \
     --lm_coef=2.0 \
-    --dataset_dir /data/drothchild/datasets/persona_chat/ \
+    --dataset_dir /data/ashwineep/datasets/persona_chat/ \
     --max_history=2 \
-    --num_epochs=1 \
+    --num_epochs=2 \
     --num_candidates=4 \
     --personality_permutations=2 \
+    --max_grad_norm 1.0 \
     --num_train_batch_shards 4 \
     --num_val_batch_shards 4 \
     --local_batch_size 8 \
-    --num_clients 17568 \
+    --num_clients 7 \
+    --iid \
     --num_devices 8 \
     --local_momentum 0.0 \
     --virtual_momentum 0.9 \
     --num_workers 7 \
     --error_type virtual \
-    --mode sketch \
-    --k 50000 \
+    --mode uncompressed \
+    --k 1 \
     --num_rows 1 \
-    --num_cols 1240000
+    --num_cols 2
