@@ -15,8 +15,8 @@ class FedDataset(torch.utils.data.Dataset):
         self.do_iid = do_iid
         self._num_clients = num_clients
         self.type = "train" if train else "val"
-        self.is_malicious = malicious
-        self.mal_targets = args.mal_targets
+        self.type = "mal" if malicious else self.type
+        self.num_mal_images = args.mal_targets
 
         if not do_iid and num_clients is not None:
             raise ValueError("can't specify # clients when non-iid")
@@ -61,6 +61,8 @@ class FedDataset(torch.utils.data.Dataset):
             return sum(self.images_per_client)
         elif self.type == "val":
             return self.num_val_images
+        elif self.type == "mal":
+            return self.num_mal_images
 
     def __getitem__(self, idx):
         if self.type == "train":
@@ -85,9 +87,9 @@ class FedDataset(torch.utils.data.Dataset):
         elif self.type == "val":
             image, target = self._get_val_item(idx)
             client_id = -1
-            if self.is_malicious:
-                client_id = 0
-
+        elif self.type == "mal":
+            image, target = self._get_mal_item(idx)
+            client_id = 0
 
         if self.transform is not None:
             image = self.transform(image)

@@ -59,10 +59,6 @@ def update_forward_grad(worker_id, client_id, batch, compute_loss, args, hook=No
     global gw_client_errors
     global gw_worker_transmitted
 
-    mal_update_flag = False
-    if client_id == 0:
-        mal_update_flag = True
-
     # figure out what model weights this worker should use
     new_worker_weights = None
     if args.do_topk_down:
@@ -80,7 +76,7 @@ def update_forward_grad(worker_id, client_id, batch, compute_loss, args, hook=No
     set_param_vec(model, new_worker_weights.to(args.device))
 
     # g is a (possibly compressed) gradient
-    g, results = forward_grad(model, batch, compute_loss, args, mal_update_flag=mal_update_flag)
+    g, results = forward_grad(model, batch, compute_loss, args)
 
     # figure out what to send, and store it in the transmitted
     # shared tensor in spot worker_id
@@ -146,7 +142,7 @@ def get_new_worker_weights(ps_weights, worker_weights, args):
     return new_worker_weights
 
 def forward_grad(model, batch, compute_loss, args,
-                 compute_grad=True, mal_update_flag=False):
+                 compute_grad=True):
     device = args.device
 
     # divide up batch (for gradient accumulation when memory constrained)
@@ -217,14 +213,12 @@ def forward_grad(model, batch, compute_loss, args,
         args.num_local_iters -= 1
         if args.num_local_iters > 0:
             g_recursive, results_recursive = forward_grad(model, weights, batch,
-                    criterion, metric, args, mal_update_flag)
+                    criterion, metric, args)
             g = grad + g_recursive
             results = [r + r_recursive for (r, r_recursive) in zip(results, results_recursive)]
         else:
             g = grad
     elif args.mode == "uncompressed":
         g = grad
-    if mal_update_flag:
-        g *= args.mal_boost
 
     return g, results

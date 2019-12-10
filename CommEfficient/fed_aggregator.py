@@ -50,7 +50,7 @@ def profile_helper(*args):
 
 class FedModel:
     def __init__(self, input_model, compute_loss, args,
-                 compute_loss_val=None, hook=None):
+                 compute_loss_val=None, compute_loss_mal=None, hook=None):
         num_clients = args.num_clients
         device = args.device
         self.model = input_model
@@ -58,6 +58,9 @@ class FedModel:
         self.compute_loss_val = (compute_loss_val
                                  if compute_loss_val is not None
                                  else compute_loss)
+        self.compute_loss_mal = (compute_loss_mal
+                                if compute_loss_mal is not None
+                                else compute_loss)
         param_vec = get_param_vec(self.model).cpu()
         grad_size = 0
         for p in self.model.parameters():
@@ -133,7 +136,7 @@ class FedModel:
         set_param_vec(self.model, g_ps_weights)
         self.model.save_pretrained(log_dir)
 
-    def __call__(self, batch):
+    def __call__(self, batch, do_malicious=False):
         global g_criterion
         global g_metric
         args = self.args
@@ -141,6 +144,9 @@ class FedModel:
         # batch is a tuple, with the client ids as the first tensor
         client_indices = batch[0]
         batch = batch[1:]
+        compute_loss_train = self.compute_loss_train
+        if do_malicious:
+            compute_loss_train = self.compute_loss_mal
 
         if self.training:
 
@@ -156,7 +162,7 @@ class FedModel:
                               for i in unique_clients]
 
             args_tuples = [(i, idx, worker_batches[i],
-                            self.compute_loss_train, self.args, self.hook)
+                            compute_loss_train, self.args, self.hook)
                            for i, idx in enumerate(unique_clients)]
 
             results = self.process_pool.starmap(
@@ -164,7 +170,6 @@ class FedModel:
                     worker.update_forward_grad,
                     args_tuples
                 )
-            #return [(1,2,3,4),(5,6,7,8)]
             return split_results(results, self.args.num_results_train)
 
         else:

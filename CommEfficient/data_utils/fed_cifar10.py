@@ -23,21 +23,23 @@ class FedCIFAR10(FedDataset):
             with np.load(self.test_fn()) as test_set:
                 self.test_images = test_set["test_images"]
                 self.test_targets = test_set["test_targets"]
-        if self.is_malicious:
+
+        elif self.type == "mal":
             with np.load(self.test_fn()) as test_set:
                 test_images = test_set["test_images"]
                 test_targets = test_set["test_targets"]
-            mal_data_rand_idx = np.random.choice(len(test_images), size=self.mal_targets)
+            mal_data_rand_idx = np.random.choice(len(test_images), size=self.num_mal_images)
             mal_data_rand = test_images[mal_data_rand_idx]
             true_labels_rand = test_targets[mal_data_rand_idx]
-            mal_labels_rand = np.zeros(self.mal_targets)
-            for i in range(self.mal_targets):
+            mal_labels_rand = np.zeros(self.num_mal_images, dtype=np.int64)
+            for i in range(self.num_mal_images):
                 allowed_targets = list(range(10))
                 allowed_targets.remove(true_labels_rand[i])
                 mal_labels_rand[i] = np.random.choice(allowed_targets)
+            print(f"Source class: {true_labels_rand}")
             print(f"Target class: {mal_labels_rand}")
-            self.test_images = mal_data_rand
-            self.test_targets = mal_labels_rand
+            self.mal_images = mal_data_rand
+            self.mal_targets = mal_labels_rand
 
 
     def prepare_datasets(self, download=True):
@@ -101,6 +103,11 @@ class FedCIFAR10(FedDataset):
         raw_image = self.test_images[idx]
         image = Image.fromarray(raw_image)
         return image, self.test_targets[idx]
+
+    def _get_mal_item(self, idx):
+        raw_image = self.mal_images[idx]
+        image = Image.fromarray(raw_image)
+        return image, self.mal_targets[idx]
 
     def client_fn(self, client_id):
         fn = "client{}.npy".format(client_id)

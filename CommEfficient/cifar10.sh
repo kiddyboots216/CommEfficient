@@ -16,10 +16,9 @@ OMP_NUM_THREADS=8 python cv_train.py \
     --iid \
     --mode uncompressed \
     --malicious \
-    --mal_targets 100 \
-    --mal_boost 1.0 \
+    --mal_targets 1 \
+    --mal_boost 10.0 \
     --ledger \
     --l2_norm_clip 3 \
     --epsilon 2 \
     --delta 0.00001 \
-    --dp

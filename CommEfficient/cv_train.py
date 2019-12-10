@@ -75,6 +75,11 @@ def compute_loss_train(model, batch, args):
     else:
         return compute_loss_ce(model, batch, args)
 
+def compute_loss_mal(model, batch, args):
+    loss, metrics = compute_loss_train(model, batch, args)
+    boosted_loss = args.mal_boost * loss
+    return boosted_loss, metrics
+
 def compute_loss_val(model, batch, args):
     return compute_loss_ce(model, batch, args)
 
@@ -82,25 +87,26 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
           args, writer, loggers=(), timer=None, mal_loader=None):
     timer = timer or Timer()
     for epoch in range(args.num_epochs):
+        epoch_stats = {}
+        if args.is_malicious:
+            mal_loss, mal_acc = run_batches(model, opt, lr_scheduler,
+                mal_loader, True, False, args, do_malicious=True)
+            epoch_stats['mal_loss'] = mal_loss
+            epoch_stats['mal_acc'] = mal_acc
         train_loss, train_acc = run_batches(model, opt, lr_scheduler,
                                             train_loader, True, True, args)
         test_loss, test_acc = run_batches(model, None, None,
                                           test_loader, False, False, args)
         train_time = timer()
         test_time = timer()
-        epoch_stats = {
+        epoch_stats.update({
             'train_time': train_time,
             'train_loss': train_loss,
             'train_acc':  train_acc,
             'test_loss':  test_loss,
             'test_acc':   test_acc,
             'total_time': timer.total_time,
-        }
-        if args.is_malicious:
-            mal_loss, mal_acc = run_batches(model, opt, lr_scheduler,
-                mal_loader, True, False, args)
-            epoch_stats['mal_loss'] = mal_loss
-            epoch_stats['mal_acc'] = mal_acc
+        })
         lr = lr_scheduler.get_lr()[0]
         summary = union({'epoch': epoch+1,
                          'lr': lr},
@@ -118,15 +124,15 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
     return summary
 
 #@profile
-def run_batches(model, opt, lr_scheduler, loader, training, step_scheduler, args):
+def run_batches(model, opt, lr_scheduler, loader, training, step_scheduler, args, do_malicious=False):
     model.train(training)
     losses = []
     accs = []
 
     # Not actually using the loader that has been passed!
     if training:
-        for batch in loader:
-            loss, acc = model(batch)
+        for i, batch in enumerate(loader):
+            loss, acc = model(batch, do_malicious)
             if args.use_local_sched:
                 for _ in range(args.num_local_iters):
                     lr_scheduler.step()
@@ -268,8 +274,12 @@ if __name__ == "__main__":
     if args.do_dp:
         hook_cls = DPGaussianHook(args)
         hook = hook_cls.client_hook
+
     # Fed-ify everything
-    model = FedModel(model, compute_loss_train, args, compute_loss_val)
+    model = FedModel(model, compute_loss_train, args,
+                    compute_loss_val=compute_loss_val,
+                    compute_loss_mal=compute_loss_mal,
+                    hook=hook)
     opt = FedOptimizer(opt, args)
 
     # set up learning rate stuff
