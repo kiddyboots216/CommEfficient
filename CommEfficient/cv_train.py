@@ -88,11 +88,6 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
     timer = timer or Timer()
     for epoch in range(args.num_epochs):
         epoch_stats = {}
-        if args.is_malicious:
-            mal_loss, mal_acc = run_batches(model, opt, lr_scheduler,
-                mal_loader, True, False, args, do_malicious=True)
-            epoch_stats['mal_loss'] = mal_loss
-            epoch_stats['mal_acc'] = mal_acc
         train_loss, train_acc = run_batches(model, opt, lr_scheduler,
                                             train_loader, True, True, args)
         test_loss, test_acc = run_batches(model, None, None,
@@ -107,6 +102,11 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
             'test_acc':   test_acc,
             'total_time': timer.total_time,
         })
+        if args.is_malicious:
+            mal_loss, mal_acc = run_batches(model, opt, lr_scheduler,
+                mal_loader, True, False, args, do_malicious=True)
+            epoch_stats['mal_loss'] = mal_loss
+            epoch_stats['mal_acc'] = mal_acc
         lr = lr_scheduler.get_lr()[0]
         summary = union({'epoch': epoch+1,
                          'lr': lr},
