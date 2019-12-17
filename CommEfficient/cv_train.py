@@ -117,7 +117,7 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
     accs = []
 
     if training:
-        for batch in train_loader:
+        for batch in loader:
             loss, acc = model(batch)
             if args.use_local_sched:
                 for _ in range(args.num_local_iters):
@@ -131,7 +131,7 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
             if args.do_test:
                 break
     else:
-        for batch in test_loader:
+        for batch in loader:
             loss, acc = model(batch)
             losses.extend(loss)
             accs.extend(acc)
