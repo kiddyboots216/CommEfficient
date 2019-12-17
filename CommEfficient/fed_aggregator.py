@@ -306,7 +306,7 @@ def agg_grads(grads, args):
             s = torch.sparse.sum
         else:
             s = torch.sum
-        grad_agg = s(grads, dim=[0]) / args.num_workers
+        grad_agg = s(grads, dim=[0]) / grads.size()[0]
     if args.grad_reduction == "median":
         # numpy median is way faster than torch median
         grad_agg = torch.from_numpy(np.median(grads.cpu().numpy(), axis=0))
