@@ -64,6 +64,7 @@ class FedModel:
             if p.requires_grad:
                 grad_size += torch.numel(p)
         args.grad_size = grad_size
+        print("grad_size", grad_size)
         self.args = args
 
         global g_ps_weights
