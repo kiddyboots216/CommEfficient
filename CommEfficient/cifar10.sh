@@ -2,7 +2,6 @@
 OMP_NUM_THREADS=8 python cv_train.py \
     --dataset_dir /data/ashwineep/datasets/cifar10 \
     --dataset_name CIFAR10 \
-    --model ResNet9 \
     --local_batch_size 10 \
     --local_momentum 0.0 \
     --virtual_momentum 0.9 \
@@ -17,9 +16,9 @@ OMP_NUM_THREADS=8 python cv_train.py \
     --num_cols 650000 \
     --mode uncompressed \
     --mal_targets 100 \
-    --mal_boost 10.0 \
+    --mal_boost 1.0 \
     --ledger \
     --l2_norm_clip 3 \
     --epsilon 2 \
     --delta 0.00001 \
-    --malicious \
+    --malicious

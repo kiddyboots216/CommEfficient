@@ -1,7 +1,8 @@
 from collections import namedtuple
 import numpy as np
 
-__all__ = ["FixupResNet9Config", "ResNet9Config"]
+# need one_cycle for pickle
+__all__ = ["FixupResNet9Config", "ResNet9Config", "one_cycle"]
 
 class PiecewiseLinear(namedtuple('PiecewiseLinear', ('knots', 'vals'))):
     def __call__(self, t):
@@ -36,6 +37,38 @@ class FixupResNet9Config(ResNet9Config):
         self.lr_scale = 0.08
         # Override lr schedule set by ResNet9Config
         self.set_lr_schedule()
+
+def one_cycle(progress):
+    # for non-fixup
+    #hp_max = 0.3
+
+    # for fixup
+    hp_max = 0.15
+
+    epochs = 30
+    hp_init = 0
+    hp_final = 0.005
+    extra = 5
+
+    if progress < epochs / 2:
+        return 2 * hp_max * (1 - (epochs - progress) / epochs)
+    elif progress <= epochs:
+        return (hp_final + 2 * (hp_max - hp_final)
+                        * (epochs - progress) / epochs)
+    elif progress <= epochs + extra:
+        return hp_final * (extra - (progress - epochs)) / extra
+    else:
+        return hp_final / 10
+
+class ResNet18Config(ModelConfig):
+    def __init__(self):
+        super().__init__()
+        self.model_config = {}
+        self.lr_schedule = one_cycle
+        self.num_epochs = 30
+
+class FixupResNet18Config(ResNet18Config):
+    pass
 
 class FixupResNet50Config(ModelConfig):
     def __init__(self):

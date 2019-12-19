@@ -27,9 +27,9 @@ def make_logdir(args: dict):
     cols = args.num_cols
     k = args.k
     mode = args.mode
-    num_local_iters = args.num_local_iters
+    #num_local_iters = args.num_local_iters
     sketch_str = f"{mode}: {rows} x {cols}" if mode == "sketch" else f"{mode}"
-    k_str = f"k: {k}" if mode in ["sketch", "true_topk", "local_topk"] else f"num_local_iters: {num_local_iters}"
+    k_str = f"k: {k}" if mode in ["sketch", "true_topk", "local_topk"] else f"{args.is_malicious} : {args.mal_targets}, {args.mal_boost}"
     workers = args.num_workers
     clients = args.num_clients
     clients_str = f"{workers}/{clients}"
@@ -81,6 +81,8 @@ def parse_args(default_lr=None):
     parser.add_argument("--test", action="store_true", dest="do_test")
     modes = ["sketch", "true_topk", "local_topk", "localSGD", "uncompressed"]
     parser.add_argument("--mode", choices=modes, default="uncompressed")
+    parser.add_argument("--tensorboard", dest="use_tensorboard",
+                        action="store_true")
 
     # data/model args
     parser.add_argument("--num_data", type=int, default=50000)

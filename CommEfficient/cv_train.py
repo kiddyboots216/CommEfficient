@@ -92,17 +92,18 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
     timer = timer or Timer()
     for epoch in range(args.num_epochs):
         epoch_stats = {}
+        train_loss, train_acc = run_batches(model, opt, lr_scheduler,
+                                            train_loader, True, True, args)
+        test_loss, test_acc = run_batches(model, None, None,
+                                          test_loader, False, False, args)
         if args.is_malicious:
             mal_loss, mal_acc = run_batches(model, opt, lr_scheduler,
                 mal_loader, True, False, args, do_malicious=True)
             epoch_stats['mal_loss'] = mal_loss
             epoch_stats['mal_acc'] = mal_acc
-            writer.add_scalar('Loss/mal',   mal_loss,         epoch)
-            writer.add_scalar('Acc/mal',    mal_acc,          epoch)
-        train_loss, train_acc = run_batches(model, opt, lr_scheduler,
-                                            train_loader, True, True, args)
-        test_loss, test_acc = run_batches(model, None, None,
-                                          test_loader, False, False, args)
+            if args.use_tensorboard:
+                writer.add_scalar('Loss/mal',   mal_loss,         epoch)
+                writer.add_scalar('Acc/mal',    mal_acc,          epoch)
         train_time = timer()
         test_time = timer()
         epoch_stats.update({
@@ -119,14 +120,15 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
                         epoch_stats)
         for logger in loggers:
             logger.append(summary)
-        #writer.add_scalar('Loss/train', train_loss,       epoch)
-        #writer.add_scalar('Loss/test',  test_loss,        epoch)
-        writer.add_scalar('Acc/train',  train_acc,        epoch)
-        writer.add_scalar('Acc/test',   test_acc,         epoch)
-        writer.add_scalar('Time/train', train_time,       epoch)
-        #writer.add_scalar('Time/test',  test_time,        epoch)
-        writer.add_scalar('Time/total', timer.total_time, epoch)
-        writer.add_scalar('Lr',         lr,               epoch)
+        if args.use_tensorboard:
+            writer.add_scalar('Loss/train', train_loss,       epoch)
+            writer.add_scalar('Loss/test',  test_loss,        epoch)
+            writer.add_scalar('Acc/train',  train_acc,        epoch)
+            writer.add_scalar('Acc/test',   test_acc,         epoch)
+            writer.add_scalar('Time/train', train_time,       epoch)
+            writer.add_scalar('Time/test',  test_time,        epoch)
+            writer.add_scalar('Time/total', timer.total_time, epoch)
+            writer.add_scalar('Lr',         lr,               epoch)
     return summary
 
 #@profile
@@ -303,7 +305,10 @@ if __name__ == "__main__":
 
     # set up output
     log_dir = make_logdir(args)
-    writer = SummaryWriter(log_dir=log_dir)
+    if args.use_tensorboard:
+        writer = SummaryWriter(log_dir=log_dir)
+    else:
+        writer = None
     print('Finished initializing in {:.2f} seconds'.format(timer()))
 
     # and do the training
