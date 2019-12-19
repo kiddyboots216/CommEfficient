@@ -76,9 +76,13 @@ def compute_loss_train(model, batch, args):
         return compute_loss_ce(model, batch, args)
 
 def compute_loss_mal(model, batch, args):
-    loss, metrics = compute_loss_train(model, batch, args)
+    images, targets = batch
+    pred = model(images)
+    loss = ce_criterion(pred, targets)
+    accuracy = accuracy_metric(pred, targets)
+    accuracy *= (args.local_batch_size / args.mal_targets)
     boosted_loss = args.mal_boost * loss
-    return boosted_loss, metrics
+    return boosted_loss, accuracy
 
 def compute_loss_val(model, batch, args):
     return compute_loss_ce(model, batch, args)
@@ -88,6 +92,13 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
     timer = timer or Timer()
     for epoch in range(args.num_epochs):
         epoch_stats = {}
+        if args.is_malicious:
+            mal_loss, mal_acc = run_batches(model, opt, lr_scheduler,
+                mal_loader, True, False, args, do_malicious=True)
+            epoch_stats['mal_loss'] = mal_loss
+            epoch_stats['mal_acc'] = mal_acc
+            writer.add_scalar('Loss/mal',   mal_loss,         epoch)
+            writer.add_scalar('Acc/mal',    mal_acc,          epoch)
         train_loss, train_acc = run_batches(model, opt, lr_scheduler,
                                             train_loader, True, True, args)
         test_loss, test_acc = run_batches(model, None, None,
@@ -102,23 +113,18 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
             'test_acc':   test_acc,
             'total_time': timer.total_time,
         })
-        if args.is_malicious:
-            mal_loss, mal_acc = run_batches(model, opt, lr_scheduler,
-                mal_loader, True, False, args, do_malicious=True)
-            epoch_stats['mal_loss'] = mal_loss
-            epoch_stats['mal_acc'] = mal_acc
         lr = lr_scheduler.get_lr()[0]
         summary = union({'epoch': epoch+1,
                          'lr': lr},
                         epoch_stats)
         for logger in loggers:
             logger.append(summary)
-        writer.add_scalar('Loss/train', train_loss,       epoch)
-        writer.add_scalar('Loss/test',  test_loss,        epoch)
+        #writer.add_scalar('Loss/train', train_loss,       epoch)
+        #writer.add_scalar('Loss/test',  test_loss,        epoch)
         writer.add_scalar('Acc/train',  train_acc,        epoch)
         writer.add_scalar('Acc/test',   test_acc,         epoch)
         writer.add_scalar('Time/train', train_time,       epoch)
-        writer.add_scalar('Time/test',  test_time,        epoch)
+        #writer.add_scalar('Time/test',  test_time,        epoch)
         writer.add_scalar('Time/total', timer.total_time, epoch)
         writer.add_scalar('Lr',         lr,               epoch)
     return summary

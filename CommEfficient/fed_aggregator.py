@@ -145,8 +145,6 @@ class FedModel:
         client_indices = batch[0]
         batch = batch[1:]
         compute_loss_train = self.compute_loss_train
-        if do_malicious:
-            compute_loss_train = self.compute_loss_mal
 
         if self.training:
 
@@ -156,6 +154,10 @@ class FedModel:
             # participated this round
             global g_num_valid_workers
             g_num_valid_workers = unique_clients.numel()
+            if do_malicious:
+                compute_loss_train = self.compute_loss_mal
+                unique_clients = [0]
+                g_num_valid_workers = 1
 
             worker_batches = [tuple(t[torch.where(client_indices == i)[0]]
                                     for t in batch)
