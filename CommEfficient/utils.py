@@ -190,6 +190,8 @@ def parse_args(default_lr=None):
     #attack args
     parser.add_argument("--malicious", action="store_true",
                         dest="is_malicious")
+    parser.add_argument("--mal_id", type=int, default=-1,
+                        help=("Client ID to be malicious; if unspecified, benign"))
     parser.add_argument("--mal_targets", type=int, default=1,
                         help=("Number of data samples targeted"))
     parser.add_argument("--mal_boost", type=float, default=10.0,

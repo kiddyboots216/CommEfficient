@@ -2,23 +2,23 @@
 OMP_NUM_THREADS=8 python cv_train.py \
     --dataset_dir /data/ashwineep/datasets/cifar10 \
     --dataset_name CIFAR10 \
-    --local_batch_size 10 \
+    --local_batch_size 512 \
     --local_momentum 0.0 \
     --virtual_momentum 0.9 \
     --error_type virtual \
-    --num_clients 5000 \
-    --num_workers 50 \
-    --num_devices 8 \
+    --num_clients 1 \
+    --num_workers 1 \
+    --num_devices 1 \
     --share_ps_gpu \
     --k 50000 \
     --iid \
     --num_rows 1 \
     --num_cols 650000 \
     --mode uncompressed \
-    --mal_targets 100 \
+    --mal_targets 1 \
     --mal_boost 1.0 \
-    --ledger \
     --l2_norm_clip 3 \
     --epsilon 2 \
     --delta 0.00001 \
-    --malicious
+    --mal_id 0 \
+    --test \

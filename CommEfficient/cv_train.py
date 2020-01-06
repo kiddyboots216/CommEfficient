@@ -96,9 +96,9 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
                                             train_loader, True, True, args)
         test_loss, test_acc = run_batches(model, None, None,
                                           test_loader, False, False, args)
-        if args.is_malicious:
+        if args.mal_id != -1:
             mal_loss, mal_acc = run_batches(model, opt, lr_scheduler,
-                mal_loader, True, False, args, do_malicious=True)
+                mal_loader, False, False, args)
             epoch_stats['mal_loss'] = mal_loss
             epoch_stats['mal_acc'] = mal_acc
             if args.use_tensorboard:
@@ -132,15 +132,14 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
     return summary
 
 #@profile
-def run_batches(model, opt, lr_scheduler, loader, training, step_scheduler, args, do_malicious=False):
+def run_batches(model, opt, lr_scheduler, loader, training, step_scheduler, args):
     model.train(training)
     losses = []
     accs = []
 
-    # Not actually using the loader that has been passed!
     if training:
         for i, batch in enumerate(loader):
-            loss, acc = model(batch, do_malicious)
+            loss, acc = model(batch)
             if args.use_local_sched:
                 for _ in range(args.num_local_iters):
                     lr_scheduler.step()
@@ -189,7 +188,7 @@ def get_data_loaders(args):
                              pin_memory=True)
 
     mal_loader = None
-    if args.is_malicious:
+    if args.mal_id != -1:
         mal_dataset = dataset_class(args, args.dataset_dir, train_transforms,
                                   args.do_iid, args.num_clients,
                                   train=True, download=False, malicious=True)

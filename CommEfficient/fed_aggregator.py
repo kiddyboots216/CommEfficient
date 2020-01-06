@@ -61,6 +61,7 @@ class FedModel:
         self.compute_loss_mal = (compute_loss_mal
                                 if compute_loss_mal is not None
                                 else compute_loss)
+        self.mal_id = args.mal_id
         param_vec = get_param_vec(self.model).cpu()
         grad_size = 0
         for p in self.model.parameters():
@@ -137,7 +138,7 @@ class FedModel:
         set_param_vec(self.model, g_ps_weights)
         self.model.save_pretrained(log_dir)
 
-    def __call__(self, batch, do_malicious=False):
+    def __call__(self, batch):
         global g_criterion
         global g_metric
         args = self.args
@@ -155,17 +156,19 @@ class FedModel:
             # participated this round
             global g_num_valid_workers
             g_num_valid_workers = unique_clients.numel()
+            """
             if do_malicious:
                 compute_loss_train = self.compute_loss_mal
                 unique_clients = [0]
                 g_num_valid_workers = 1
+            """
 
             worker_batches = [tuple(t[torch.where(client_indices == i)[0]]
                                     for t in batch)
                               for i in unique_clients]
 
             args_tuples = [(i, idx, worker_batches[i],
-                            compute_loss_train, self.args, self.hook)
+                            compute_loss_train, self.args, self.hook) if i != self.mal_id else (i, idx, worker_batches[i], self.compute_loss_mal, self.args, self.hook)
                            for i, idx in enumerate(unique_clients)]
 
             results = self.process_pool.starmap(

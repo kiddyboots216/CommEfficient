@@ -17,6 +17,7 @@ class FedDataset(torch.utils.data.Dataset):
         self.type = "train" if train else "val"
         self.type = "mal" if malicious else self.type
         self.num_mal_images = args.mal_targets
+        self.mal_id = args.mal_id
 
         if not do_iid and num_clients is not None:
             raise ValueError("can't specify # clients when non-iid")
@@ -77,8 +78,11 @@ class FedDataset(torch.utils.data.Dataset):
             client_id = np.searchsorted(cumsum, idx, side="right")
             cumsum = np.hstack([[0], cumsum[:-1]])
             idx_within_client = idx - cumsum[client_id]
+            if client_id == self.mal_id:
+                image, target = self._get_mal_item(idx_within_client)
 
-            image, target = self._get_train_item(client_id,
+            else:
+                image, target = self._get_train_item(client_id,
                                                  idx_within_client)
 
             if self.do_iid:

@@ -24,7 +24,7 @@ class FedCIFAR10(FedDataset):
                 self.test_images = test_set["test_images"]
                 self.test_targets = test_set["test_targets"]
 
-        elif self.type == "mal":
+        if self.mal_id != -1:
             with np.load(self.test_fn()) as test_set:
                 test_images = test_set["test_images"]
                 test_targets = test_set["test_targets"]
@@ -40,7 +40,6 @@ class FedCIFAR10(FedDataset):
             print(f"Target class: {mal_labels_rand}")
             self.mal_images = mal_data_rand
             self.mal_targets = mal_labels_rand
-
 
     def prepare_datasets(self, download=True):
         os.makedirs(self.dataset_dir, exist_ok=True)
@@ -104,10 +103,17 @@ class FedCIFAR10(FedDataset):
         image = Image.fromarray(raw_image)
         return image, self.test_targets[idx]
 
+    """
     def _get_mal_item(self, idx):
         raw_image = self.mal_images[idx]
         image = Image.fromarray(raw_image)
         return image, self.mal_targets[idx]
+    """
+    def _get_mal_item(self, idx_within_client):
+        new_idx = idx_within_client % len(self.mal_images)
+        raw_image = self.mal_images[new_idx]
+        image = Image.fromarray(raw_image)
+        return image, self.mal_targets[new_idx]
 
     def client_fn(self, client_id):
         fn = "client{}.npy".format(client_id)
