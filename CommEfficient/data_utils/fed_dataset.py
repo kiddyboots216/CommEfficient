@@ -18,6 +18,7 @@ class FedDataset(torch.utils.data.Dataset):
         self.type = "mal" if malicious else self.type
         self.num_mal_images = args.mal_targets
         self.mal_id = args.mal_id
+        self.is_malicious = args.is_malicious
 
         if not do_iid and num_clients is not None:
             raise ValueError("can't specify # clients when non-iid")

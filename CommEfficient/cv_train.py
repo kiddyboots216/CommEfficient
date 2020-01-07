@@ -96,7 +96,7 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
                                             train_loader, True, True, args)
         test_loss, test_acc = run_batches(model, None, None,
                                           test_loader, False, False, args)
-        if args.mal_id != -1:
+        if args.is_malicious:
             mal_loss, mal_acc = run_batches(model, opt, lr_scheduler,
                 mal_loader, False, False, args)
             epoch_stats['mal_loss'] = mal_loss
@@ -188,7 +188,7 @@ def get_data_loaders(args):
                              pin_memory=True)
 
     mal_loader = None
-    if args.mal_id != -1:
+    if args.is_malicious:
         mal_dataset = dataset_class(args, args.dataset_dir, train_transforms,
                                   args.do_iid, args.num_clients,
                                   train=True, download=False, malicious=True)
