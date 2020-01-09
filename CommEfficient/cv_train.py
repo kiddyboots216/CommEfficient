@@ -149,7 +149,7 @@ def get_data_loaders(args):
     dataset_class = globals()["Fed" + args.dataset_name]
     train_dataset = dataset_class(args.dataset_dir, train_transforms,
                                   args.do_iid, args.num_clients,
-                                  train=True, download=False)
+                                  train=True, download=True)
     test_dataset = dataset_class(args.dataset_dir, val_transforms,
                                  train=False, download=False)
 
