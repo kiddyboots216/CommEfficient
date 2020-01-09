@@ -3,20 +3,22 @@ KMP_INIT_AT_FORK=FALSE OMP_NUM_THREADS=8 python cv_train.py \
     --dataset_dir /data/ashwineep/datasets/cifar10 \
     --dataset_name CIFAR10 \
     --tensorboard \
-    --local_batch_size 512 \
+    --model ResNet9 \
+    --local_batch_size 10 \
     --local_momentum 0.0 \
     --virtual_momentum 0.9 \
     --error_type virtual \
-    --num_clients 8 \
-    --num_workers 8 \
-    --num_devices 8 \
-    --share_ps_gpu \
+    --num_clients 5000 \
+    --num_workers 51 \
+    --num_devices 4 \
     --k 50000 \
     --iid \
     --num_rows 1 \
     --num_cols 650000 \
+    --ledger \
+    --l2_norm_clip 1 \
+    --noise_multiplier 0.02 \
+    --dp \
     --mode uncompressed \
-    --malicious \
-    --mal_targets 50 \
-    --mal_boost 10.0 \
-    --mal_id 0 \
+    --mal_targets 100 \
+    --mal_boost 1.0 \
