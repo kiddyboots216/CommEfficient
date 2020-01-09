@@ -102,14 +102,15 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
                         epoch_stats)
         for logger in loggers:
             logger.append(summary)
-        writer.add_scalar('Loss/train', train_loss,       epoch)
-        writer.add_scalar('Loss/test',  test_loss,        epoch)
-        writer.add_scalar('Acc/train',  train_acc,        epoch)
-        writer.add_scalar('Acc/test',   test_acc,         epoch)
-        writer.add_scalar('Time/train', train_time,       epoch)
-        writer.add_scalar('Time/test',  test_time,        epoch)
-        writer.add_scalar('Time/total', timer.total_time, epoch)
-        writer.add_scalar('Lr',         lr,               epoch)
+        if args.use_tensorboard:
+            writer.add_scalar('Loss/train', train_loss,       epoch)
+            writer.add_scalar('Loss/test',  test_loss,        epoch)
+            writer.add_scalar('Acc/train',  train_acc,        epoch)
+            writer.add_scalar('Acc/test',   test_acc,         epoch)
+            writer.add_scalar('Time/train', train_time,       epoch)
+            writer.add_scalar('Time/test',  test_time,        epoch)
+            writer.add_scalar('Time/total', timer.total_time, epoch)
+            writer.add_scalar('Lr',         lr,               epoch)
     return summary
 
 #@profile
@@ -119,7 +120,7 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
     accs = []
 
     if training:
-        for batch in train_loader:
+        for batch in loader:
             loss, acc = model(batch)
             if args.use_local_sched:
                 for _ in range(args.num_local_iters):
@@ -133,7 +134,7 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
             if args.do_test:
                 break
     else:
-        for batch in test_loader:
+        for batch in loader:
             loss, acc = model(batch)
             losses.extend(loss)
             accs.extend(acc)
@@ -260,7 +261,10 @@ if __name__ == "__main__":
 
     # set up output
     log_dir = make_logdir(args)
-    writer = SummaryWriter(log_dir=log_dir)
+    if args.use_tensorboard:
+        writer = SummaryWriter(log_dir=log_dir)
+    else:
+        writer = None
     print('Finished initializing in {:.2f} seconds'.format(timer()))
 
     # and do the training
