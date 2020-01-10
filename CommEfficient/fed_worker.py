@@ -89,6 +89,10 @@ def update_forward_grad(worker_id, client_id, batch, compute_loss, args, hook=No
         error = gw_client_errors[client_id]
     transmitted = gw_worker_transmitted[worker_id]
 
+    # reduce the importance of this gradient if the batch size was smaller
+    # than usual
+    g = g * batch[0].size(0) / args.local_batch_size
+
     g = g.cpu()
 
     # if needed, do local momentum
