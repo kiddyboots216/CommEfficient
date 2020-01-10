@@ -333,6 +333,8 @@ def _server_helper_uncompressed(transmitted, Vvelocity, Verror, args, lr):
               alpha=rho,
               out=Vvelocity)
     update = Vvelocity
+    #noise = torch.normal(mean=0, std=args.noise_multiplier, size=update.size()).to(args.device)
+    #update += noise
     return update * lr, Vvelocity, Verror
 
 def _server_helper_true_topk(transmitted, Vvelocity, Verror, args, lr):
@@ -403,6 +405,10 @@ def _server_helper_sketched(transmitted, Vvelocity, Verror, args, lr):
 
     sketch = args2sketch(args)
     sketch.accumulateTable(Verror)
+    #noise = torch.normal(mean=0, std=args.noise_multiplier, size=[args.grad_size]).to(args.device)
+    #sketch.accumulateVec(noise)
+    #noise = torch.normal(mean=0, std=args.noise_multiplier, size=[args.rows, args.cols]).to(args.device)
+    #sketch.accumulateTable(noise)
     update = sketch.unSketch(k=args.k)
 
     # do virtual error

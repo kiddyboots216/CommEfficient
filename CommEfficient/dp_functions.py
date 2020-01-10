@@ -59,9 +59,9 @@ class DPGaussianHook(DPHook):
             args.num_clients = args.num_workers
         args.participation = args.num_workers / args.num_clients
         #args.noise_multiplier = compute_noise_multiplier(args)
-        if args.noise_multiplier <= 0:
-            args.noise_multiplier = 0.05
-        args.noise_multiplier *= args.num_workers
+        #if args.noise_multiplier <= 0:
+        #    args.noise_multiplier = 0.05
+        #args.noise_multiplier *= np.sqrt(args.num_workers)
         print(f"Using noise multiplier: {args.noise_multiplier}")
         dp_sum_query = GaussianSumQuery(args.l2_norm_clip, args.noise_multiplier)
 
