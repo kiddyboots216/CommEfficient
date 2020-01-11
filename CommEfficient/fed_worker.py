@@ -198,8 +198,9 @@ def forward_grad(model, batch, compute_loss, args,
         return results
 
     grad = get_grad(model, args)
-    noise = torch.normal(mean=0, std=args.noise_multiplier, size=grad.size()).to(args.device)
-    grad += noise
+    if args.do_dp:
+        noise = torch.normal(mean=0, std=args.noise_multiplier, size=grad.size()).to(args.device)
+        grad += noise
 
     # compress the gradient if needed
     if args.mode == "sketch":
