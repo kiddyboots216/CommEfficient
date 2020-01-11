@@ -64,6 +64,7 @@ class FedModel:
             if p.requires_grad:
                 grad_size += torch.numel(p)
         args.grad_size = grad_size
+        print("grad_size", grad_size)
         self.args = args
 
         global g_ps_weights
@@ -305,6 +306,13 @@ def agg_grads(grads, args):
             s = torch.sparse.sum
         else:
             s = torch.sum
+        #grad_agg = s(grads, dim=[0]) / grads.size()[0]
+        # divide by num_workers instead of grads.size(0)
+        # dividing by grads.size(0) would give us the average gradient
+        # on the batch. But if the batch is much smaller than usual
+        # (i.e. grads.size(0) < args.num_workers), then we want to reduce
+        # the LR linearly with BS. Not that agg_grads is exactly the right
+        # place to adjust the LR, but oh well.
         grad_agg = s(grads, dim=[0]) / args.num_workers
     if args.grad_reduction == "median":
         # numpy median is way faster than torch median

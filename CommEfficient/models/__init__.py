@@ -1,4 +1,5 @@
 from .resnet9 import *
 from .fixup_resnet9 import *
 from .fixup_resnet import *
+from .fixup_resnet18 import *
 from .configs import *

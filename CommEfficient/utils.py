@@ -81,6 +81,8 @@ def parse_args(default_lr=None):
     parser.add_argument("--test", action="store_true", dest="do_test")
     modes = ["sketch", "true_topk", "local_topk", "localSGD", "uncompressed"]
     parser.add_argument("--mode", choices=modes, default="sketch")
+    parser.add_argument("--tensorboard", dest="use_tensorboard",
+                        action="store_true")
 
     # data/model args
     parser.add_argument("--num_data", type=int, default=50000)

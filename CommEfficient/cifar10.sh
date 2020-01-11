@@ -1,17 +1,21 @@
-#OMP_NUM_THREADS=8 python -m cProfile -o profile/cifar_fedsampler.pstats fed_train.py \
-OMP_NUM_THREADS=8 python fed_train.py \
-    --dataset_path /data/ashwineep/datasets \
-    --local_batch_size 512 \
+#OMP_NUM_THREADS=8 python -m cProfile -o profile/cifar_fedsampler.pstats cv_train.py \
+KMP_INIT_AT_FORK=FALSE OMP_NUM_THREADS=8 python cv_train.py \
+    --dataset_dir /data/ashwineep/datasets/ \
     --dataset_name CIFAR10 \
+    --model ResNet9 \
+    --local_batch_size 512 \
     --local_momentum 0.0 \
-    --virtual_momentum 0.9 \
+    --virtual_momentum 0.0 \
     --error_type virtual \
-    --mode sketch \
-    --num_devices 2 \
-    --num_workers 1 \
-    --iid \
+    --mode true_topk \
     --num_clients 1 \
+    --num_workers 1 \
+    --num_devices 1 \
     --k 50000 \
-    --num_rows 3 \
+    --num_rows 1 \
     --num_cols 1000000 \
-    --supervised
+    --supervised \
+    --iid \
+    --share_ps_gpu \
+    --dp \
+    --noise_multiplier 0.01 \
