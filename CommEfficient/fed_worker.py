@@ -97,9 +97,9 @@ def process_batch(batch, model, ps_weights, client_weights,
             velocity = None
             error = None
             if client_velocities is not None:
-                velocity = client_velocities[client_id]
+                velocity = client_velocities[client_id].to(args.device)
             if client_errors is not None:
-                error = client_errors[client_id]
+                error = client_errors[client_id].to(args.device)
 
             results, transmit = local_step(model, velocity, error, batch,
                                            compute_loss_train, args)
