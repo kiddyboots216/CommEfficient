@@ -167,20 +167,36 @@ def get_data_loaders(args):
 
     train_loader = DataLoader(train_dataset,
                               batch_sampler=train_sampler,
-                              num_workers=8,
-                              pin_memory=True)
+                              num_workers=2)#,
+                              #multiprocessing_context="spawn",
+                              #pin_memory=True)
     test_batch_size = args.local_batch_size * args.num_workers
     test_loader = DataLoader(test_dataset,
                              batch_size=test_batch_size,
                              shuffle=False,
-                             num_workers=4,
-                             pin_memory=True)
+                             num_workers=0)#,
+                             #multiprocessing_context="spawn",
+                             #pin_memory=True)
 
     return train_loader, test_loader
 
 
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
+    """
+    import cProfile
+    import sys
+    # if check avoids hackery when not profiling
+    # Optional; hackery *seems* to work fine even when not profiling,
+    # it's just wasteful
+    if sys.modules['__main__'].__file__ == cProfile.__file__:
+        # Imports you again (does *not* use cache or execute as __main__)
+        import cv_train
+        # Replaces current contents with newly imported stuff
+        globals().update(vars(cv_train))
+        # Ensures pickle lookups on __main__ find matching version
+        sys.modules['__main__'] = cv_train
+    """
 
     # fixup
     #args = parse_args(default_lr=0.4)
