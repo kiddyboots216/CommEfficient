@@ -3,104 +3,124 @@ import numpy as np
 import ctypes
 from utils import get_param_vec, set_param_vec, get_grad, _topk
 import copy
+import os
+import time
 import torch.multiprocessing as multiprocessing
 from csvec import CSVec
+import torch.distributed as dist
+import queue
 
-def init_pool(input_model, device, num_worker_gpus,
-              client_errors, client_velocities,
-              worker_transmitted, client_weights, ps_weights):
-    global model
-    global gw_ps_weights
-    global gw_client_weights
-    global gw_client_errors
-    global gw_client_velocities
-    global gw_worker_transmitted
+def update_forward_grad_loop(input_model, ps_weights, client_weights,
+                             client_errors, client_velocities,
+                             batches_queue, results_queue,
+                             rank, world_size,
+                             compute_loss_train, compute_loss_val, args):
+    torch.cuda.set_device(rank - 1)
 
-    # use the first num_worker_gpus gpus
-    if torch.cuda.is_available():
-        process_id = multiprocessing.current_process()._identity[0]
-        # just in case the process_ids aren't zero-indexed
-        device_id = process_id % num_worker_gpus
-        torch.cuda.set_device(device_id)
+    model = input_model.to(args.device)
 
-    model = copy.deepcopy(input_model)
-    model.to(device)
-    gw_ps_weights = ps_weights
-    gw_client_weights = client_weights
-    gw_client_velocities = client_velocities
-    gw_client_errors = client_errors
-    gw_worker_transmitted = worker_transmitted
+    os.environ["MASTER_ADDR"] = "127.0.0.1"
+    os.environ["MASTER_PORT"] = "5315"
+    torch.distributed.init_process_group("nccl", rank=rank,
+                                         world_size=world_size)
+    while True:
+        try:
+            batches = batches_queue.get(timeout=30)
+        except queue.Empty:
+            print("batch queue was empty")
+            return
+        if batches is None:
+            # reached the end of training
+            break
 
-def zero_grad():
-    global model
-    model.zero_grad()
+        # get the latest weights from the parameter server
+        local_ps_weights = ps_weights.to(args.device)
 
-def forward(batch, compute_loss, args):
-    global model
-    global gw_ps_weights
+        # sum the gradient over all batches
+        if args.mode in ["uncompressed", "true_topk", "local_topk"]:
+            shape = (args.grad_size,)
+        elif args.mode == "sketch":
+            shape = (args.num_rows, args.num_cols)
+        sum_g = torch.zeros(shape).to(args.device).float()
 
-    model = model.to(args.device)
-    model.eval()
-    set_param_vec(model, gw_ps_weights.to(args.device))
-    return forward_grad(model, batch, compute_loss, args,
-                        compute_grad=False)
+        # first batch, first tensor (client_indices), first datum
+        is_train = batches[0][0][0] != -1
 
-def update_forward_grad(worker_id, client_id, batch, compute_loss, args):
+        all_results = []
+        for batch in batches:
+            g, results = process_batch(
+                    batch, model, local_ps_weights, client_weights,
+                    client_errors, client_velocities,
+                    compute_loss_train, compute_loss_val, args
+                )
 
-    zero_grad()
-    # pull PS and client weights out of the shared memory block
-    grad_size = args.grad_size
-    num_clients = args.num_clients
+            if is_train:
+                sum_g += g
+            all_results.append(results)
 
-    global model
-    global gw_ps_weights
-    global gw_client_weights
-    global gw_client_velocities
-    global gw_client_errors
-    global gw_worker_transmitted
+        results_queue.put(all_results)
 
-    # figure out what model weights this worker should use
-    new_worker_weights = None
-    if args.do_topk_down:
-        worker_weights = gw_client_weights[client_id].to(args.device)
-        new_worker_weights = get_new_worker_weights(ps_weights,
-                                                    worker_weights,
-                                                    args)
-    else:
-        ps_weights = gw_ps_weights.to(args.device)
-        new_worker_weights = ps_weights
+        if is_train:
+            # reduce the locally summed g across devices
+            torch.distributed.barrier()
+            torch.distributed.reduce(sum_g, 0)
 
-    # get model ready
-    model = model.to(args.device)
-    model.train()
-    set_param_vec(model, new_worker_weights.to(args.device))
+def process_batch(batch, model, ps_weights, client_weights,
+                  client_errors, client_velocities,
+                  compute_loss_train, compute_loss_val, args):
+        client_indices = batch[0]
+        is_train = client_indices[0] != -1
+        batch = batch[1:]
+        batch = [t.to(args.device) for t in batch]
+        assert (client_indices - client_indices[0]).abs().sum() == 0
+        client_id = client_indices[0]
 
+        # figure out what model weights this worker should use
+        new_worker_weights = None
+        if args.do_topk_down:
+            worker_weights = client_weights[client_id].to(args.device)
+            new_worker_weights = get_new_worker_weights(ps_weights,
+                                                        worker_weights,
+                                                        args)
+            new_worker_weights = new_worker_weights.to(args.device)
+        else:
+            new_worker_weights = ps_weights
+
+        # get model ready
+        set_param_vec(model, new_worker_weights)
+
+        transmit = None
+        if is_train:
+            model.train()
+            model.zero_grad()
+            # get our client's local velocity & local error vectors
+            velocity = None
+            error = None
+            if client_velocities is not None:
+                velocity = client_velocities[client_id]
+            if client_errors is not None:
+                error = client_errors[client_id]
+
+            results, transmit = local_step(model, velocity, error, batch,
+                                           compute_loss_train, args)
+        else:
+            model.eval()
+            results = forward_grad(model, batch, compute_loss_val, args,
+                                   compute_grad=False)
+        return transmit, results
+
+def local_step(model, velocity, error, batch, compute_loss, args):
     # g is a (possibly compressed) gradient
     g, results = forward_grad(model, batch, compute_loss, args)
-
-    # figure out what to send, and store it in the transmitted
-    # shared tensor in spot worker_id
-    # get our specific local velocity/local error/transmitted vectors
-    velocity = None
-    error = None
-    if gw_client_velocities is not None:
-        velocity = gw_client_velocities[client_id]
-    if gw_client_errors is not None:
-        error = gw_client_errors[client_id]
-    transmitted = gw_worker_transmitted[worker_id]
 
     # reduce the importance of this gradient if the batch size was smaller
     # than usual
     g = g * batch[0].size(0) / args.local_batch_size
 
-    g = g.cpu()
-
     # if needed, do local momentum
-    # this does velocity[:] = m * velocity + g,
-    # but twice as fast
     if args.local_momentum > 0:
-        torch.add(g, velocity, alpha=args.local_momentum,
-                  out=velocity)
+        # this does velocity[:] = m * velocity + g, but twice as fast
+        torch.add(g, velocity, alpha=args.local_momentum, out=velocity)
 
     # if needed, do local error correction
     if args.error_type == "local":
@@ -112,7 +132,7 @@ def update_forward_grad(worker_id, client_id, batch, compute_loss, args):
     if args.mode == "local_topk":
         assert args.error_type == "local"
         # topk is impossibly slow on CPU, very fast on GPU
-        to_transmit = _topk(to_transmit.to(args.device), k=args.k).cpu()
+        to_transmit = _topk(to_transmit.to(args.device), k=args.k)
         nz = to_transmit.nonzero()
         # error feedback
         error[nz] = 0
@@ -121,9 +141,7 @@ def update_forward_grad(worker_id, client_id, batch, compute_loss, args):
         if args.local_momentum > 0:
             velocity[nz] = 0
 
-    transmitted[:] = to_transmit
-
-    return results
+    return results, to_transmit
 
 def get_new_worker_weights(ps_weights, worker_weights, args):
     device = args.device
@@ -144,13 +162,10 @@ def get_new_worker_weights(ps_weights, worker_weights, args):
     #print(f"{updated_vec} = {client_weights} + {weight_update}")
     return new_worker_weights
 
-def forward_grad(model, batch, compute_loss, args,
-                 compute_grad=True):
-
+def forward_grad(model, batch, compute_loss, args, compute_grad=True):
     device = args.device
 
     # divide up batch (for gradient accumulation when memory constrained)
-    batch = tuple(input_tensor.to(device) for input_tensor in batch)
     num_shards = args.num_train_batch_shards
     microbatch_size = args.local_batch_size // num_shards
     batch_size = batch[0].size()[0]
@@ -159,6 +174,7 @@ def forward_grad(model, batch, compute_loss, args,
     accum_loss = 0
     accum_metrics = None
     # need the max(1, ...) since the last batch in an epoch might be small
+
     num_iters = max(1, batch_size // microbatch_size)
     for i in range(num_iters):
         # extract current microbatch
@@ -208,7 +224,10 @@ def forward_grad(model, batch, compute_loss, args,
     elif args.mode == "true_topk":
         g = grad
     elif args.mode == "local_topk":
-        #g = _topk(grad, k=args.k)
+        # ideally we'd return the compressed version of the gradient,
+        # i.e. _topk(grad, k=args.k). However, for sketching we do momentum
+        # in the sketch, whereas for topk we do momentum before taking topk
+        # so we have to return an inconsistent quantity here
         g = grad
     elif args.mode == "localSGD":
         # TODO: scheduling LR doesn't work
