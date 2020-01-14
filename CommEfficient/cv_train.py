@@ -211,13 +211,19 @@ if __name__ == "__main__":
     config_class = getattr(configs, args.model + "Config")
     config = config_class()
     config.set_args(args)
+
     print(args)
 
 
     timer = Timer()
 
-    # model class and config
+    # reproducibility
+    np.random.seed(21)
     torch.random.manual_seed(21)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    # model class and config
     if args.do_test:
         model_config = {
             'channels': {'prep': 1, 'layer1': 1,
