@@ -10,11 +10,9 @@ from csvec import CSVec
 import torch.distributed as dist
 import queue
 
-def update_forward_grad_loop(input_model, ps_weights, client_weights,
-                             client_errors, client_velocities,
-                             batches_queue, results_queue,
-                             rank, world_size,
-                             compute_loss_train, compute_loss_val, args):
+def worker_loop(input_model, ps_weights, client_weights, client_errors,
+                client_velocities, batches_queue, results_queue, rank,
+                world_size, compute_loss_train, compute_loss_val, args):
     torch.cuda.set_device(rank - 1)
 
     model = input_model.to(args.device)

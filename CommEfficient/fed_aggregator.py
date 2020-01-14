@@ -111,7 +111,7 @@ class FedModel:
         world_size = n_worker_gpus + 1
         for i in range(n_worker_gpus):
             p = multiprocessing.Process(
-                        target=worker.update_forward_grad_loop,
+                        target=worker.worker_loop,
                         args=(self.model, g_ps_weights,
                               self.client_weights,
                               self.client_errors, self.client_velocities,
