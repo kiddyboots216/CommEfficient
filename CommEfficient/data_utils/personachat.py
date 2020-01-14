@@ -7,6 +7,7 @@ import tarfile
 import tempfile
 from collections import defaultdict
 from itertools import chain
+import random
 
 import torch
 import numpy as np
@@ -31,11 +32,13 @@ PADDED_INPUTS = ["input_ids", "lm_labels", "token_type_ids"]
 
 class FedPersonaChat(torch.utils.data.Dataset):
     def __init__(self, dataset_dir, tokenizer, num_candidates, max_history,
-                 do_iid=False, num_clients=None, train=True,download=True):
+                 permute_personalities=False, do_iid=False,
+                 num_clients=None, train=True,download=True):
         self.dataset_dir = dataset_dir
         self.tokenizer = tokenizer
         self.num_candidates = num_candidates
         self.max_history = max_history
+        self.permute_personalities = permute_personalities
         self.type = "train" if train else "val"
 
         self.do_iid = do_iid
@@ -263,6 +266,9 @@ class FedPersonaChat(torch.utils.data.Dataset):
 
         candidates = utterance["candidates"][-num_candidates:]
         history = utterance["history"][-(2 * self.max_history + 1):]
+
+        if self.permute_personalities:
+            random.shuffle(personality)
 
         return raw_to_input(self.tokenizer, personality,
                             history, candidates)

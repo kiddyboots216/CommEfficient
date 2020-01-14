@@ -144,6 +144,8 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
             loss, acc = model(batch)
             losses.extend(loss)
             accs.extend(acc)
+            if args.do_test:
+                break
 
     return np.mean(losses), np.mean(accs)
 
