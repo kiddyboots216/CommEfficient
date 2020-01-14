@@ -22,6 +22,11 @@ class Logger:
     def critical(self, msg, args=None):
         print(msg.format(args))
 
+def is_port_in_use(port):
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(('localhost', port)) == 0
+
 def make_logdir(args: dict):
     rows = args.num_rows
     cols = args.num_cols
@@ -190,6 +195,13 @@ def parse_args(default_lr=None):
 
 
     args = parser.parse_args()
+    port_in_use = True
+    while port_in_use:
+        if is_port_in_use(args.port):
+            print(f"{args.port} port in use, trying next...")
+            args.port += 1
+        else:
+            port_in_use = False
 
     return args
 

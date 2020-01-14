@@ -28,7 +28,7 @@ class ResNet9Config(ModelConfig):
         self.set_lr_schedule()
 
     def set_lr_schedule(self):
-        self.lr_schedule = PiecewiseLinear([0, 8, 30],
+        self.lr_schedule = PiecewiseLinear([0, 5, 24],
                                   [0, self.lr_scale, 0])
 
 class FixupResNet9Config(ResNet9Config):
