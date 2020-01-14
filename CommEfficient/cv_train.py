@@ -119,7 +119,6 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
 
     if training:
         for batch in loader:
-            loss, acc = model(batch)
             if args.use_local_sched:
                 for _ in range(args.num_local_iters):
                     lr_scheduler.step()
@@ -130,6 +129,8 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
             if batch[0].numel() < expected_numel:
                 # skip incomplete batches
                 continue
+
+            loss, acc = model(batch)
 
             opt.step()
             #model.zero_grad()
