@@ -254,17 +254,20 @@ if __name__ == "__main__":
     model_cls = getattr(models, args.model)
     model = model_cls(**config.model_config)
 
-    params_bias = [p[1] for p in model.named_parameters()
-                        if 'bias' in p[0]]
-    params_scale = [p[1] for p in model.named_parameters()
-                         if 'scale' in p[0]]
-    params_other = [p[1] for p in model.named_parameters()
-                         if not ('bias' in p[0] or 'scale' in p[0])]
-    opt = optim.SGD([
-            {"params": params_bias, "lr": 0.1},
-            {"params": params_scale, "lr": 0.1},
-            {"params": params_other, "lr": 1}
-        ], lr=1)
+    if args.model[:5] == "Fixup":
+        print("using fixup learning rates")
+        params_bias = [p[1] for p in model.named_parameters()
+                            if 'bias' in p[0]]
+        params_scale = [p[1] for p in model.named_parameters()
+                             if 'scale' in p[0]]
+        params_other = [p[1] for p in model.named_parameters()
+                             if not ('bias' in p[0] or 'scale' in p[0])]
+        param_groups = [{"params": params_bias, "lr": 0.1},
+                        {"params": params_scale, "lr": 0.1},
+                        {"params": params_other, "lr": 1}]
+    else:
+        param_groups = model.parameters()
+    opt = optim.SGD(param_groups, lr=1)
 
 
     # Fed-ify everything
@@ -274,6 +277,7 @@ if __name__ == "__main__":
     # set up learning rate stuff
     #lr_schedule = PiecewiseLinear([0, args.pivot_epoch, args.num_epochs],
     #                              [0, args.lr_scale, 0])
+
     lr_schedule = config.lr_schedule
 
     # grad_reduction only controls how gradients from different
