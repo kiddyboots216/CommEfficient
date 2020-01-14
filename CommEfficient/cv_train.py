@@ -10,7 +10,6 @@ import torchvision
 
 from models import configs
 import models
-from fixup.cifar.utils import mixup_data
 from fed_aggregator import FedModel, FedOptimizer
 from utils import make_logdir, union, Timer, TableLogger, parse_args
 from data_utils import FedSampler, FedCIFAR10, FedImageNet

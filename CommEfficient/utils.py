@@ -136,6 +136,7 @@ def parse_args(default_lr=None):
     parser.add_argument("--mixup", action="store_true", dest="do_mixup")
 
     # parallelization args
+    parser.add_argument("--port", type=int, default=5315)
     parser.add_argument("--num_clients", type=int)
     parser.add_argument("--num_workers", type=int, default=1)
     default_device = "cuda" if torch.cuda.is_available() else "cpu"

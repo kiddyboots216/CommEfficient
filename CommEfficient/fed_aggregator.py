@@ -126,7 +126,7 @@ class FedModel:
 
         # set up communication channel with worker processes
         os.environ["MASTER_ADDR"] = "127.0.0.1"
-        os.environ["MASTER_PORT"] = "5315"
+        os.environ["MASTER_PORT"] = str(args.port)
         torch.distributed.init_process_group("nccl", rank=0,
                                              world_size=world_size)
 
