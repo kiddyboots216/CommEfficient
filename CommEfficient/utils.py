@@ -199,7 +199,7 @@ def parse_args(default_lr=None):
     while port_in_use:
         if is_port_in_use(args.port):
             print(f"{args.port} port in use, trying next...")
-            args.port += 1
+            args.port += np.random.randint(0,1000)
         else:
             port_in_use = False
 
