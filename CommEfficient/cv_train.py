@@ -10,7 +10,6 @@ import torchvision
 
 from models import configs
 import models
-#from fixup.cifar.utils import mixup_data
 from fed_aggregator import FedModel, FedOptimizer
 from utils import make_logdir, union, Timer, TableLogger, parse_args
 from data_utils import FedSampler, FedCIFAR10, FedImageNet
@@ -121,7 +120,6 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
 
     if training:
         for batch in loader:
-            loss, acc = model(batch)
             if args.use_local_sched:
                 for _ in range(args.num_local_iters):
                     lr_scheduler.step()
@@ -132,6 +130,8 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
             if batch[0].numel() < expected_numel:
                 # skip incomplete batches
                 continue
+
+            loss, acc = model(batch)
 
             opt.step()
             #model.zero_grad()
@@ -168,20 +168,36 @@ def get_data_loaders(args):
 
     train_loader = DataLoader(train_dataset,
                               batch_sampler=train_sampler,
-                              num_workers=8,
-                              pin_memory=True)
+                              num_workers=2)#,
+                              #multiprocessing_context="spawn",
+                              #pin_memory=True)
     test_batch_size = args.local_batch_size * args.num_workers
     test_loader = DataLoader(test_dataset,
                              batch_size=test_batch_size,
                              shuffle=False,
-                             num_workers=4,
-                             pin_memory=True)
+                             num_workers=0)#,
+                             #multiprocessing_context="spawn",
+                             #pin_memory=True)
 
     return train_loader, test_loader
 
 
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
+    """
+    import cProfile
+    import sys
+    # if check avoids hackery when not profiling
+    # Optional; hackery *seems* to work fine even when not profiling,
+    # it's just wasteful
+    if sys.modules['__main__'].__file__ == cProfile.__file__:
+        # Imports you again (does *not* use cache or execute as __main__)
+        import cv_train
+        # Replaces current contents with newly imported stuff
+        globals().update(vars(cv_train))
+        # Ensures pickle lookups on __main__ find matching version
+        sys.modules['__main__'] = cv_train
+    """
 
     # fixup
     #args = parse_args(default_lr=0.4)
@@ -196,13 +212,19 @@ if __name__ == "__main__":
     config_class = getattr(configs, args.model + "Config")
     config = config_class()
     config.set_args(args)
+
     print(args)
 
 
     timer = Timer()
 
-    # model class and config
+    # reproducibility
+    np.random.seed(21)
     torch.random.manual_seed(21)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    # model class and config
     if args.do_test:
         model_config = {
             'channels': {'prep': 1, 'layer1': 1,
@@ -233,17 +255,20 @@ if __name__ == "__main__":
     model_cls = getattr(models, args.model)
     model = model_cls(**config.model_config)
 
-    params_bias = [p[1] for p in model.named_parameters()
-                        if 'bias' in p[0]]
-    params_scale = [p[1] for p in model.named_parameters()
-                         if 'scale' in p[0]]
-    params_other = [p[1] for p in model.named_parameters()
-                         if not ('bias' in p[0] or 'scale' in p[0])]
-    opt = optim.SGD([
-            {"params": params_bias, "lr": 0.1},
-            {"params": params_scale, "lr": 0.1},
-            {"params": params_other, "lr": 1}
-        ], lr=1)
+    if args.model[:5] == "Fixup":
+        print("using fixup learning rates")
+        params_bias = [p[1] for p in model.named_parameters()
+                            if 'bias' in p[0]]
+        params_scale = [p[1] for p in model.named_parameters()
+                             if 'scale' in p[0]]
+        params_other = [p[1] for p in model.named_parameters()
+                             if not ('bias' in p[0] or 'scale' in p[0])]
+        param_groups = [{"params": params_bias, "lr": 0.1},
+                        {"params": params_scale, "lr": 0.1},
+                        {"params": params_other, "lr": 1}]
+    else:
+        param_groups = model.parameters()
+    opt = optim.SGD(param_groups, lr=1)
 
 
     hook = None
@@ -257,6 +282,7 @@ if __name__ == "__main__":
     # set up learning rate stuff
     #lr_schedule = PiecewiseLinear([0, args.pivot_epoch, args.num_epochs],
     #                              [0, args.lr_scale, 0])
+
     lr_schedule = config.lr_schedule
 
     # grad_reduction only controls how gradients from different

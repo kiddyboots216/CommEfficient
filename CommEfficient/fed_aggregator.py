@@ -111,7 +111,7 @@ class FedModel:
         world_size = n_worker_gpus + 1
         for i in range(n_worker_gpus):
             p = multiprocessing.Process(
-                        target=worker.update_forward_grad_loop,
+                        target=worker.worker_loop,
                         args=(self.model, g_ps_weights,
                               self.client_weights,
                               self.client_errors, self.client_velocities,
@@ -126,7 +126,7 @@ class FedModel:
 
         # set up communication channel with worker processes
         os.environ["MASTER_ADDR"] = "127.0.0.1"
-        os.environ["MASTER_PORT"] = "5315"
+        os.environ["MASTER_PORT"] = str(args.port)
         torch.distributed.init_process_group("nccl", rank=0,
                                              world_size=world_size)
 

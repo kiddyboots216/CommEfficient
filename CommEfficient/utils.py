@@ -22,6 +22,11 @@ class Logger:
     def critical(self, msg, args=None):
         print(msg.format(args))
 
+def is_port_in_use(port):
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(('localhost', port)) == 0
+
 def make_logdir(args: dict):
     rows = args.num_rows
     cols = args.num_cols
@@ -136,6 +141,7 @@ def parse_args(default_lr=None):
     parser.add_argument("--mixup", action="store_true", dest="do_mixup")
 
     # parallelization args
+    parser.add_argument("--port", type=int, default=5315)
     parser.add_argument("--num_clients", type=int)
     parser.add_argument("--num_workers", type=int, default=1)
     default_device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -193,6 +199,13 @@ def parse_args(default_lr=None):
     parser.add_argument("--noise_multiplier", type=float, default=0.0, help=("Sigma, i.e. standard dev of noise"))
 
     args = parser.parse_args()
+    port_in_use = True
+    while port_in_use:
+        if is_port_in_use(args.port):
+            print(f"{args.port} port in use, trying next...")
+            args.port += 1
+        else:
+            port_in_use = False
 
     return args
 
