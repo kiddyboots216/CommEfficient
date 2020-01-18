@@ -28,6 +28,10 @@ from utils import get_param_vec, set_param_vec, get_grad, _topk
 
 g_ps_weights = None
 g_minibatch_gradient = None
+# need client velocities to be global so the optimizer can update them
+# in true topk after computing the weight update
+g_client_velocities = None
+g_participating_clients = None
 
 def profile_helper(*args):
     cProfile.runctx("worker.update_forward_grad(*args)",
@@ -42,6 +46,7 @@ class FedModel:
                  compute_loss_val=None):
         global g_minibatch_gradient
         global g_ps_weights
+        global g_client_velocities
 
         # use the last GPU for the PS
         if args.device[:4] == "cuda":
@@ -91,7 +96,7 @@ class FedModel:
         # don't make these arrays unless we need them
         if args.error_type == "local" or args.local_momentum > 0:
             self.client_errors = torch.zeros(shape).share_memory_()
-            self.client_velocities = torch.zeros(shape).share_memory_()
+            g_client_velocities = torch.zeros(shape).share_memory_()
 
         g_minibatch_gradient = torch.zeros(shape[1:]).to(args.device)
 
@@ -114,7 +119,7 @@ class FedModel:
                         target=worker.worker_loop,
                         args=(self.model, g_ps_weights,
                               self.client_weights,
-                              self.client_errors, self.client_velocities,
+                              self.client_errors, g_client_velocities,
                               self.batches_queues[i],
                               self.results_queues[i],
                               i + 1, world_size,
@@ -153,6 +158,7 @@ class FedModel:
         # batch is a tuple, with the client ids as the first tensor
         client_indices = batch[0]
         unique_clients = torch.unique(client_indices)
+        g_participating_clients = unique_clients
 
         worker_batches = [tuple(t[torch.where(client_indices == i)[0]]
                                 for t in batch)
@@ -188,15 +194,6 @@ class FedModel:
         torch.distributed.reduce(transmit, 0)
 
         g_minibatch_gradient[:] = transmit / len(worker_batches)
-
-        # a bit of a hack, but we also need to do momentum factor masking
-        # on the worker momentum vectors for true_topk
-        # which we can't do in the worker because we don't know the
-        # global topk yet
-        if self.args.mode == "true_topk" and self.args.local_momentum > 0:
-            rows = unique_clients.view(-1,1)
-            nz = weight_update.nonzero()[:,0]
-            self.client_velocities[rows, nz].zero_()
 
         return split_results(results, self.args.num_results_train)
 
@@ -351,6 +348,17 @@ def _server_helper_true_topk(gradient, Vvelocity, Verror, args, lr):
     Verror += Vvelocity
 
     update = _topk(Verror, k=args.k)
+
+    # we need to do momentum factor masking on the worker
+    # momentum vectors for true_topk, which we can't do in
+    # the worker because we don't know the global topk yet
+    global g_participating_clients
+    global g_client_velocities
+    if args.local_momentum > 0:
+        rows = g_participating_clients.view(-1,1)
+        nz = update.nonzero()[:,0]
+        g_client_velocities[rows, nz].zero_()
+
 
     # error feedback
     Verror[update.nonzero()] = 0
