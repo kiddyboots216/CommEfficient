@@ -199,7 +199,7 @@ class FedModel:
 
 
     def _call_val(self, batch):
-        split = [t.split(self.args.local_batch_size) for t in batch]
+        split = [t.split(self.args.valid_batch_size) for t in batch]
         num_shards = len(split[0])
         batch_shards = [tuple(l[i] for l in split)
                         for i in range(num_shards)]

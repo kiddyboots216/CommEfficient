@@ -169,7 +169,7 @@ def get_data_loaders(args):
                               num_workers=2)#,
                               #multiprocessing_context="spawn",
                               #pin_memory=True)
-    test_batch_size = args.local_batch_size * args.num_workers
+    test_batch_size = args.valid_batch_size * args.num_workers
     test_loader = DataLoader(test_dataset,
                              batch_size=test_batch_size,
                              shuffle=False,
