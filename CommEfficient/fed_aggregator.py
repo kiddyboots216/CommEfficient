@@ -32,6 +32,8 @@ g_minibatch_gradient = None
 # in true topk after computing the weight update
 g_client_velocities = None
 g_participating_clients = None
+# need a global LR so FedModel can send it to workers when doing fedavg
+g_lr = None
 
 def profile_helper(*args):
     cProfile.runctx("worker.update_forward_grad(*args)",
@@ -47,6 +49,7 @@ class FedModel:
         global g_minibatch_gradient
         global g_ps_weights
         global g_client_velocities
+        global g_lr
 
         # use the last GPU for the PS
         if args.device[:4] == "cuda":
@@ -75,6 +78,9 @@ class FedModel:
         # store the initial weights of the model
         g_ps_weights[:] = param_vec[:]
 
+        # g_lr is the current LR (used for fedavg) updated by FedOptimizer
+        g_lr = torch.zeros(1).float().share_memory_()
+
         # everyone gets ps_weights at the beginning of each round if
         # not args.topk_down, so no need for this array
         if args.do_topk_down:
@@ -90,7 +96,8 @@ class FedModel:
         shape = None
         if args.mode == "sketch":
             shape = (args.num_clients, args.num_rows, args.num_cols)
-        elif args.mode in ["local_topk", "true_topk", "localSGD", "uncompressed"]:
+        elif args.mode in ["local_topk", "true_topk", "fedavg",
+                           "uncompressed"]:
             shape = (args.num_clients, args.grad_size)
 
         # don't make these arrays unless we need them
@@ -121,7 +128,7 @@ class FedModel:
                               self.client_weights,
                               self.client_errors, g_client_velocities,
                               self.batches_queues[i],
-                              self.results_queues[i],
+                              self.results_queues[i], g_lr,
                               i + 1, world_size,
                               self.compute_loss_train,
                               self.compute_loss_val, args)
@@ -154,6 +161,11 @@ class FedModel:
 
     def _call_train(self, batch):
         global g_minibatch_gradient
+        global g_lr
+
+        if self.args.mode == "fedavg" and g_lr == 0:
+            warnings.warn("LR is 0. Call FedOpt.step() to advance the "
+                          "learning rate scheduler before calling model()")
 
         # batch is a tuple, with the client ids as the first tensor
         client_indices = batch[0]
@@ -185,7 +197,8 @@ class FedModel:
 
         if self.args.mode == "sketch":
             shape = (self.args.num_rows, self.args.num_cols)
-        elif self.args.mode in ["uncompressed", "true_topk", "local_topk"]:
+        elif self.args.mode in ["uncompressed", "true_topk", "local_topk",
+                                "fedavg"]:
             shape = (self.args.grad_size,)
 
         # reduce the gradients
@@ -254,7 +267,8 @@ class FedOptimizer(torch.optim.Optimizer):
         # client depending on whether we're doing virtual momentum
         if args.mode == "sketch":
             shape = (args.num_rows, args.num_cols)
-        elif args.mode in ["true_topk", "local_topk", "localSGD", "uncompressed"]:
+        elif args.mode in ["true_topk", "local_topk", "fedavg",
+                           "uncompressed"]:
             shape = (args.grad_size,)
 
         device = args.device
@@ -282,15 +296,22 @@ class FedOptimizer(torch.optim.Optimizer):
     def step(self):
         global g_ps_weights
         global g_minibatch_gradient
+        global g_lr
 
         lr = self.get_lr()
+
+        # update g_lr so the model can use it next time for fedavg
+        if self.args.mode == "fedavg":
+            # only support scalar lr for fedavg
+            assert isinstance(lr, float)
+        g_lr[:] = lr
 
         weight_update, new_Vvelocity, new_Verror = get_server_update(
                 g_minibatch_gradient,
                 self.Vvelocity,
                 self.Verror,
                 self.args,
-                lr)
+                1 if self.args.mode == "fedavg" else lr)
 
         # update ps_weights, momentums, and errors
         g_ps_weights -= weight_update
@@ -311,7 +332,7 @@ def get_server_update(gradient, Vvelocity, Verror, args, lr):
     helper = {"sketch": _server_helper_sketched,
               "local_topk": _server_helper_local_topk,
               "true_topk": _server_helper_true_topk,
-              "localSGD": _server_helper_localSGD,
+              "fedavg": _server_helper_fedavg,
               "uncompressed": _server_helper_uncompressed,
              }[args.mode]
 
@@ -321,9 +342,19 @@ def get_server_update(gradient, Vvelocity, Verror, args, lr):
 
     return weight_update, new_Vvelocity, new_Verror
 
-def _server_helper_localSGD(transmitted, Vvelocity, Verror, args, lr):
-    update = transmitted
-    return update, Vvelocity, Verror
+def _server_helper_fedavg(avg_update, Vvelocity, Verror, args, lr):
+    assert args.error_type == "none"
+    assert args.local_momentum == 0
+    assert lr == 1
+
+    rho = args.virtual_momentum
+    torch.add(avg_update,
+              Vvelocity,
+              alpha=rho,
+              out=Vvelocity)
+    ps_update = Vvelocity
+
+    return ps_update, Vvelocity, Verror
 
 def _server_helper_uncompressed(gradient, Vvelocity, Verror, args, lr):
 

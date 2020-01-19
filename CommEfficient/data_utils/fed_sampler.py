@@ -47,15 +47,21 @@ class FedSampler:
                                      - cur_idx_within_client[workers])
 
                 # choose up to local_batch_size elements from each worker
-                actual_batch_sizes = np.clip(records_remaining,
-                                             0,
-                                             self.local_batch_size)
+                if self.local_batch_size == -1:
+                    # local batch size of -1 indicates we should use
+                    # the client's entire dataset as a batch
+                    actual_batch_sizes = records_remaining
+                else:
+                    actual_batch_sizes = np.clip(records_remaining,
+                                                 0,
+                                                 self.local_batch_size)
                 r = np.hstack([
                     permuted_data[s:s + actual_batch_sizes[i]]
                     for i, s in enumerate(cumsum[workers] +
                                           cur_idx_within_client[workers])
                 ])
-                assert r.size <= self.num_workers * self.local_batch_size
+                if self.local_batch_size != -1:
+                    assert r.size <= self.num_workers * self.local_batch_size
                 yield r
                 cur_idx_within_client[workers] += actual_batch_sizes
 

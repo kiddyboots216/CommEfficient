@@ -5,14 +5,16 @@ from utils import get_param_vec, set_param_vec, get_grad, _topk
 import copy
 import os
 import time
+import math
 import torch.multiprocessing as multiprocessing
 from csvec import CSVec
 import torch.distributed as dist
 import queue
 
 def worker_loop(input_model, ps_weights, client_weights, client_errors,
-                client_velocities, batches_queue, results_queue, rank,
-                world_size, compute_loss_train, compute_loss_val, args):
+                client_velocities, batches_queue, results_queue, fedavg_lr,
+                rank, world_size, compute_loss_train, compute_loss_val,
+                args):
     torch.cuda.set_device(rank - 1)
 
     model = input_model.to(args.device)
@@ -23,6 +25,10 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
                                          world_size=world_size)
     while True:
         try:
+            # batches is a list of batches that we should process
+            # as if we were different workers for each batch
+            # each batch in batches will have data belonging to a
+            # single client (asserted in process_batch)
             batches = batches_queue.get(timeout=30)
         except queue.Empty:
             print("batch queue was empty")
@@ -35,7 +41,8 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
         local_ps_weights = ps_weights.to(args.device)
 
         # sum the gradient over all batches
-        if args.mode in ["uncompressed", "true_topk", "local_topk"]:
+        if args.mode in ["uncompressed", "true_topk",
+                         "local_topk", "fedavg"]:
             shape = (args.grad_size,)
         elif args.mode == "sketch":
             shape = (args.num_rows, args.num_cols)
@@ -44,13 +51,62 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
         # first batch, first tensor (client_indices), first datum
         is_train = batches[0][0][0] != -1
 
+        # this is the starting learning rate (which possibly decays) when
+        # carrying out fedavg
+        lr = fedavg_lr.to(args.device)
+
         all_results = []
+        # loop over workers we have to process (see comment above)
         for batch in batches:
-            g, results = process_batch(
-                    batch, model, local_ps_weights, client_weights,
-                    client_errors, client_velocities,
-                    compute_loss_train, compute_loss_val, args
-                )
+            if args.mode == "fedavg" and is_train:
+                assert args.error_type == "none"
+                assert args.local_momentum == 0
+
+                original_ps_weights = local_ps_weights.clone()
+                # split "batch", which is this client's entire dataset,
+                # into smaller batches to run local SGD on
+                if args.fedavg_batch_size == -1:
+                    local_batches = [batch]
+                    n_batches = 1
+                else:
+                    local_batches = [torch.split(t, args.fedavg_batch_size)
+                                     for t in batch]
+                    n_batches = len(local_batches[0])
+                    local_batches = [tuple(split[i]
+                                           for split in local_batches)
+                                     for i in range(n_batches)]
+
+                n_steps = n_batches * args.num_fedavg_epochs
+                step = 0
+                accum_results = None
+                for epoch in range(args.num_fedavg_epochs):
+                    for batch in local_batches:
+                        g, results = process_batch(
+                                batch, model, local_ps_weights,
+                                client_weights,
+                                client_errors, client_velocities,
+                                compute_loss_train, compute_loss_val, args
+                            )
+                        if accum_results is None:
+                            accum_results = results
+                        else:
+                            # accumulate results
+                            for i in range(len(accum_results)):
+                                accum_results[i] += results[i]
+                        decay = args.fedavg_lr_decay ** step
+                        local_ps_weights -= g * lr * decay
+                        step += 1
+                # compute average results from accum_results
+                results = [r / n_steps for r in accum_results]
+                g = original_ps_weights - local_ps_weights
+
+            else:
+                # for all non-fedavg modes, we just do a single step
+                g, results = process_batch(
+                        batch, model, local_ps_weights, client_weights,
+                        client_errors, client_velocities,
+                        compute_loss_train, compute_loss_val, args
+                    )
 
             if is_train:
                 sum_g += g
@@ -113,7 +169,14 @@ def local_step(model, velocity, error, batch, compute_loss, args):
 
     # reduce the importance of this gradient if the batch size was smaller
     # than usual
-    g = g * batch[0].size(0) / args.local_batch_size
+    expected_batch_size = 0
+    if args.mode == "fedavg":
+        expected_batch_size = args.fedavg_batch_size
+        if expected_batch_size == -1:
+            expected_batch_size = batch[0].size(0)
+    else:
+        expected_batch_size = args.local_batch_size
+    g = g * batch[0].size(0) / expected_batch_size
 
     # if needed, do local momentum
     if args.local_momentum > 0:
@@ -165,15 +228,14 @@ def forward_grad(model, batch, compute_loss, args, compute_grad=True):
 
     # divide up batch (for gradient accumulation when memory constrained)
     num_shards = args.num_train_batch_shards
-    microbatch_size = args.local_batch_size // num_shards
-    batch_size = batch[0].size()[0]
+    # need the max(1, ...) since the last batch in an epoch might be small
+    microbatch_size = max(1, batch[0].size()[0] // num_shards)
 
     # accumulators for the loss & metric values
     accum_loss = 0
     accum_metrics = None
-    # need the max(1, ...) since the last batch in an epoch might be small
 
-    num_iters = max(1, batch_size // microbatch_size)
+    num_iters = math.ceil(batch[0].size()[0] / microbatch_size)
     for i in range(num_iters):
         # extract current microbatch
         start = i * microbatch_size
@@ -187,10 +249,11 @@ def forward_grad(model, batch, compute_loss, args, compute_grad=True):
         if accum_metrics is None:
             accum_metrics = [0 for _ in metrics]
 
-        # accumulate loss & metrics
-        accum_loss += loss.item()
+        # accumulate loss & metrics, weighted by how many data points
+        # were actually used
+        accum_loss += loss.item() * microbatch[0].size()[0]
         for i, m in enumerate(metrics):
-            accum_metrics[i] += m.item()
+            accum_metrics[i] += m.item() * microbatch[0].size()[0]
 
         # backward pass
         if compute_grad:
@@ -201,9 +264,9 @@ def forward_grad(model, batch, compute_loss, args, compute_grad=True):
         torch.nn.utils.clip_grad_norm_(model.parameters(),
                                        args.max_grad_norm)
 
-    # "average" here is over the gradient accumulation steps
-    average_loss = accum_loss / num_shards
-    average_metrics = [m / num_shards for m in accum_metrics]
+    # "average" here is over the data in the batch
+    average_loss = accum_loss / batch[0].size()[0]
+    average_metrics = [m / batch[0].size()[0] for m in accum_metrics]
 
     results = [average_loss] + average_metrics
 
@@ -227,18 +290,9 @@ def forward_grad(model, batch, compute_loss, args, compute_grad=True):
         # in the sketch, whereas for topk we do momentum before taking topk
         # so we have to return an inconsistent quantity here
         g = grad
-    elif args.mode == "localSGD":
-        # TODO: scheduling LR doesn't work
-        grad *= args.lr_scale
-        weights -= grad
-        args.num_local_iters -= 1
-        if args.num_local_iters > 0:
-            g_recursive, results_recursive = forward_grad(model, weights, batch,
-                    criterion, metric, args)
-            g = grad + g_recursive
-            results = [r + r_recursive for (r, r_recursive) in zip(results, results_recursive)]
-        else:
-            g = grad
+    elif args.mode == "fedavg":
+        # logic for doing fedavg happens in process_batch
+        g = grad
     elif args.mode == "uncompressed":
         g = grad
 

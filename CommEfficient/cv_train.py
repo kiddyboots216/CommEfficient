@@ -78,6 +78,11 @@ def compute_loss_val(model, batch, args):
 def train(model, opt, lr_scheduler, train_loader, test_loader,
           args, writer, loggers=(), timer=None):
     timer = timer or Timer()
+    if args.mode == "fedavg":
+        # hack to get the starting LR right for fedavg
+        lr_scheduler.step()
+        opt.step()
+
     for epoch in range(args.num_epochs):
         train_loss, train_acc = run_batches(model, opt, lr_scheduler,
                                             train_loader, True, args)
@@ -282,8 +287,11 @@ if __name__ == "__main__":
     # grad_reduction only controls how gradients from different
     # workers are combined
     # so the lr is multiplied by num_workers for both mean and median
-    batch_size = args.local_batch_size * args.num_workers
-    steps_per_epoch = np.ceil(len(train_loader) / batch_size)
+    if args.mode == "fedavg":
+        steps_per_epoch = train_loader.dataset.num_clients // args.num_workers
+    else:
+        batch_size = args.local_batch_size * args.num_workers
+        steps_per_epoch = np.ceil(len(train_loader) / batch_size)
     lambda_step = lambda step: lr_schedule(step / steps_per_epoch)
     lr_scheduler = LambdaLR(opt, lr_lambda=lambda_step)
 
