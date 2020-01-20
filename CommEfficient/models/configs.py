@@ -22,13 +22,13 @@ class ResNet9Config(ModelConfig):
                 'channels': {'prep': 64, 'layer1': 128,
                              'layer2': 256, 'layer3': 512},
         }
-        self.lr_scale = 0.4
+        self.lr_scale = 0.1
         self.batch_size = 512
         self.weight_decay = 5e-4
         self.set_lr_schedule()
 
     def set_lr_schedule(self):
-        self.lr_schedule = PiecewiseLinear([0, 5, 24],
+        self.lr_schedule = PiecewiseLinear([0, 10, 48],
                                   [0, self.lr_scale, 0])
 
 class FixupResNet9Config(ResNet9Config):

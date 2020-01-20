@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 import ctypes
-from utils import get_param_vec, set_param_vec, get_grad, _topk
+from utils import get_param_vec, set_param_vec, get_grad, _topk, clip_grad
 import copy
 import os
 import time
@@ -210,8 +210,11 @@ def forward_grad(model, batch, compute_loss, args, compute_grad=True):
 
     grad = get_grad(model, args)
     if args.do_dp:
-        noise = torch.normal(mean=0, std=args.noise_multiplier, size=grad.size()).to(args.device)
-        grad += noise
+        grad = clip_grad(args.l2_norm_clip, grad)
+        if args.dp_mode == "worker":
+            noise = torch.normal(mean=0, std=args.noise_multiplier, size=grad.size()).to(args.device)
+            noise *= np.sqrt(args.num_workers)
+            grad += noise
 
     # compress the gradient if needed
     if args.mode == "sketch":
@@ -244,3 +247,4 @@ def forward_grad(model, batch, compute_loss, args, compute_grad=True):
         g = grad
 
     return g, results
+

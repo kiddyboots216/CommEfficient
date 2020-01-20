@@ -195,6 +195,8 @@ def parse_args(default_lr=None):
 
     # Differential Privacy args
     parser.add_argument("--dp", action="store_true", dest="do_dp", help=("Whether to do differentially private training)"))
+    dp_modes = ["worker", "server"]
+    parser.add_argument("--dp_mode", choices=dp_modes, default="worker")
     parser.add_argument("--l2_norm_clip", type=float, default=1.0, help=("What value to clip the l2 norm to"))
     parser.add_argument("--noise_multiplier", type=float, default=0.0, help=("Sigma, i.e. standard dev of noise"))
 
@@ -266,3 +268,13 @@ def sm2np(sm, shape, dtype=ctypes.c_float):
     nparray = np.ndarray(shape, dtype=dtype, buffer=sm)
     assert(nparray.base is sm)
     return nparray
+
+def clip_grad(l2_norm_clip, record):
+    try:
+        l2_norm = torch.norm(record)
+    except:
+        l2_norm = record.l2estimate()
+    if l2_norm < l2_norm_clip:
+        return record
+    else:
+        return record / torch.abs(l2_norm / l2_norm_clip)

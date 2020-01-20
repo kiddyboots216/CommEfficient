@@ -14,7 +14,7 @@ import ctypes
 import torch.multiprocessing as multiprocessing
 
 import fed_worker as worker
-from utils import get_param_vec, set_param_vec, get_grad, _topk
+from utils import get_param_vec, set_param_vec, get_grad, _topk, clip_grad
 
 #from mpi4py import MPI
 #comm = MPI.COMM_WORLD
@@ -335,10 +335,12 @@ def _server_helper_uncompressed(gradient, Vvelocity, Verror, args, lr):
               Vvelocity,
               alpha=rho,
               out=Vvelocity)
-    update = Vvelocity
-    #noise = torch.normal(mean=0, std=args.noise_multiplier, size=update.size()).to(args.device)
-    #update += noise
-    return update * lr, Vvelocity, Verror
+    grad = Vvelocity
+    if args.do_dp and args.dp_mode == "server":
+        #grad = clip_grad(args.l2_norm_clip, grad)
+        noise = torch.normal(mean=0, std=args.noise_multiplier, size=grad.size()).to(args.device)
+        grad += noise
+    return grad * lr, Vvelocity, Verror
 
 def _server_helper_true_topk(gradient, Vvelocity, Verror, args, lr):
     assert args.error_type == "virtual"
