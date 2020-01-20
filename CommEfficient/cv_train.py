@@ -78,19 +78,39 @@ def compute_loss_val(model, batch, args):
 def train(model, opt, lr_scheduler, train_loader, test_loader,
           args, writer, loggers=(), timer=None):
     timer = timer or Timer()
+    if args.mode == "fedavg":
+        # hack to get the starting LR right for fedavg
+        lr_scheduler.step()
+        opt.step()
+
+    total_download = 0
+    total_upload = 0
     for epoch in range(args.num_epochs):
-        train_loss, train_acc = run_batches(model, opt, lr_scheduler,
-                                            train_loader, True, args)
+        # train
+        train_loss, train_acc, download, upload = run_batches(
+                model, opt, lr_scheduler, train_loader, True, args
+            )
         train_time = timer()
-        test_loss, test_acc = run_batches(model, None, None,
-                                          test_loader, False, args)
+        download_mb = download.sum().item() / (1024*1024)
+        upload_mb = upload.sum().item() / (1024*1024)
+        total_download += download_mb
+        total_upload += upload_mb
+
+        # val
+        test_loss, test_acc, _, _ = run_batches(
+                model, None, None, test_loader, False, args
+            )
         test_time = timer()
+
+        # report epoch results
         epoch_stats = {
             'train_time': train_time,
             'train_loss': train_loss,
             'train_acc':  train_acc,
             'test_loss':  test_loss,
             'test_acc':   test_acc,
+            'down (MiB)': round(download_mb),
+            'up (MiB)': round(upload_mb),
             'total_time': timer.total_time,
         }
         lr = lr_scheduler.get_lr()[0]
@@ -108,6 +128,15 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
             writer.add_scalar('Time/test',  test_time,        epoch)
             writer.add_scalar('Time/total', timer.total_time, epoch)
             writer.add_scalar('Lr',         lr,               epoch)
+
+    print("Total Download (MiB): {:0.2f}".format(total_download))
+    print("Total Upload (MiB): {:0.2f}".format(total_upload))
+    print("Avg Download Per Client: {:0.2f}".format(
+        total_download / args.num_clients
+    ))
+    print("Avg Upload Per Client: {:0.2f}".format(
+        total_upload / args.num_clients
+    ))
     return summary
 
 #@profile
@@ -116,6 +145,8 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
     losses = []
     accs = []
 
+    client_download = torch.zeros(args.num_clients)
+    client_upload = torch.zeros(args.num_clients)
     if training:
         for batch in loader:
             if args.use_local_sched:
@@ -129,7 +160,10 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
                 # skip incomplete batches
                 continue
 
-            loss, acc = model(batch)
+            loss, acc, download, upload = model(batch)
+
+            client_download += download
+            client_upload += upload
 
             opt.step()
             #model.zero_grad()
@@ -145,7 +179,7 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
             if args.do_test:
                 break
 
-    return np.mean(losses), np.mean(accs)
+    return np.mean(losses), np.mean(accs), client_download, client_upload
 
 def get_data_loaders(args):
     train_transforms, val_transforms = {
@@ -169,7 +203,7 @@ def get_data_loaders(args):
                               num_workers=1)#,
                               #multiprocessing_context="spawn",
                               #pin_memory=True)
-    test_batch_size = args.local_batch_size * args.num_workers
+    test_batch_size = args.valid_batch_size * args.num_workers
     test_loader = DataLoader(test_dataset,
                              batch_size=test_batch_size,
                              shuffle=False,
@@ -282,8 +316,11 @@ if __name__ == "__main__":
     # grad_reduction only controls how gradients from different
     # workers are combined
     # so the lr is multiplied by num_workers for both mean and median
-    batch_size = args.local_batch_size * args.num_workers
-    steps_per_epoch = np.ceil(len(train_loader) / batch_size)
+    if args.mode == "fedavg":
+        steps_per_epoch = train_loader.dataset.num_clients // args.num_workers
+    else:
+        batch_size = args.local_batch_size * args.num_workers
+        steps_per_epoch = np.ceil(len(train_loader) / batch_size)
     lambda_step = lambda step: lr_schedule(step / steps_per_epoch)
     lr_scheduler = LambdaLR(opt, lr_lambda=lambda_step)
 

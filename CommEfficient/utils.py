@@ -84,7 +84,7 @@ def parse_args(default_lr=None):
 
     # meta-args
     parser.add_argument("--test", action="store_true", dest="do_test")
-    modes = ["sketch", "true_topk", "local_topk", "localSGD", "uncompressed"]
+    modes = ["sketch", "true_topk", "local_topk", "fedavg", "uncompressed"]
     parser.add_argument("--mode", choices=modes, default="sketch")
     parser.add_argument("--tensorboard", dest="use_tensorboard",
                         action="store_true")
@@ -124,6 +124,9 @@ def parse_args(default_lr=None):
     parser.add_argument("--weight_decay", type=float, default=5e-4)
     parser.add_argument("--num_epochs", type=int, default=24,
                         help="Number of training epochs")
+    parser.add_argument("--num_fedavg_epochs", type=int, default=1)
+    parser.add_argument("--fedavg_batch_size", type=int, default=-1)
+    parser.add_argument("--fedavg_lr_decay", type=float, default=1)
     momentum_types = ["none", "local", "virtual"]
     parser.add_argument("--momentum_type", choices=momentum_types,
                         default="none")
@@ -202,6 +205,11 @@ def parse_args(default_lr=None):
             args.port += np.random.randint(0,1000)
         else:
             port_in_use = False
+
+    if args.mode == "fedavg":
+        assert args.local_batch_size == -1
+        assert args.local_momentum == 0
+        assert args.error_type == "none"
 
     return args
 
