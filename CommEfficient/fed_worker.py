@@ -100,6 +100,11 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
                 results = [r / n_steps for r in accum_results]
                 g = original_ps_weights - local_ps_weights
 
+                # reset local_ps_weights so that if this process has
+                # to process another worker batch, the next worker
+                # starts from the correct weights
+                local_ps_weights[:] = original_ps_weights[:]
+
             else:
                 # for all non-fedavg modes, we just do a single step
                 g, results = process_batch(
