@@ -6,6 +6,7 @@ from csvec import CSVec
 import copy
 import time
 import math
+from collections import deque
 import warnings
 
 import cProfile
@@ -15,6 +16,9 @@ import torch.multiprocessing as multiprocessing
 
 import fed_worker as worker
 from utils import get_param_vec, set_param_vec, get_grad, _topk
+
+# gets multipled by 1/participation. See use below
+DEQUE_MAXLEN_MULT = 10
 
 #from mpi4py import MPI
 #comm = MPI.COMM_WORLD
@@ -77,6 +81,19 @@ class FedModel:
         g_ps_weights = torch.zeros(args.grad_size).to(args.device).float()
         # store the initial weights of the model
         g_ps_weights[:] = param_vec[:]
+
+        # keep a deque of past ps_weights so we can calculate number of
+        # bytes a sparsely participating worker needs to download each
+        # iteration
+
+        # if clients are picked randomly, then a single client getting
+        # picked is a poisson process with rate participation
+        # so the probability that a client won't be picked for more than
+        # 10/participation iterations is 1/e^10  < 0.005%
+        participation = args.num_workers / args.num_clients
+        maxlen = int(DEQUE_MAXLEN_MULT / participation)
+        self.ps_weights_history = deque([], maxlen=maxlen)
+        self.client_num_stale_iters = torch.zeros(args.num_clients).long()
 
         # g_lr is the current LR (used for fedavg) updated by FedOptimizer
         g_lr = torch.zeros(1).float().share_memory_()
@@ -184,7 +201,43 @@ class FedModel:
         proc_batches = [worker_batches[i:i + per_proc]
                         for i in range(0, len(worker_batches), per_proc)]
 
-        #print("before starmap", os.listdir("/dev/shm"))
+        # the -1st entry of ps_weights_history is the current ps weights
+        # on the very first iteration, all clients are entirely up-to-date,
+        # so they will have no download cost. After that,
+        # client_num_stale_iters will never have a zero in it
+        self.ps_weights_history.append(g_ps_weights.clone())
+
+        # figure out what the latest model weights each client has.
+        # Clamping by maxlen/participation will underestimate the number of
+        # bytes needed to download, but as long as maxlen is large
+        # enough, this error will be negligible
+        maxlen = self.ps_weights_history.maxlen
+        stale = self.client_num_stale_iters[unique_clients].clamp(0, maxlen)
+        client_prev_weights = [self.ps_weights_history[-(s + 1)]
+                               for s in stale]
+        # the ceil(...).sum() call just counts how many entries
+        # g_ps_weights and prev disagree on -- this is the number of
+        # new weights that the client needs to download
+        # (it's the same as torch.where(g_ps_weights == prev)[0].numel(),
+        #  but ~6x faster)
+        download_bytes_participating = 4 * torch.tensor(
+                [torch.ceil((g_ps_weights - prev).abs()).clamp(0, 1).sum()
+                 for prev in client_prev_weights]
+            )
+        download_bytes = torch.zeros(self.args.num_clients)
+        download_bytes[unique_clients] = download_bytes_participating
+        upload_bytes_participating = {
+                    "uncompressed": self.args.grad_size,
+                    "true_topk": self.args.grad_size,
+                    "local_topk": self.args.k,
+                    "sketch": self.args.num_rows * self.args.num_cols,
+                    "fedavg": self.args.grad_size
+                }[self.args.mode] * 4
+        upload_bytes = torch.zeros(self.args.num_clients)
+        upload_bytes[unique_clients] = upload_bytes_participating
+        self.client_num_stale_iters[unique_clients] = 0
+        self.client_num_stale_iters += 1
+
         for q, batches in zip(self.batches_queues, proc_batches):
             q.put(batches)
         # now every process has the batches assigned to it
@@ -208,8 +261,8 @@ class FedModel:
 
         g_minibatch_gradient[:] = transmit / len(worker_batches)
 
-        return split_results(results, self.args.num_results_train)
-
+        split = split_results(results, self.args.num_results_train)
+        return split + [download_bytes, upload_bytes]
 
     def _call_val(self, batch):
         split = [t.split(self.args.valid_batch_size) for t in batch]
