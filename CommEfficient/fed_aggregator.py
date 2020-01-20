@@ -180,10 +180,6 @@ class FedModel:
         global g_minibatch_gradient
         global g_lr
 
-        if self.args.mode == "fedavg" and g_lr == 0:
-            warnings.warn("LR is 0. Call FedOpt.step() to advance the "
-                          "learning rate scheduler before calling model()")
-
         # batch is a tuple, with the client ids as the first tensor
         client_indices = batch[0]
         unique_clients = torch.unique(client_indices)
@@ -353,11 +349,15 @@ class FedOptimizer(torch.optim.Optimizer):
 
         lr = self.get_lr()
 
+        if ((isinstance(lr, float) and lr == 0) or
+            (isinstance(lr, torch.Tensor) and lr.abs().sum() == 0)):
+            print("WARNING: LR is 0")
+
         # update g_lr so the model can use it next time for fedavg
         if self.args.mode == "fedavg":
             # only support scalar lr for fedavg
             assert isinstance(lr, float)
-        g_lr[:] = lr
+            g_lr[:] = lr
 
         weight_update, new_Vvelocity, new_Verror = get_server_update(
                 g_minibatch_gradient,
