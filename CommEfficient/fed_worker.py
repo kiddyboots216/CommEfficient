@@ -38,7 +38,7 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
             break
 
         # get the latest weights from the parameter server
-        local_ps_weights = ps_weights.to(args.device)
+        local_ps_weights = ps_weights.clone().to(args.device)
 
         # sum the gradient over all batches
         if args.mode in ["uncompressed", "true_topk",
