@@ -66,11 +66,13 @@ class FedModel:
         self.compute_loss_val = (compute_loss_val
                                  if compute_loss_val is not None
                                  else compute_loss)
-        param_vec = get_param_vec(self.model)
+        param_vec = []
         grad_size = 0
         for p in self.model.parameters():
             if p.requires_grad:
                 grad_size += torch.numel(p)
+                param_vec.append(p.data.view(-1))
+        param_vec = torch.cat(param_vec)
         args.grad_size = grad_size
         print("grad_size", grad_size)
         self.args = args
@@ -116,6 +118,7 @@ class FedModel:
         elif args.mode in ["local_topk", "true_topk", "fedavg",
                            "uncompressed"]:
             shape = (args.num_clients, args.grad_size)
+        print(f"Shared memory array shape: {shape}")
 
         # don't make these arrays unless we need them
         if args.error_type == "local" or args.local_momentum > 0:
@@ -173,7 +176,7 @@ class FedModel:
 
     def save_pretrained(self, log_dir):
         global g_ps_weights
-        set_param_vec(self.model, g_ps_weights)
+        set_param_vec(self.model, g_ps_weights.cpu())
         self.model.save_pretrained(log_dir)
 
     def _call_train(self, batch):
@@ -286,9 +289,9 @@ class FedModel:
             return self._call_val(batch)
 
     def __getattr__(self, name):
-        if name == "parameters":
+        if name in ["parameters", "state_dict"]:
             global g_ps_weights
-            set_param_vec(self.model, g_ps_weights)
+            set_param_vec(self.model, g_ps_weights.cpu())
             return getattr(self.model, name)
 
     def zero_grad(self):

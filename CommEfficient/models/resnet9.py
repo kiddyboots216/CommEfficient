@@ -86,18 +86,31 @@ class BasicNet(nn.Module):
         out = self.classifier(self.linear(out))
         return out
 
+    def prep_finetune(self, channels, weight):
+        self.linear = nn.Linear(channels['layer3'], 10, bias=False)
+        self.classifier = Mul(weight)
+
+    def finetune_parameters(self):
+        import itertools
+        return itertools.chain(self.linear.parameters(), self.classifier.parameters())
+
 class ResNet9(nn.Module):
     def __init__(self, iid=True, channels=None, weight=0.125, pool=nn.MaxPool2d(2),
                  extra_layers=(), res_layers=('layer1', 'layer3'), **kw):
         super().__init__()
-        channels = channels or {'prep': 64, 'layer1': 128,
+        self.channels = channels or {'prep': 64, 'layer1': 128,
                                 'layer2': 256, 'layer3': 512}
+        self.weight = weight
         print(f"Using BatchNorm: {iid}")
-        self.n = BasicNet(iid, channels, weight, pool, **kw)
+        self.n = BasicNet(iid, self.channels, weight, pool, **kw)
         #for layer in res_layers:
         #    n[layer]['residual'] = residual(channels[layer], **kw)
         #for layer in extra_layers:
         #    n[layer]['extra'] = ConvBN(channels[layer], channels[layer], **kw)
     def forward(self, x):
         return self.n(x)
+    def prep_finetune(self):
+        self.n.prep_finetune(self.channels, self.weight)
+    def finetune_parameters(self):
+        return self.n.finetune_parameters()
 
