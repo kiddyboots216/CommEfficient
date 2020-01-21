@@ -6,6 +6,7 @@ from csvec import CSVec
 import copy
 import time
 import math
+from collections import deque
 import warnings
 
 import cProfile
@@ -15,6 +16,9 @@ import torch.multiprocessing as multiprocessing
 
 import fed_worker as worker
 from utils import get_param_vec, set_param_vec, get_grad, _topk, clip_grad
+
+# gets multipled by 1/participation. See use below
+DEQUE_MAXLEN_MULT = 10
 
 #from mpi4py import MPI
 #comm = MPI.COMM_WORLD
@@ -28,6 +32,12 @@ from utils import get_param_vec, set_param_vec, get_grad, _topk, clip_grad
 
 g_ps_weights = None
 g_minibatch_gradient = None
+# need client velocities to be global so the optimizer can update them
+# in true topk after computing the weight update
+g_client_velocities = None
+g_participating_clients = None
+# need a global LR so FedModel can send it to workers when doing fedavg
+g_lr = None
 
 def profile_helper(*args):
     cProfile.runctx("worker.update_forward_grad(*args)",
@@ -42,6 +52,8 @@ class FedModel:
                  compute_loss_val=None, hook=None):
         global g_minibatch_gradient
         global g_ps_weights
+        global g_client_velocities
+        global g_lr
 
         # use the last GPU for the PS
         if args.device[:4] == "cuda":
@@ -70,6 +82,22 @@ class FedModel:
         # store the initial weights of the model
         g_ps_weights[:] = param_vec[:]
 
+        # keep a deque of past ps_weights so we can calculate number of
+        # bytes a sparsely participating worker needs to download each
+        # iteration
+
+        # if clients are picked randomly, then a single client getting
+        # picked is a poisson process with rate participation
+        # so the probability that a client won't be picked for more than
+        # 10/participation iterations is 1/e^10  < 0.005%
+        participation = args.num_workers / args.num_clients
+        maxlen = int(DEQUE_MAXLEN_MULT / participation)
+        self.ps_weights_history = deque([], maxlen=maxlen)
+        self.client_num_stale_iters = torch.zeros(args.num_clients).long()
+
+        # g_lr is the current LR (used for fedavg) updated by FedOptimizer
+        g_lr = torch.zeros(1).float().share_memory_()
+
         # everyone gets ps_weights at the beginning of each round if
         # not args.topk_down, so no need for this array
         if args.do_topk_down:
@@ -85,13 +113,14 @@ class FedModel:
         shape = None
         if args.mode == "sketch":
             shape = (args.num_clients, args.num_rows, args.num_cols)
-        elif args.mode in ["local_topk", "true_topk", "localSGD", "uncompressed"]:
+        elif args.mode in ["local_topk", "true_topk", "fedavg",
+                           "uncompressed"]:
             shape = (args.num_clients, args.grad_size)
 
         # don't make these arrays unless we need them
         if args.error_type == "local" or args.local_momentum > 0:
             self.client_errors = torch.zeros(shape).share_memory_()
-            self.client_velocities = torch.zeros(shape).share_memory_()
+            g_client_velocities = torch.zeros(shape).share_memory_()
 
         g_minibatch_gradient = torch.zeros(shape[1:]).to(args.device)
 
@@ -114,9 +143,9 @@ class FedModel:
                         target=worker.worker_loop,
                         args=(self.model, g_ps_weights,
                               self.client_weights,
-                              self.client_errors, self.client_velocities,
+                              self.client_errors, g_client_velocities,
                               self.batches_queues[i],
-                              self.results_queues[i],
+                              self.results_queues[i], g_lr,
                               i + 1, world_size,
                               self.compute_loss_train,
                               self.compute_loss_val, args)
@@ -149,10 +178,12 @@ class FedModel:
 
     def _call_train(self, batch):
         global g_minibatch_gradient
+        global g_lr
 
         # batch is a tuple, with the client ids as the first tensor
         client_indices = batch[0]
         unique_clients = torch.unique(client_indices)
+        g_participating_clients = unique_clients
 
         worker_batches = [tuple(t[torch.where(client_indices == i)[0]]
                                 for t in batch)
@@ -166,7 +197,43 @@ class FedModel:
         proc_batches = [worker_batches[i:i + per_proc]
                         for i in range(0, len(worker_batches), per_proc)]
 
-        #print("before starmap", os.listdir("/dev/shm"))
+        # the -1st entry of ps_weights_history is the current ps weights
+        # on the very first iteration, all clients are entirely up-to-date,
+        # so they will have no download cost. After that,
+        # client_num_stale_iters will never have a zero in it
+        self.ps_weights_history.append(g_ps_weights.clone())
+
+        # figure out what the latest model weights each client has.
+        # Clamping by maxlen/participation will underestimate the number of
+        # bytes needed to download, but as long as maxlen is large
+        # enough, this error will be negligible
+        maxlen = self.ps_weights_history.maxlen
+        stale = self.client_num_stale_iters[unique_clients].clamp(0, maxlen)
+        client_prev_weights = [self.ps_weights_history[-(s + 1)]
+                               for s in stale]
+        # the ceil(...).sum() call just counts how many entries
+        # g_ps_weights and prev disagree on -- this is the number of
+        # new weights that the client needs to download
+        # (it's the same as torch.where(g_ps_weights == prev)[0].numel(),
+        #  but ~6x faster)
+        download_bytes_participating = 4 * torch.tensor(
+                [torch.ceil((g_ps_weights - prev).abs()).clamp(0, 1).sum()
+                 for prev in client_prev_weights]
+            )
+        download_bytes = torch.zeros(self.args.num_clients)
+        download_bytes[unique_clients] = download_bytes_participating
+        upload_bytes_participating = {
+                    "uncompressed": self.args.grad_size,
+                    "true_topk": self.args.grad_size,
+                    "local_topk": self.args.k,
+                    "sketch": self.args.num_rows * self.args.num_cols,
+                    "fedavg": self.args.grad_size
+                }[self.args.mode] * 4
+        upload_bytes = torch.zeros(self.args.num_clients)
+        upload_bytes[unique_clients] = upload_bytes_participating
+        self.client_num_stale_iters[unique_clients] = 0
+        self.client_num_stale_iters += 1
+
         for q, batches in zip(self.batches_queues, proc_batches):
             q.put(batches)
         # now every process has the batches assigned to it
@@ -179,7 +246,8 @@ class FedModel:
 
         if self.args.mode == "sketch":
             shape = (self.args.num_rows, self.args.num_cols)
-        elif self.args.mode in ["uncompressed", "true_topk", "local_topk"]:
+        elif self.args.mode in ["uncompressed", "true_topk", "local_topk",
+                                "fedavg"]:
             shape = (self.args.grad_size,)
 
         # reduce the gradients
@@ -189,20 +257,11 @@ class FedModel:
 
         g_minibatch_gradient[:] = transmit / len(worker_batches)
 
-        # a bit of a hack, but we also need to do momentum factor masking
-        # on the worker momentum vectors for true_topk
-        # which we can't do in the worker because we don't know the
-        # global topk yet
-        if self.args.mode == "true_topk" and self.args.local_momentum > 0:
-            rows = unique_clients.view(-1,1)
-            nz = weight_update.nonzero()[:,0]
-            self.client_velocities[rows, nz].zero_()
-
-        return split_results(results, self.args.num_results_train)
-
+        split = split_results(results, self.args.num_results_train)
+        return split + [download_bytes, upload_bytes]
 
     def _call_val(self, batch):
-        split = [t.split(self.args.local_batch_size) for t in batch]
+        split = [t.split(self.args.valid_batch_size) for t in batch]
         num_shards = len(split[0])
         batch_shards = [tuple(l[i] for l in split)
                         for i in range(num_shards)]
@@ -257,7 +316,8 @@ class FedOptimizer(torch.optim.Optimizer):
         # client depending on whether we're doing virtual momentum
         if args.mode == "sketch":
             shape = (args.num_rows, args.num_cols)
-        elif args.mode in ["true_topk", "local_topk", "localSGD", "uncompressed"]:
+        elif args.mode in ["true_topk", "local_topk", "fedavg",
+                           "uncompressed"]:
             shape = (args.grad_size,)
 
         device = args.device
@@ -285,15 +345,26 @@ class FedOptimizer(torch.optim.Optimizer):
     def step(self):
         global g_ps_weights
         global g_minibatch_gradient
+        global g_lr
 
         lr = self.get_lr()
+
+        if ((isinstance(lr, float) and lr == 0) or
+            (isinstance(lr, torch.Tensor) and lr.abs().sum() == 0)):
+            print("WARNING: LR is 0")
+
+        # update g_lr so the model can use it next time for fedavg
+        if self.args.mode == "fedavg":
+            # only support scalar lr for fedavg
+            assert isinstance(lr, float)
+            g_lr[:] = lr
 
         weight_update, new_Vvelocity, new_Verror = get_server_update(
                 g_minibatch_gradient,
                 self.Vvelocity,
                 self.Verror,
                 self.args,
-                lr)
+                1 if self.args.mode == "fedavg" else lr)
 
         # update ps_weights, momentums, and errors
         g_ps_weights -= weight_update
@@ -314,7 +385,7 @@ def get_server_update(gradient, Vvelocity, Verror, args, lr):
     helper = {"sketch": _server_helper_sketched,
               "local_topk": _server_helper_local_topk,
               "true_topk": _server_helper_true_topk,
-              "localSGD": _server_helper_localSGD,
+              "fedavg": _server_helper_fedavg,
               "uncompressed": _server_helper_uncompressed,
              }[args.mode]
 
@@ -324,9 +395,19 @@ def get_server_update(gradient, Vvelocity, Verror, args, lr):
 
     return weight_update, new_Vvelocity, new_Verror
 
-def _server_helper_localSGD(transmitted, Vvelocity, Verror, args, lr):
-    update = transmitted
-    return update, Vvelocity, Verror
+def _server_helper_fedavg(avg_update, Vvelocity, Verror, args, lr):
+    assert args.error_type == "none"
+    assert args.local_momentum == 0
+    assert lr == 1
+
+    rho = args.virtual_momentum
+    torch.add(avg_update,
+              Vvelocity,
+              alpha=rho,
+              out=Vvelocity)
+    ps_update = Vvelocity
+
+    return ps_update, Vvelocity, Verror
 
 def _server_helper_uncompressed(gradient, Vvelocity, Verror, args, lr):
 
@@ -355,6 +436,17 @@ def _server_helper_true_topk(gradient, Vvelocity, Verror, args, lr):
     Verror += Vvelocity
 
     update = _topk(Verror, k=args.k)
+
+    # we need to do momentum factor masking on the worker
+    # momentum vectors for true_topk, which we can't do in
+    # the worker because we don't know the global topk yet
+    global g_participating_clients
+    global g_client_velocities
+    if args.local_momentum > 0:
+        rows = g_participating_clients.view(-1,1)
+        nz = update.nonzero()[:,0]
+        g_client_velocities[rows, nz].zero_()
+
 
     # error feedback
     Verror[update.nonzero()] = 0
