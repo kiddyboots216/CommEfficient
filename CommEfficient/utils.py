@@ -96,11 +96,17 @@ def parse_args(default_lr=None):
     parser.add_argument("--model", default="ResNet9",
                         help="Name of the model.",
                         choices=model_names)
+    parser.add_argument("--finetune", action="store_true", dest="do_finetune")
+    parser.add_argument("--checkpoint", action="store_true", dest="do_checkpoint")
+    parser.add_argument("--checkpoint_path", type=str,
+                        default='./checkpoint',
+                        help="Path or url to cache the model")
+    parser.add_argument("--finetune_path", type=str,
+                        default='./finetune',
+                        help="Path or url of the model cache")
     parser.add_argument("--num_results_train", type=int, default=2)
     parser.add_argument("--num_results_val", type=int, default=2)
-    parser.add_argument("--supervised", action="store_true",
-                        dest="is_supervised")
-    fed_datasets = ["CIFAR10", "ImageNet"]
+    fed_datasets = ["CIFAR10", "CIFAR100", "ImageNet"]
     parser.add_argument("--dataset_name", type=str, default="",
                         help="Name of the dataset.",
                         choices=fed_datasets)
@@ -240,9 +246,10 @@ def get_grad_vec(model):
     with torch.no_grad():
         # flatten
         for p in model.parameters():
-            if p.grad is None:
-                grad_vec.append(torch.zeros_like(p.data.view(-1)))
-            else:
+            if p.requires_grad:
+            #if p.grad is None:
+            #    grad_vec.append(torch.zeros_like(p.data.view(-1)))
+            #else:
                 grad_vec.append(p.grad.data.view(-1).float())
         # concat into a single vector
         grad_vec = torch.cat(grad_vec)
@@ -255,15 +262,22 @@ def zero_grad(model):
             p.grad.zero_()
 
 def get_param_vec(model):
-    return torch.cat([p.data.view(-1) for p in model.parameters()])
+    param_vec = []
+    for p in model.parameters():
+        if p.requires_grad:
+            param_vec.append(p.data.view(-1).float())
+    return torch.cat(param_vec)
+
+    #return torch.cat([p.data.view(-1) for p in model.parameters()])
 
 def set_param_vec(model, param_vec):
     start = 0
     for p in model.parameters():
-        end = start + p.numel()
-        p.data.zero_()
-        p.data.add_(param_vec[start:end].view(p.size()))
-        start = end
+        if p.requires_grad:
+            end = start + p.numel()
+            p.data.zero_()
+            p.data.add_(param_vec[start:end].view(p.size()))
+            start = end
 
 def sm2np(sm, shape, dtype=ctypes.c_float):
     # convert from shared memory object/buffer to numpy array
