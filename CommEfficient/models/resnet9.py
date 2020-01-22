@@ -71,8 +71,9 @@ class Residual(nn.Module):
         return itertools.chain.from_iterable([l.prep_finetune(iid, c, c, **kw) for l in layers])
 
 class BasicNet(nn.Module):
-    def __init__(self, iid, channels, weight,  pool, num_classes, **kw):
+    def __init__(self, iid, channels, weight,  pool, num_classes, new_num_classes=None, **kw):
         super().__init__()
+        self.new_num_classes = new_num_classes
         self.prep = ConvBN(iid, 3, channels['prep'], **kw)
 
         self.layer1 = ConvBN(iid, channels['prep'], channels['layer1'],
@@ -102,13 +103,13 @@ class BasicNet(nn.Module):
 
     def finetune_parameters(self, iid, channels, weight, pool, **kw):
         #layers = [self.prep, self.layer1, self.res1, self.layer2, self.layer3, self.res3]
+        self.linear = nn.Linear(channels['layer3'], self.new_num_classes, bias=False)
+        self.classifier = Mul(weight)
         modules = [self.linear, self.classifier]
         for m in modules:
             for p in m.parameters():
                 p.requires_grad = True
-        """
         return itertools.chain.from_iterable([m.parameters() for m in modules])
-        """
         prep = self.prep.prep_finetune(iid, 3, channels['prep'], **kw)
 
         layer1 = self.layer1.prep_finetune(iid, channels['prep'], channels['layer1'],
@@ -136,16 +137,11 @@ class ResNet9(nn.Module):
         self.iid = iid
         print(f"Using BatchNorm: {iid}")
         self.n = BasicNet(iid, self.channels, weight, pool, **kw)
-        #for layer in res_layers:
-        #    n[layer]['residual'] = residual(channels[layer], **kw)
-        #for layer in extra_layers:
-        #    n[layer]['extra'] = ConvBN(channels[layer], channels[layer], **kw)
         self.kw = kw
+
     def forward(self, x):
         return self.n(x)
-    def prep_finetune(self):
-        self.n.prep_finetune(self.iid, self.channels, self.weight, self.pool, **self.kw)
+
     def finetune_parameters(self):
         return self.n.finetune_parameters(self.iid, self.channels, self.weight, self.pool, **self.kw)
-        #return self.n.finetune_parameters()
 

@@ -111,6 +111,9 @@ def parse_args(default_lr=None):
     parser.add_argument("--finetune_path", type=str,
                         default='./finetune',
                         help="Path or url of the model cache")
+    parser.add_argument("--finetuned_from", type=str,
+                        help="Name of the dataset you pretrained on.",
+                        choices=fed_datasets.keys())
     parser.add_argument("--num_results_train", type=int, default=2)
     parser.add_argument("--num_results_val", type=int, default=2)
     parser.add_argument("--dataset_name", type=str, default="",

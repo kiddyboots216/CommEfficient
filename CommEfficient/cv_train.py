@@ -310,12 +310,12 @@ if __name__ == "__main__":
                         {"params": params_other, "lr": 1}]
     elif args.do_finetune:
         model.load_state_dict(torch.load(args.finetune_path + args.model + '.pt'))
-        """
         for param in model.parameters():
             param.requires_grad = False
         param_groups = model.finetune_parameters()
         """
         param_groups = model.parameters()
+        """
     else:
         param_groups = model.parameters()
     opt = optim.SGD(param_groups, lr=1)
@@ -323,10 +323,6 @@ if __name__ == "__main__":
 
     model = FedModel(model, compute_loss_train, args, compute_loss_val)
     opt = FedOptimizer(opt, args)
-
-    # set up learning rate stuff
-    #lr_schedule = PiecewiseLinear([0, args.pivot_epoch, args.num_epochs],
-    #                              [0, args.lr_scale, 0])
 
     lr_schedule = config.lr_schedule
 
