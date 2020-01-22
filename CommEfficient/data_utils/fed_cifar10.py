@@ -4,6 +4,7 @@ import os
 import numpy as np
 
 from data_utils import FedDataset
+import torchvision
 from torchvision.datasets import CIFAR10, CIFAR100
 from PIL import Image
 
@@ -26,7 +27,7 @@ class FedCIFAR10(FedDataset):
 
     def prepare_datasets(self, download=True):
         os.makedirs(self.dataset_dir, exist_ok=True)
-        dataset = torchvision.datasets.__dict__.get(args.dataset_name)
+        dataset = torchvision.datasets.__dict__.get(self.dataset_name)
         vanilla_train = dataset(self.dataset_dir,
                                 train=True,
                                 download=download)

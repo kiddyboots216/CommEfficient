@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 import ctypes
-from utils import get_param_vec, set_param_vec, get_grad, _topk
+from utils import get_param_vec, set_param_vec, get_grad, _topk, clip_grad
 import copy
 import os
 import time
@@ -224,8 +224,6 @@ def get_new_worker_weights(ps_weights, worker_weights, args):
         weight_update = diff_vec
 
     new_worker_weights = worker_weights + weight_update
-    #print(f"{torch.norm(weight_update, 2)}")
-    #print(f"{updated_vec} = {client_weights} + {weight_update}")
     return new_worker_weights
 
 def forward_grad(model, batch, compute_loss, args, compute_grad=True):
@@ -279,11 +277,17 @@ def forward_grad(model, batch, compute_loss, args, compute_grad=True):
         return results
 
     grad = get_grad(model, args)
+    if args.do_dp:
+        grad = clip_grad(args.l2_norm_clip, grad)
+        if args.dp_mode == "worker":
+            noise = torch.normal(mean=0, std=args.noise_multiplier, size=grad.size()).to(args.device)
+            noise *= np.sqrt(args.num_workers)
+            grad += noise
 
     # compress the gradient if needed
     if args.mode == "sketch":
         sketch = CSVec(d=args.grad_size, c=args.num_cols,
-            r=args.num_rows, device=device,
+            r=args.num_rows, device=args.device,
             numBlocks=args.num_blocks)
         sketch.accumulateVec(grad)
         g = sketch.table
@@ -302,3 +306,4 @@ def forward_grad(model, batch, compute_loss, args, compute_grad=True):
         g = grad
 
     return g, results
+

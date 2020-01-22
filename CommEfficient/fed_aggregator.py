@@ -15,7 +15,7 @@ import ctypes
 import torch.multiprocessing as multiprocessing
 
 import fed_worker as worker
-from utils import get_param_vec, set_param_vec, get_grad, _topk
+from utils import get_param_vec, set_param_vec, get_grad, _topk, clip_grad
 
 # gets multipled by 1/participation. See use below
 DEQUE_MAXLEN_MULT = 10
@@ -419,8 +419,12 @@ def _server_helper_uncompressed(gradient, Vvelocity, Verror, args, lr):
               Vvelocity,
               alpha=rho,
               out=Vvelocity)
-    update = Vvelocity
-    return update * lr, Vvelocity, Verror
+    grad = Vvelocity
+    if args.do_dp and args.dp_mode == "server":
+        #grad = clip_grad(args.l2_norm_clip, grad)
+        noise = torch.normal(mean=0, std=args.noise_multiplier, size=grad.size()).to(args.device)
+        grad += noise
+    return grad * lr, Vvelocity, Verror
 
 def _server_helper_true_topk(gradient, Vvelocity, Verror, args, lr):
     assert args.error_type == "virtual"
@@ -497,6 +501,10 @@ def _server_helper_sketched(sketched_grad, Vvelocity, Verror, args, lr):
 
     sketch = args2sketch(args)
     sketch.accumulateTable(Verror)
+    #noise = torch.normal(mean=0, std=args.noise_multiplier, size=[args.grad_size]).to(args.device)
+    #sketch.accumulateVec(noise)
+    #noise = torch.normal(mean=0, std=args.noise_multiplier, size=[args.rows, args.cols]).to(args.device)
+    #sketch.accumulateTable(noise)
     update = sketch.unSketch(k=args.k)
 
     # do virtual error

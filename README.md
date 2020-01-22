@@ -10,3 +10,5 @@ The server is contained in `fed_aggregator.py` and the worker is contained in `f
 Other relevant branches: `dp` contains `dp_functions.py` which provides a hook for computing DP queries for DP-SGD. `attacks` contains an implementation of a malicious model poisoning adversary.
 
 To use sketching, you need to install https://github.com/nikitaivkin/csh
+
+To use DP, you need to install https://github.com/kiddyboots216/pytorch_privacy

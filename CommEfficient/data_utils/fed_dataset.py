@@ -7,10 +7,11 @@ import torch
 __all__ = ["FedDataset"]
 
 class FedDataset(torch.utils.data.Dataset):
-    def __init__(self, dataset_dir, transform=None,
+    def __init__(self, dataset_dir, dataset_name, transform=None,
                  do_iid=False, num_clients=None,
                  train=True, download=False):
         self.dataset_dir = dataset_dir
+        self.dataset_name = dataset_name
         self.transform = transform
         self.do_iid = do_iid
         self._num_clients = num_clients

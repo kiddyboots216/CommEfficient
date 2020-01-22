@@ -114,9 +114,11 @@ def add_special_tokens_(model, tokenizer):
 
 
 def train_gpt2(model, opt, scheduler, train_loader, val_loader,
-               args, log_dir, logger=None, timer=None, writer=None):
+        args, log_dir, writer, logger=None, timer=None):
     timer = timer or Timer()
     epochs = args.num_epochs
+    logger = logger or TableLogger()
+    val_logger = TableLogger()
     for epoch in range(epochs):
         mean_train_loss = run_batches(model, opt, scheduler, train_loader,
                                  args, timer, training=True,
@@ -137,12 +139,11 @@ def train_gpt2(model, opt, scheduler, train_loader, val_loader,
         writer.add_scalar('validation/nll', nll)
         writer.add_scalar('validation/acc', acc)
         writer.add_scalar('validation/ppl', ppl)
-        logger = TableLogger()
         lr = scheduler.get_lr()[0]
         summary = union({'epoch': epoch+1,
                          'lr': lr},
                         epoch_stats)
-        logger.append(summary)
+        val_logger.append(summary)
 
 def run_batches(model, opt, scheduler, loader, args,
                 timer, training, logger=None, writer=None):
@@ -182,27 +183,10 @@ def run_batches(model, opt, scheduler, loader, args,
         nlls, accs, ppls = [], [], []
         for batch_idx, batch in enumerate(loader):
             nll, acc = model(batch)
-            """
-            nll, acc, ppl = model(minibatches, indices)
-            ppl = np.mean(ppl)
-            ppls.append(ppl)
-            """
             nll = np.mean(nll)
             acc = np.mean(acc)
             nlls.append(nll)
             accs.append(acc)
-            """
-            val_time = timer()
-            batch_stats = {
-                'test_time': val_time,
-                'test_nll': nll,
-                'test_acc': acc,
-                'test_ppl': ppl,
-                'total_time': timer.total_time,
-            }
-            summary = union({'batch_idx': batch_idx+1, }, batch_stats)
-            logger.append(summary)
-            """
         return np.mean(nlls), np.mean(accs), np.exp(np.mean(ppls))
 
 def train():
@@ -253,11 +237,12 @@ def train():
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
                                                   lr_lambda=[lambda_step])
     train_gpt2(model, optimizer, scheduler, train_loader, val_loader, args,
-               log_dir, logger=TableLogger(), timer=timer, writer=writer)
+               log_dir, writer=writer, logger=TableLogger(), timer=timer)
     model.finalize()
 
 def get_data_loaders(args, tokenizer):
     train_dataset = FedPersonaChat(args.dataset_dir,
+                                   "Persona",
                                    tokenizer,
                                    args.num_candidates,
                                    args.max_history,
@@ -266,6 +251,7 @@ def get_data_loaders(args, tokenizer):
                                    num_clients=args.num_clients,
                                    train=True)
     val_dataset = FedPersonaChat(args.dataset_dir,
+                                 "Persona",
                                  tokenizer,
                                  args.num_candidates,
                                  args.max_history,
