@@ -323,11 +323,6 @@ if __name__ == "__main__":
     opt = optim.SGD(param_groups, lr=1)
 
 
-    hook = None
-    #if args.do_dp:
-    #    hook_cls = DPGaussianHook(args)
-    #    hook = hook_cls.client_hook
-    # Fed-ify everything
     model = FedModel(model, compute_loss_train, args, compute_loss_val)
     opt = FedOptimizer(opt, args)
 

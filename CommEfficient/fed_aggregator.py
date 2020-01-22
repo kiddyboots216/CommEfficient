@@ -49,7 +49,7 @@ def profile_helper(*args):
 
 class FedModel:
     def __init__(self, input_model, compute_loss, args,
-                 compute_loss_val=None, hook=None):
+                 compute_loss_val=None):
         global g_minibatch_gradient
         global g_ps_weights
         global g_client_velocities
