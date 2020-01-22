@@ -1,5 +1,16 @@
 from collections import namedtuple
+
 import numpy as np
+
+#from utils import num_classes_of_dataset
+fed_datasets = {
+        "CIFAR10": 10,
+        "CIFAR100": 100,
+        "FEMNIST": 62,
+        "ImageNet": 1000,
+        }
+def num_classes_of_dataset(args):
+    return fed_datasets[args.dataset_name]
 
 # need one_cycle for pickle
 __all__ = ["FixupResNet9Config", "ResNet9Config", "one_cycle"]
@@ -22,14 +33,20 @@ class ResNet9Config(ModelConfig):
                 'channels': {'prep': 64, 'layer1': 128,
                              'layer2': 256, 'layer3': 512},
         }
-        self.lr_scale = 0.1
+        self.lr_scale = 0.4
         self.batch_size = 512
         self.weight_decay = 5e-4
         self.set_lr_schedule()
 
     def set_lr_schedule(self):
-        self.lr_schedule = PiecewiseLinear([0, 10, 48],
+        self.lr_schedule = PiecewiseLinear([0, 5, 24],
                                   [0, self.lr_scale, 0])
+
+    def set_args(self, args):
+        super().set_args(args)
+        self.model_config['bn_bias_freeze'] = args.do_finetune
+        self.model_config['bn_weight_freeze'] = args.do_finetune
+        self.model_config['num_classes'] = num_classes_of_dataset(args)
 
 class FixupResNet9Config(ResNet9Config):
     def __init__(self):

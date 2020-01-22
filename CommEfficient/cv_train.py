@@ -200,10 +200,10 @@ def get_data_loaders(args):
     }[args.dataset_name]
 
     dataset_class = globals()["Fed" + args.dataset_name]
-    train_dataset = dataset_class(args.dataset_dir, train_transforms,
+    train_dataset = dataset_class(args.dataset_dir, args.dataset_name, train_transforms,
                                   args.do_iid, args.num_clients,
                                   train=True, download=True)
-    test_dataset = dataset_class(args.dataset_dir, val_transforms,
+    test_dataset = dataset_class(args.dataset_dir, args.dataset_name, val_transforms,
                                  train=False, download=False)
 
     train_sampler = FedSampler(train_dataset,
@@ -312,10 +312,12 @@ if __name__ == "__main__":
                         {"params": params_other, "lr": 1}]
     elif args.do_finetune:
         model.load_state_dict(torch.load(args.finetune_path + args.model + '.pt'))
+        """
         for param in model.parameters():
             param.requires_grad = False
-        model.prep_finetune()
         param_groups = model.finetune_parameters()
+        """
+        param_groups = model.parameters()
     else:
         param_groups = model.parameters()
     opt = optim.SGD(param_groups, lr=1)

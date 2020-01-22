@@ -10,6 +10,13 @@ import torchvision
 
 import models
 
+fed_datasets = {
+        "CIFAR10": 10,
+        "CIFAR100": 100,
+        "FEMNIST": 62,
+        "ImageNet": 1000,
+        }
+
 class Logger:
     def debug(self, msg, args=None):
         print(msg.format(args))
@@ -106,10 +113,9 @@ def parse_args(default_lr=None):
                         help="Path or url of the model cache")
     parser.add_argument("--num_results_train", type=int, default=2)
     parser.add_argument("--num_results_val", type=int, default=2)
-    fed_datasets = ["CIFAR10", "CIFAR100", "ImageNet"]
     parser.add_argument("--dataset_name", type=str, default="",
                         help="Name of the dataset.",
-                        choices=fed_datasets)
+                        choices=fed_datasets.keys())
     parser.add_argument("--dataset_dir", type=str,
                         default='./dataset',
                         help="Path or url of the dataset cache")
@@ -300,3 +306,6 @@ def clip_grad(l2_norm_clip, record):
         return record
     else:
         return record / torch.abs(l2_norm / l2_norm_clip)
+
+def num_classes_of_dataset(args):
+    return fed_datasets[args.dataset_name]

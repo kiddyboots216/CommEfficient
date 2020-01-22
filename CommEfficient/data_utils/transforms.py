@@ -4,6 +4,8 @@ __all__ = ["cifar10_train_transforms",
            "cifar10_test_transforms",
            "cifar100_train_transforms",	
            "cifar100_test_transforms",
+           "femnist_train_transforms",
+           "femnist_test_transforms",
            "imagenet_train_transforms",
            "imagenet_val_transforms"]
 
@@ -37,6 +39,14 @@ cifar100_train_transforms = transforms.Compose([
 cifar100_test_transforms = transforms.Compose([	
         transforms.ToTensor(),	
         transforms.Normalize(cifar100_mean, cifar100_std)	
+    ])
+
+femnist_train_transforms = transforms.Compose([
+        transforms.ToTensor(),
+    ])
+
+femnist_test_transforms = transforms.Compose([
+        transforms.ToTensor(),
     ])
 
 _imagenet_normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
