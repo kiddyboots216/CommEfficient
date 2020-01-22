@@ -100,48 +100,6 @@ class BasicNet(nn.Module):
         out = self.classifier(self.linear(out))
         return out
 
-    def prep_finetune(self, iid, channels, weight, pool, **kw):
-        """
-        self.prep = ConvBN(iid, 3, channels['prep'], 
-                **{'bn_bias_freeze': True, 'bn_weight_freeze': True,
-                    'bn_bias_init': self.prep.bn.bias.data[0], 'bn_weight_init': self.prep.bn.weight.data[0]}, 
-                )
-
-        self.layer1 = ConvBN(iid, channels['prep'], channels['layer1'],
-                             pool=pool,
-                **{'bn_bias_freeze': True, 'bn_weight_freeze': True, 
-                    'bn_bias_init': self.layer1.bn.bias.data[0], 'bn_weight_init': self.layer1.bn.weight.data[0], }, 
-                             )
-        """
-        """
-        self.res1 = Residual(iid, channels['layer1'],
-                **{'bn_bias_freeze': True, 'bn_weight_freeze': True}, 
-                )
-        """
-
-        """
-        self.layer2 = ConvBN(iid, channels['layer1'], channels['layer2'],
-                             pool=pool,
-                **{'bn_bias_freeze': True, 'bn_weight_freeze': True, 
-                    'bn_bias_init': self.layer2.bn.bias.data[0] , 'bn_weight_init': self.layer2.bn.weight.data[0] }, 
-                             )
-
-        self.layer3 = ConvBN(iid, channels['layer2'], channels['layer3'],
-                             pool=pool,
-                **{'bn_bias_freeze': True, 'bn_weight_freeze': True, 
-                    'bn_bias_init': self.layer3.bn.bias.data[0] , 'bn_weight_init': self.layer3.bn.weight.data[0] }, 
-                             )
-        """
-        """
-        self.res3 = Residual(iid, channels['layer3'],
-                **{'bn_bias_freeze': True, 'bn_weight_freeze': True}, 
-                )
-
-        self.pool = nn.MaxPool2d(4)
-        """
-        self.linear = nn.Linear(channels['layer3'], 10, bias=False)
-        self.classifier = Mul(weight)
-
     def finetune_parameters(self, iid, channels, weight, pool, **kw):
         #layers = [self.prep, self.layer1, self.res1, self.layer2, self.layer3, self.res3]
         modules = [self.linear, self.classifier]

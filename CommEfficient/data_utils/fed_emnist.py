@@ -31,7 +31,7 @@ def read_dir(data_dir):
     return clients, groups, data
 
 
-def read_data(train_data_dir, test_data_dir):
+def read_data(data_dir):
     '''parses data in given train and test data directories
 
     assumes:
@@ -45,28 +45,23 @@ def read_data(train_data_dir, test_data_dir):
         train_data: dictionary of train data
         test_data: dictionary of test data
     '''
-    train_clients, train_groups, train_data = read_dir(train_data_dir)
-    test_clients, test_groups, test_data = read_dir(test_data_dir)
+    clients, groups, data = read_dir(data_dir)
 
-    assert train_clients == test_clients
-    assert train_groups == test_groups
-
-    return train_clients, train_groups, train_data, test_data
+    return clients, groups, data
 
 class FedEMNIST(FedDataset):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # assume EMNIST is already preprocessed
         # data_dir = '/data/ashwineep/leaf/data/femnist/data/'
-        train_data_dir = self.dataset_dir + 'train'
-        test_data_dir = self.dataset_dir + 'test'
-        self.clients, _, train_data, test_data = read_data(train_data_dir, test_data_dir)
         if self.type == "train":
-            self.train_data = train_data
+            train_data_dir = self.dataset_dir + 'train'
+            self.clients, _, self.train_data = read_data(train_data_dir)
+            self.images_per_client = np.array([len(self.train_data[client_id]['y']) for client_id in self.clients])
         else:
-            self.test_data = test_data
-        self.images_per_client = np.array([len(train_data[client_id]['y']) for client_id in self.clients])
-        self.val_images_per_client = np.array([len(test_data[client_id]['y']) for client_id in self.clients])
+            test_data_dir = self.dataset_dir + 'test'
+            self.clients, _, self.test_data = read_data(test_data_dir)
+            self.val_images_per_client = np.array([len(self.test_data[client_id]['y']) for client_id in self.clients])
 
     def _get_train_or_val_item(self, client_id, idx_within_client, train):
         if train:
@@ -103,6 +98,7 @@ class FedEMNIST(FedDataset):
         return
 
     def __len__(self):
+        # hardcoded because I don't want to compute the sum every time
         if self.type == "train":
             return 721410
         elif self.type == "val":
