@@ -5,7 +5,7 @@ from collections import defaultdict
 import numpy as np
 
 from data_utils import FedDataset, FedCIFAR10
-from torchvision.datasets import EMNIST
+import torch
 from PIL import Image
 
 __all__ = ["FedEMNIST"]
