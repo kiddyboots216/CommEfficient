@@ -19,7 +19,7 @@ def read_dir(data_dir):
     files = os.listdir(data_dir)
     files = [f for f in files if f.endswith('.json')]
     for f in files:
-        file_path = os.path.join(data_dir,f)
+        file_path = os.path.join(data_dir, f)
         with open(file_path, 'r') as inf:
             cdata = json.loads(inf.read())
         clients.extend(cdata['users'])
@@ -53,12 +53,11 @@ class FedEMNIST(FedDataset):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # assume EMNIST is already preprocessed
-        # data_dir = '/data/ashwineep/leaf/data/femnist/data/'
         if self.type == "train":
-            train_data_dir = self.dataset_dir + 'train'
+            train_data_dir = os.path.join(self.dataset_dir, "train")
             self.clients, _, self.train_data = read_data(train_data_dir)
         else:
-            test_data_dir = self.dataset_dir + 'test'
+            test_data_dir = os.path.join(self.dataset_dir, "test")
             self.clients, _, self.test_data = read_data(test_data_dir)
 
     def _get_train_or_val_item(self, client_id, idx_within_client, train):
@@ -72,7 +71,7 @@ class FedEMNIST(FedDataset):
         y = client_data['y']
         raw_image = x[idx_within_client]
         raw_image = np.array(raw_image)
-        raw_image = np.reshape(raw_image, (28,28))
+        raw_image = np.reshape(raw_image, (28, 28))
         target = y[idx_within_client]
 
         image = Image.fromarray(raw_image)
@@ -101,20 +100,21 @@ class FedEMNIST(FedDataset):
     def prepare_datasets(self, download=False):
         train_data_dir = self.dataset_dir + 'train'
         clients, _, train_data = read_data(train_data_dir)
-        images_per_client = [len(train_data[client_id]['y']) for client_id in clients]
+        images_per_client = [len(train_data[client_id]['y'])
+                             for client_id in clients]
         test_data_dir = self.dataset_dir + 'test'
         clients, _, test_data = read_data(test_data_dir)
-        val_images_per_client = [len(test_data[client_id]['y']) for client_id in clients]
+        val_images_per_client = [len(test_data[client_id]['y'])
+                                 for client_id in clients]
         # save global stats to disk
         fn = self.stats_fn()
         if os.path.exists(fn):
             raise RuntimeError("won't overwrite existing stats file")
         stats = {"images_per_client": images_per_client,
-                "val_images_per_client": val_images_per_client,
+                 "val_images_per_client": val_images_per_client,
                  "num_val_images": sum(val_images_per_client)}
         with open(fn, "w") as f:
-            json.dump(stats, f)
-        #raise RuntimeError("EMNIST should already be here!")
+            f.write(json.dumps(stats))
 
     @property
     def data_per_client(self):
