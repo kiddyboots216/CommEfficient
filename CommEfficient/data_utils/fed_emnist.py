@@ -18,8 +18,10 @@ def read_data(data_dir):
         keys 'users' and 'user_data'
 
     Return:
-        clients: list of client ids
-        data: dictionary of data
+        data: dictionary of data with format
+              {"username1": {"x": [flat_image1, flat_image2, ...]
+                             "y": [y1, y2, ...]}
+               "username2": ...}
     """
     data = defaultdict(lambda : None)
 
