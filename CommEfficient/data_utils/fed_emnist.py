@@ -55,11 +55,15 @@ class FedEMNIST(FedDataset):
         # assume EMNIST is already preprocessed
         # data_dir = '/data/ashwineep/leaf/data/femnist/data/'
         if self.type == "train":
+            print("Making training dataset...")
             train_data_dir = self.dataset_dir + 'train'
             self.clients, _, self.train_data = read_data(train_data_dir)
+            print("Finished making training dataset...")
         else:
+            print("Making test dataset...")
             test_data_dir = self.dataset_dir + 'test'
             self.clients, _, self.test_data = read_data(test_data_dir)
+            print("Finished making test dataset...")
 
     def _get_train_or_val_item(self, client_id, idx_within_client, train):
         if train:
@@ -99,10 +103,13 @@ class FedEMNIST(FedDataset):
             return sum(self.val_images_per_client)
 
     def prepare_datasets(self, download=False):
+        print("Preparing data...")
+        print("Preparing training data...")
         train_data_dir = self.dataset_dir + 'train'
         clients, _, train_data = read_data(train_data_dir)
         images_per_client = [len(train_data[client_id]['y']) for client_id in clients]
         test_data_dir = self.dataset_dir + 'test'
+        print("Preparing testing data...")
         clients, _, test_data = read_data(test_data_dir)
         val_images_per_client = [len(test_data[client_id]['y']) for client_id in clients]
         # save global stats to disk
@@ -114,6 +121,7 @@ class FedEMNIST(FedDataset):
                  "num_val_images": sum(val_images_per_client)}
         with open(fn, "w") as f:
             json.dump(stats, f)
+        print("Done preparing data.")
         #raise RuntimeError("EMNIST should already be here!")
 
     @property
