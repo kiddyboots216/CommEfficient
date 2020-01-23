@@ -137,12 +137,13 @@ def train_gpt2(model, opt, scheduler, train_loader, val_loader,
         writer.add_scalar('validation/nll', nll)
         writer.add_scalar('validation/acc', acc)
         writer.add_scalar('validation/ppl', ppl)
-        logger = TableLogger()
+        valLogger = TableLogger()
         lr = scheduler.get_lr()[0]
         summary = union({'epoch': epoch+1,
                          'lr': lr},
                         epoch_stats)
-        logger.append(summary)
+        print()
+        valLogger.append(summary)
 
 def run_batches(model, opt, scheduler, loader, args,
                 timer, training, logger=None, writer=None):
