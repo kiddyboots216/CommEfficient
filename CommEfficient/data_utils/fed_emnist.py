@@ -17,22 +17,22 @@ def read_dir(data_dir):
     data = defaultdict(lambda : None)
 
     files = os.listdir(data_dir)
-    files = [f for f in files if f.endswith('.json')]
+    files = [f for f in files if f.endswith(".json")]
     for f in files:
         file_path = os.path.join(data_dir, f)
-        with open(file_path, 'r') as inf:
+        with open(file_path, "r") as inf:
             cdata = json.loads(inf.read())
-        clients.extend(cdata['users'])
-        if 'hierarchies' in cdata:
-            groups.extend(cdata['hierarchies'])
-        data.update(cdata['user_data'])
+        clients.extend(cdata["users"])
+        if "hierarchies" in cdata:
+            groups.extend(cdata["hierarchies"])
+        data.update(cdata["user_data"])
 
     clients = list(sorted(data.keys()))
     return clients, groups, data
 
 
 def read_data(data_dir):
-    '''parses data in given train and test data directories
+    """parses data in given train and test data directories
 
     assumes:
     - the data in the input directories are .json files with
@@ -44,7 +44,7 @@ def read_data(data_dir):
         groups: list of group ids; empty list if none found
         train_data: dictionary of train data
         test_data: dictionary of test data
-    '''
+    """
     clients, groups, data = read_dir(data_dir)
 
     return clients, groups, data
@@ -67,8 +67,8 @@ class FedEMNIST(FedDataset):
             dataset = self.test_data
         client = self.clients[client_id]
         client_data = dataset[client]
-        x = client_data['x']
-        y = client_data['y']
+        x = client_data["x"]
+        y = client_data["y"]
         raw_image = x[idx_within_client]
         raw_image = np.array(raw_image)
         raw_image = np.reshape(raw_image, (28, 28))
@@ -98,13 +98,13 @@ class FedEMNIST(FedDataset):
             return sum(self.val_images_per_client)
 
     def prepare_datasets(self, download=False):
-        train_data_dir = self.dataset_dir + 'train'
+        train_data_dir = os.path.join(self.dataset_dir, "train")
         clients, _, train_data = read_data(train_data_dir)
-        images_per_client = [len(train_data[client_id]['y'])
+        images_per_client = [len(train_data[client_id]["y"])
                              for client_id in clients]
-        test_data_dir = self.dataset_dir + 'test'
+        test_data_dir = os.path.join(self.dataset_dir, "test")
         clients, _, test_data = read_data(test_data_dir)
-        val_images_per_client = [len(test_data[client_id]['y'])
+        val_images_per_client = [len(test_data[client_id]["y"])
                                  for client_id in clients]
         # save global stats to disk
         fn = self.stats_fn()
