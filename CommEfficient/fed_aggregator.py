@@ -201,7 +201,7 @@ class FedModel:
         # on the very first iteration, all clients are entirely up-to-date,
         # so they will have no download cost. After that,
         # client_num_stale_iters will never have a zero in it
-        self.ps_weights_history.append(g_ps_weights.clone())
+        self.ps_weights_history.append(g_ps_weights.clone().cpu())
 
         # figure out what the latest model weights each client has.
         # Clamping by maxlen/participation will underestimate the number of
@@ -218,8 +218,9 @@ class FedModel:
         # new weights that the client needs to download
         # (it's the same as torch.where(g_ps_weights == prev)[0].numel(),
         #  but ~6x faster)
+        ps_weights_cpu = g_ps_weights.cpu()
         download_bytes_participating = 4 * torch.tensor(
-                [torch.ceil((g_ps_weights - prev).abs()).clamp(0, 1).sum()
+                [torch.ceil((ps_weights_cpu - prev).abs()).clamp(0, 1).sum()
                  for prev in client_prev_weights]
             )
         download_bytes = torch.zeros(self.args.num_clients)
