@@ -113,7 +113,7 @@ class FedEMNIST(FedDataset):
         # save global stats to disk
         stats = {"images_per_client": images_per_client,
                  "num_val_images": num_val_images}
-        with open(self.stats_fn(), "w") as f:
+        with open(self.stats_fn(), "wb") as f:
             f.write(json.dumps(stats))
 
     def test_fn(self):
