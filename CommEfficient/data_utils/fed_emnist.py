@@ -85,6 +85,10 @@ class FedEMNIST(FedDataset):
             return sum(self.val_images_per_client)
 
     def prepare_datasets(self, download=False):
+        stats_fn = self.stats_fn()
+        if os.path.exists(fn):
+            raise RuntimeError("won't overwrite existing stats file")
+
         train_data_dir = os.path.join(self.dataset_dir, "train")
         clients, train_data = read_data(train_data_dir)
         images_per_client = [len(train_data[client_id]["y"])
@@ -94,13 +98,10 @@ class FedEMNIST(FedDataset):
         val_images_per_client = [len(test_data[client_id]["y"])
                                  for client_id in clients]
         # save global stats to disk
-        fn = self.stats_fn()
-        if os.path.exists(fn):
-            raise RuntimeError("won't overwrite existing stats file")
         stats = {"images_per_client": images_per_client,
                  "val_images_per_client": val_images_per_client,
                  "num_val_images": sum(val_images_per_client)}
-        with open(fn, "w") as f:
+        with open(stats_fn, "w") as f:
             f.write(json.dumps(stats))
 
     @property
