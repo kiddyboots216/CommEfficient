@@ -155,7 +155,8 @@ class FedModel:
                               self.results_queues[i], g_lr,
                               i + 1, world_size,
                               self.compute_loss_train,
-                              self.compute_loss_val, args)
+                              self.compute_loss_val, 
+                              self.compute_loss_mal, args)
                     )
             p.start()
             self.update_forward_grad_ps.append(p)

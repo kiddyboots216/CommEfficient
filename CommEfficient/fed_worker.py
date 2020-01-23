@@ -14,7 +14,7 @@ import queue
 def worker_loop(input_model, ps_weights, client_weights, client_errors,
                 client_velocities, batches_queue, results_queue, fedavg_lr,
                 rank, world_size, compute_loss_train, compute_loss_val,
-                args):
+                compute_loss_mal, args):
     torch.cuda.set_device(rank - 1)
 
     model = input_model.to(args.device)
@@ -110,7 +110,7 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
                 g, results = process_batch(
                         batch, model, local_ps_weights, client_weights,
                         client_errors, client_velocities,
-                        compute_loss_train, compute_loss_val, args
+                        compute_loss_train, compute_loss_val, compute_loss_mal, args
                     )
 
             if is_train:
@@ -126,13 +126,16 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
 
 def process_batch(batch, model, ps_weights, client_weights,
                   client_errors, client_velocities,
-                  compute_loss_train, compute_loss_val, args):
+                  compute_loss_train, compute_loss_val, compute_loss_mal, args):
         client_indices = batch[0]
         is_train = client_indices[0] != -1
         batch = batch[1:]
         batch = [t.to(args.device) for t in batch]
         assert (client_indices - client_indices[0]).abs().sum() == 0
         client_id = client_indices[0]
+        is_malicious = client_id == args.mal_id
+        if is_malicious:
+            compute_loss_train = compute_loss_mal
 
         # figure out what model weights this worker should use
         new_worker_weights = None
