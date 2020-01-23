@@ -21,7 +21,6 @@ def read_data(data_dir):
         clients: list of client ids
         data: dictionary of data
     """
-    clients = []
     data = defaultdict(lambda : None)
 
     files = os.listdir(data_dir)
@@ -30,7 +29,6 @@ def read_data(data_dir):
         file_path = os.path.join(data_dir, f)
         with open(file_path, "r") as inf:
             cdata = json.loads(inf.read())
-        clients.extend(cdata["users"])
         data.update(cdata["user_data"])
 
     clients = list(sorted(data.keys()))
