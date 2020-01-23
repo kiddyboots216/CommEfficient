@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import os
 import torch.optim as optim
 from torch.optim.lr_scheduler import LambdaLR
 import torch.nn as nn
@@ -12,9 +13,11 @@ import models
 from fed_aggregator import FedModel, FedOptimizer
 from utils import make_logdir, union, Timer, TableLogger, parse_args
 from utils import PiecewiseLinear
-from data_utils import FedSampler, FedCIFAR10, FedImageNet
-from data_utils import cifar_train_transforms, cifar_test_transforms
+from data_utils import FedSampler, FedCIFAR10, FedImageNet, FedCIFAR100, FedEMNIST
+from data_utils import cifar10_train_transforms, cifar10_test_transforms
+from data_utils import cifar100_train_transforms, cifar100_test_transforms
 from data_utils import imagenet_train_transforms, imagenet_val_transforms
+from data_utils import femnist_train_transforms, femnist_test_transforms
 
 import torch.multiprocessing as multiprocessing
 
@@ -81,6 +84,13 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
 
     total_download = 0
     total_upload = 0
+    if args.eval_before_start:
+        # val
+        test_loss, test_acc, _, _ = run_batches(
+                model, None, None, test_loader, False, args
+            )
+        test_time = timer()
+        print("Test acc at epoch 0: {:0.4f}".format(test_acc))
     for epoch in range(args.num_epochs):
         # train
         train_loss, train_acc, download, upload = run_batches(
@@ -184,14 +194,16 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
 def get_data_loaders(args):
     train_transforms, val_transforms = {
      "ImageNet": (imagenet_train_transforms, imagenet_val_transforms),
-     "CIFAR10": (cifar_train_transforms, cifar_test_transforms)
+     "CIFAR10": (cifar10_train_transforms, cifar10_test_transforms),
+     "CIFAR100": (cifar100_train_transforms, cifar100_test_transforms),
+     "EMNIST": (femnist_train_transforms, femnist_test_transforms),
     }[args.dataset_name]
 
     dataset_class = globals()["Fed" + args.dataset_name]
-    train_dataset = dataset_class(args.dataset_dir, train_transforms,
+    train_dataset = dataset_class(args.dataset_dir, args.dataset_name, train_transforms,
                                   args.do_iid, args.num_clients,
                                   train=True, download=True)
-    test_dataset = dataset_class(args.dataset_dir, val_transforms,
+    test_dataset = dataset_class(args.dataset_dir, args.dataset_name, val_transforms,
                                  train=False, download=False)
 
     train_sampler = FedSampler(train_dataset,
@@ -266,6 +278,17 @@ if __name__ == "__main__":
                 'channels': {'prep': 64, 'layer1': 128,
                              'layer2': 256, 'layer3': 512},
         }
+    if args.do_finetune:
+        num_classes = num_classes_of_dataset(args.finetuned_from)
+        num_new_classes = num_classes_of_dataset(args.dataset_name)
+    else:
+        num_classes = num_classes_of_dataset(args.dataset_name)
+        num_new_classes = None
+
+    model_config.update({"num_classes": num_classes,
+                         "new_num_classes": num_new_classes})
+    model_config.update({"bn_bias_freeze": args.do_finetune,
+                         "bn_weight_freeze": args.do_finetune})
 
     # comment out for Fixup
     #model_config["iid"] = args.do_iid
@@ -288,15 +311,23 @@ if __name__ == "__main__":
         param_groups = [{"params": params_bias, "lr": 0.1},
                         {"params": params_scale, "lr": 0.1},
                         {"params": params_other, "lr": 1}]
+    elif args.do_finetune:
+        model.load_state_dict(torch.load(args.finetune_path + args.model + '.pt'))
+        for param in model.parameters():
+            param.requires_grad = False
+        param_groups = model.finetune_parameters()
+        """
+        param_groups = model.parameters()
+        """
     else:
         param_groups = model.parameters()
     opt = optim.SGD(param_groups, lr=1)
 
 
-    # Fed-ify everything
     model = FedModel(model, compute_loss_train, args, compute_loss_val)
     opt = FedOptimizer(opt, args)
 
+<<<<<<< HEAD
     # set up learning rate stuff
     # original cifar10_fast repo uses [0, 5, 24] and [0, 0.4, 0]
     # so scale that horizontall with num_epochs and vertically
@@ -329,3 +360,7 @@ if __name__ == "__main__":
     # and do the training
     train(model, opt, lr_scheduler, train_loader, test_loader, args,
           writer, loggers=(TableLogger(),), timer=timer)
+    if args.do_checkpoint:
+        if not os.path.exists(args.checkpoint_path):
+            os.makedirs(args.checkpoint_path)
+        torch.save(model.state_dict(), args.checkpoint_path + args.model + '.pt')

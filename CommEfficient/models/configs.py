@@ -1,6 +1,3 @@
-from collections import namedtuple
-import numpy as np
-
 class ModelConfig:
     def __init__(self):
         pass

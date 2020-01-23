@@ -15,7 +15,7 @@ import ctypes
 import torch.multiprocessing as multiprocessing
 
 import fed_worker as worker
-from utils import get_param_vec, set_param_vec, get_grad, _topk
+from utils import get_param_vec, set_param_vec, get_grad, _topk, clip_grad
 
 # gets multipled by 1/participation. See use below
 DEQUE_MAXLEN_MULT = 10
@@ -70,11 +70,13 @@ class FedModel:
         self.compute_loss_val = (compute_loss_val
                                  if compute_loss_val is not None
                                  else compute_loss)
-        param_vec = get_param_vec(self.model)
+        param_vec = []
         grad_size = 0
         for p in self.model.parameters():
             if p.requires_grad:
                 grad_size += torch.numel(p)
+                param_vec.append(p.data.view(-1))
+        param_vec = torch.cat(param_vec)
         args.grad_size = grad_size
         print("grad_size", grad_size)
         self.args = args
@@ -120,6 +122,7 @@ class FedModel:
         elif args.mode in ["local_topk", "true_topk", "fedavg",
                            "uncompressed"]:
             shape = (args.num_clients, args.grad_size)
+        print(f"Shared memory array shape: {shape}")
 
         # don't make these arrays unless we need them
         if args.error_type == "local" or args.local_momentum > 0:
@@ -177,7 +180,7 @@ class FedModel:
 
     def save_pretrained(self, log_dir):
         global g_ps_weights
-        set_param_vec(self.model, g_ps_weights)
+        set_param_vec(self.model, g_ps_weights.cpu())
         self.model.save_pretrained(log_dir)
 
     def _call_train(self, batch):
@@ -301,9 +304,9 @@ class FedModel:
             return self._call_val(batch)
 
     def __getattr__(self, name):
-        if name == "parameters":
+        if name in ["parameters", "state_dict"]:
             global g_ps_weights
-            set_param_vec(self.model, g_ps_weights)
+            set_param_vec(self.model, g_ps_weights.cpu())
             return getattr(self.model, name)
 
     def zero_grad(self):
@@ -431,8 +434,12 @@ def _server_helper_uncompressed(gradient, Vvelocity, Verror, args, lr):
               Vvelocity,
               alpha=rho,
               out=Vvelocity)
-    update = Vvelocity
-    return update * lr, Vvelocity, Verror
+    grad = Vvelocity
+    if args.do_dp and args.dp_mode == "server":
+        #grad = clip_grad(args.l2_norm_clip, grad)
+        noise = torch.normal(mean=0, std=args.noise_multiplier, size=grad.size()).to(args.device)
+        grad += noise
+    return grad * lr, Vvelocity, Verror
 
 def _server_helper_true_topk(gradient, Vvelocity, Verror, args, lr):
     assert args.error_type == "virtual"
@@ -509,6 +516,10 @@ def _server_helper_sketched(sketched_grad, Vvelocity, Verror, args, lr):
 
     sketch = args2sketch(args)
     sketch.accumulateTable(Verror)
+    #noise = torch.normal(mean=0, std=args.noise_multiplier, size=[args.grad_size]).to(args.device)
+    #sketch.accumulateVec(noise)
+    #noise = torch.normal(mean=0, std=args.noise_multiplier, size=[args.rows, args.cols]).to(args.device)
+    #sketch.accumulateTable(noise)
     update = sketch.unSketch(k=args.k)
 
     # do virtual error
