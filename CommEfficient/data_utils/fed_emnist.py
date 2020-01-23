@@ -121,4 +121,4 @@ class FedEMNIST(FedDataset):
 
     def client_fn(self, client_id):
         fn = "client{}.pt".format(client_id)
-        return os.path.join(self.dataset_dir, "test", fn)
+        return os.path.join(self.dataset_dir, "train", fn)
