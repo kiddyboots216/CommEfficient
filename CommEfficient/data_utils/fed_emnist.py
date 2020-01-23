@@ -11,21 +11,17 @@ from PIL import Image
 __all__ = ["FedEMNIST"]
 
 def read_data(data_dir):
-    """parses data in given train and test data directories
+    """parses data in given data directories
 
     assumes:
     - the data in the input directories are .json files with
         keys 'users' and 'user_data'
-    - the set of train set users is the same as the set of test set users
 
     Return:
         clients: list of client ids
-        groups: list of group ids; empty list if none found
-        train_data: dictionary of train data
-        test_data: dictionary of test data
+        data: dictionary of data
     """
     clients = []
-    groups = []
     data = defaultdict(lambda : None)
 
     files = os.listdir(data_dir)
@@ -35,12 +31,10 @@ def read_data(data_dir):
         with open(file_path, "r") as inf:
             cdata = json.loads(inf.read())
         clients.extend(cdata["users"])
-        if "hierarchies" in cdata:
-            groups.extend(cdata["hierarchies"])
         data.update(cdata["user_data"])
 
     clients = list(sorted(data.keys()))
-    return clients, groups, data
+    return clients, data
 
 class FedEMNIST(FedDataset):
     def __init__(self, *args, **kwargs):
@@ -48,10 +42,10 @@ class FedEMNIST(FedDataset):
         # assume EMNIST is already preprocessed
         if self.type == "train":
             train_data_dir = os.path.join(self.dataset_dir, "train")
-            self.clients, _, self.train_data = read_data(train_data_dir)
+            self.clients, self.train_data = read_data(train_data_dir)
         else:
             test_data_dir = os.path.join(self.dataset_dir, "test")
-            self.clients, _, self.test_data = read_data(test_data_dir)
+            self.clients, self.test_data = read_data(test_data_dir)
 
     def _get_train_or_val_item(self, client_id, idx_within_client, train):
         if train:
@@ -92,11 +86,11 @@ class FedEMNIST(FedDataset):
 
     def prepare_datasets(self, download=False):
         train_data_dir = os.path.join(self.dataset_dir, "train")
-        clients, _, train_data = read_data(train_data_dir)
+        clients, train_data = read_data(train_data_dir)
         images_per_client = [len(train_data[client_id]["y"])
                              for client_id in clients]
         test_data_dir = os.path.join(self.dataset_dir, "test")
-        clients, _, test_data = read_data(test_data_dir)
+        clients, test_data = read_data(test_data_dir)
         val_images_per_client = [len(test_data[client_id]["y"])
                                  for client_id in clients]
         # save global stats to disk
