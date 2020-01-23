@@ -118,7 +118,6 @@ def train_gpt2(model, opt, scheduler, train_loader, val_loader,
     timer = timer or Timer()
     epochs = args.num_epochs
     logger = logger or TableLogger()
-    val_logger = TableLogger()
     for epoch in range(epochs):
         mean_train_loss = run_batches(model, opt, scheduler, train_loader,
                                  args, timer, training=True,
@@ -139,11 +138,13 @@ def train_gpt2(model, opt, scheduler, train_loader, val_loader,
         writer.add_scalar('validation/nll', nll)
         writer.add_scalar('validation/acc', acc)
         writer.add_scalar('validation/ppl', ppl)
+        valLogger = TableLogger()
         lr = scheduler.get_lr()[0]
         summary = union({'epoch': epoch+1,
                          'lr': lr},
                         epoch_stats)
-        val_logger.append(summary)
+        print()
+        valLogger.append(summary)
 
 def run_batches(model, opt, scheduler, loader, args,
                 timer, training, logger=None, writer=None):
@@ -187,6 +188,20 @@ def run_batches(model, opt, scheduler, loader, args,
             acc = np.mean(acc)
             nlls.append(nll)
             accs.append(acc)
+            """
+            val_time = timer()
+            batch_stats = {
+                'test_time': val_time,
+                'test_nll': nll,
+                'test_acc': acc,
+                'test_ppl': ppl,
+                'total_time': timer.total_time,
+            }
+            summary = union({'batch_idx': batch_idx+1, }, batch_stats)
+            logger.append(summary)
+            """
+            if batch_idx > 5 and args.do_test:
+                break
         return np.mean(nlls), np.mean(accs), np.exp(np.mean(ppls))
 
 def train():

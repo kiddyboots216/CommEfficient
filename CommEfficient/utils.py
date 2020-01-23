@@ -7,10 +7,9 @@ import ctypes
 import numpy as np
 from collections import namedtuple
 import torchvision
+from collections import namedtuple
 
 import models
-from models.configs import fed_datasets
-
 
 class Logger:
     def debug(self, msg, args=None):
@@ -23,6 +22,18 @@ class Logger:
         print(msg.format(args))
     def critical(self, msg, args=None):
         print(msg.format(args))
+
+class PiecewiseLinear(namedtuple('PiecewiseLinear', ('knots', 'vals'))):
+    def __call__(self, t):
+        return np.interp([t], self.knots, self.vals)[0]
+
+fed_datasets = {"CIFAR10": 10,
+                "CIFAR100": 100,
+                "EMNIST": 62,
+                "ImageNet": 1000}
+
+def num_classes_of_dataset(dataset_name):
+    return fed_datasets[dataset_name]
 
 def is_port_in_use(port):
     import socket
@@ -168,6 +179,10 @@ def parse_args(default_lr=None):
     parser.add_argument("--local_sched", action="store_true", dest="use_local_sched")
     parser.add_argument("--share_ps_gpu", action="store_true")
     parser.add_argument("--iid", action="store_true", dest="do_iid")
+    parser.add_argument("--train_dataloader_workers",
+                        type=int, default=0)
+    parser.add_argument("--val_dataloader_workers",
+                        type=int, default=0)
 
     # GPT2 args
     parser.add_argument("--num_dialogs", type=int, default=1)

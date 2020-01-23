@@ -12,19 +12,22 @@ class FixupLayer(nn.Module):
     def __init__(self, in_channels, out_channels, num_blocks, pool):
         super().__init__()
         self.conv = conv3x3(in_channels, out_channels)
-        self.bias = nn.Parameter(torch.zeros(1))
+        self.bias1a = nn.Parameter(torch.zeros(1))
+        self.bias1b = nn.Parameter(torch.zeros(1))
+        self.scale = nn.Parameter(torch.ones(1))
+        self.pool = pool
         self.blocks = nn.Sequential(
                     *[FixupBasicBlock(out_channels, out_channels)
                       for _ in range(num_blocks)]
                 )
-        self.pool = pool
 
     def forward(self, x):
-        out = F.relu(self.conv(x) + self.bias)
-        for block in self.blocks:
-            out = block(out)
+        out = self.conv(x + self.bias1a) * self.scale + self.bias1b
+        out = F.relu(out)
         if self.pool is not None:
             out = self.pool(out)
+        for block in self.blocks:
+            out = block(out)
         return out
 
 class FixupResNet9(nn.Module):
@@ -34,7 +37,9 @@ class FixupResNet9(nn.Module):
         self.channels = channels or {"prep": 64, "layer1": 128,
                                      "layer2": 256, "layer3": 512}
         self.conv1 = conv3x3(3, self.channels["prep"])
-        self.bias1 = nn.Parameter(torch.zeros(1))
+        self.bias1a = nn.Parameter(torch.zeros(1))
+        self.bias1b = nn.Parameter(torch.zeros(1))
+        self.scale = nn.Parameter(torch.ones(1))
 
         self.layer1 = FixupLayer(self.channels["prep"],
                                  self.channels["layer1"],
@@ -47,7 +52,15 @@ class FixupResNet9(nn.Module):
                                  1, pool)
 
         self.pool = nn.MaxPool2d(4)
+        self.bias2 = nn.Parameter(torch.zeros(1))
         self.linear = nn.Linear(self.channels["layer3"], 10)
+
+        # initialize conv1
+        std = np.sqrt(2 /
+                    (self.conv1.weight.shape[0]
+                     * np.prod(self.conv1.weight.shape[2:]))
+              )
+        nn.init.normal_(self.conv1.weight, mean=0, std=std)
 
         for m in self.modules():
             if isinstance(m, FixupBasicBlock):
@@ -68,9 +81,11 @@ class FixupResNet9(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
-        out = F.relu(self.conv1(x) + self.bias1)
-        for layer in [self.layer1, self.layer2, self.layer3]:
-            out = layer(out)
+        out = self.conv1(x + self.bias1a) * self.scale + self.bias1b
+        out = F.relu(out)
+        out = self.layer1(out)
+        out = self.layer2(out)
+        out = self.layer3(out)
         out = self.pool(out).view(out.size()[0], -1)
-        out = self.linear(out)
+        out = self.linear(out + self.bias2)
         return out

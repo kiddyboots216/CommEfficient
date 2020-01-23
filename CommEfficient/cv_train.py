@@ -9,10 +9,10 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import torchvision
 
-from models import configs
 import models
 from fed_aggregator import FedModel, FedOptimizer
 from utils import make_logdir, union, Timer, TableLogger, parse_args
+from utils import PiecewiseLinear, num_classes_of_dataset
 from data_utils import FedSampler, FedCIFAR10, FedImageNet, FedCIFAR100, FedEMNIST
 from data_utils import cifar10_train_transforms, cifar10_test_transforms
 from data_utils import cifar100_train_transforms, cifar100_test_transforms
@@ -90,10 +90,6 @@ def compute_loss_val(model, batch, args):
 def train(model, opt, lr_scheduler, train_loader, test_loader,
           args, writer, loggers=(), timer=None, mal_loader=None):
     timer = timer or Timer()
-    if args.mode == "fedavg":
-        # hack to get the starting LR right for fedavg
-        lr_scheduler.step()
-        opt.step()
 
     total_download = 0
     total_upload = 0
@@ -179,16 +175,20 @@ def run_batches(model, opt, lr_scheduler, loader, training, step_scheduler, args
     client_download = torch.zeros(args.num_clients)
     client_upload = torch.zeros(args.num_clients)
     if training:
-        for batch in loader:
+        for i, batch in enumerate(loader):
             if args.use_local_sched:
                 for _ in range(args.num_local_iters):
                     lr_scheduler.step()
             else:
                 lr_scheduler.step()
 
+            if lr_scheduler.get_lr() == 0:
+                # hack to get the starting LR right for fedavg
+                opt.step()
+
             expected_numel = args.num_workers * args.local_batch_size
             if batch[0].numel() < expected_numel:
-                # skip incomplete batches
+            #    # skip incomplete batches
                 continue
 
             loss, acc, download, upload = model(batch)
@@ -233,16 +233,17 @@ def get_data_loaders(args):
 
     train_loader = DataLoader(train_dataset,
                               batch_sampler=train_sampler,
-                              num_workers=1)#,
+                              num_workers=args.train_dataloader_workers)
                               #multiprocessing_context="spawn",
                               #pin_memory=True)
     test_batch_size = args.valid_batch_size * args.num_workers
     test_loader = DataLoader(test_dataset,
                              batch_size=test_batch_size,
                              shuffle=False,
-                             num_workers=1)#,
+                             num_workers=args.val_dataloader_workers)
                              #multiprocessing_context="spawn",
                              #pin_memory=True)
+    print(len(train_loader), len(test_loader))
 
     mal_loader = None
     if args.is_malicious:
@@ -284,12 +285,8 @@ if __name__ == "__main__":
     #args = parse_args(default_lr=0.06)
 
     args = parse_args()
-    config_class = getattr(configs, args.model + "Config")
-    config = config_class()
-    config.set_args(args)
 
     print(args)
-
 
     timer = Timer()
     args.lr_epoch = 0.0
@@ -304,22 +301,32 @@ if __name__ == "__main__":
     if args.do_test:
         model_config = {
             'channels': {'prep': 1, 'layer1': 1,
-            'layer2': 1, 'layer3': 1},
+                         'layer2': 1, 'layer3': 1},
         }
         args.num_cols = 10
         args.num_rows = 1
         args.k = 10
-        args.p2 = 1
-        #args.batch_size = args.clients
     else:
         model_config = {
                 'channels': {'prep': 64, 'layer1': 128,
-                'layer2': 256, 'layer3': 512},
+                             'layer2': 256, 'layer3': 512},
         }
+    if args.do_finetune:
+        num_classes = num_classes_of_dataset(args.finetuned_from)
+        num_new_classes = num_classes_of_dataset(args.dataset_name)
+    else:
+        num_classes = num_classes_of_dataset(args.dataset_name)
+        num_new_classes = None
+
+    model_config.update({"num_classes": num_classes,
+                         "new_num_classes": num_new_classes})
+    model_config.update({"bn_bias_freeze": args.do_finetune,
+                         "bn_weight_freeze": args.do_finetune})
+    if args.dataset_name == "EMNIST":
+        model_config["initial_channels"] = 1
 
     # comment out for Fixup
     #model_config["iid"] = args.do_iid
-
 
     # make data loaders
     # train_loader, val_loader = gen_data(args)
@@ -333,11 +340,8 @@ if __name__ == "__main__":
     train_loader, test_loader, mal_loader = get_data_loaders(args)
 
     # instantiate ALL the things
-    #model = ResNet9(**model_config)
-    #opt = optim.SGD(model.parameters(), lr=1)
-
     model_cls = getattr(models, args.model)
-    model = model_cls(**config.model_config)
+    model = model_cls(**model_config)
 
     if args.model[:5] == "Fixup":
         print("using fixup learning rates")
@@ -366,7 +370,15 @@ if __name__ == "__main__":
     model = FedModel(model, compute_loss_train, args, compute_loss_val)
     opt = FedOptimizer(opt, args)
 
-    lr_schedule = config.lr_schedule
+    # set up learning rate stuff
+    # original cifar10_fast repo uses [0, 5, 24] and [0, 0.4, 0]
+    # so scale that horizontall with num_epochs and vertically
+    # with lr_scale
+    num_epochs_scale = args.num_epochs / 24
+    lr_schedule = PiecewiseLinear(
+            [0, 5 * num_epochs_scale, 24 * num_epochs_scale],
+            [0, args.lr_scale,        0]
+        )
 
     # grad_reduction only controls how gradients from different
     # workers are combined

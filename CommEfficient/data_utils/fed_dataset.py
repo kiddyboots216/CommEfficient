@@ -21,8 +21,8 @@ class FedDataset(torch.utils.data.Dataset):
         self.mal_id = args.mal_id
         self.is_malicious = args.is_malicious
 
-        if not do_iid and num_clients is not None:
-            raise ValueError("can't specify # clients when non-iid")
+        #if not do_iid and num_clients is not None:
+        #    raise ValueError("can't specify # clients when non-iid")
 
         if not os.path.exists(self.stats_fn()):
             self.prepare_datasets(download=download)

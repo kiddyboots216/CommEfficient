@@ -20,6 +20,10 @@ from utils import get_param_vec, set_param_vec, get_grad, _topk, clip_grad
 # gets multipled by 1/participation. See use below
 DEQUE_MAXLEN_MULT = 10
 
+def shms():
+    pid = os.getpid()
+    return [s for s in os.listdir("/dev/shm") if str(pid) in s]
+
 #from mpi4py import MPI
 #comm = MPI.COMM_WORLD
 #rank = comm.Get_rank()
@@ -209,14 +213,16 @@ class FedModel:
         # on the very first iteration, all clients are entirely up-to-date,
         # so they will have no download cost. After that,
         # client_num_stale_iters will never have a zero in it
-        self.ps_weights_history.append(g_ps_weights.clone())
+        self.ps_weights_history.append(g_ps_weights.clone().cpu())
 
         # figure out what the latest model weights each client has.
         # Clamping by maxlen/participation will underestimate the number of
         # bytes needed to download, but as long as maxlen is large
         # enough, this error will be negligible
         maxlen = self.ps_weights_history.maxlen
-        stale = self.client_num_stale_iters[unique_clients].clamp(0, maxlen)
+        stale = self.client_num_stale_iters[unique_clients].clamp(
+                0, maxlen - 1
+            )
         client_prev_weights = [self.ps_weights_history[-(s + 1)]
                                for s in stale]
         # the ceil(...).sum() call just counts how many entries
@@ -224,8 +230,9 @@ class FedModel:
         # new weights that the client needs to download
         # (it's the same as torch.where(g_ps_weights == prev)[0].numel(),
         #  but ~6x faster)
+        ps_weights_cpu = g_ps_weights.cpu()
         download_bytes_participating = 4 * torch.tensor(
-                [torch.ceil((g_ps_weights - prev).abs()).clamp(0, 1).sum()
+                [torch.ceil((ps_weights_cpu - prev).abs()).clamp(0, 1).sum()
                  for prev in client_prev_weights]
             )
         download_bytes = torch.zeros(self.args.num_clients)
@@ -259,9 +266,17 @@ class FedModel:
             shape = (self.args.grad_size,)
 
         # reduce the gradients
+        #torch.cuda.synchronize()
+        #print("before all", shms())
         transmit = torch.zeros(shape).to(self.args.device).float()
+        #torch.cuda.synchronize()
+        #print("before barrier", shms())
         torch.distributed.barrier()
+        #torch.cuda.synchronize()
+        #print("before reduce", shms())
         torch.distributed.reduce(transmit, 0)
+        #torch.cuda.synchronize()
+        #print("after reduce", shms())
 
         g_minibatch_gradient[:] = transmit / len(worker_batches)
 
@@ -277,6 +292,7 @@ class FedModel:
         per_proc = len(batch_shards) // len(self.update_forward_grad_ps)
         proc_batches = [batch_shards[i:i + per_proc]
                         for i in range(0, len(batch_shards), per_proc)]
+
         for i, batches in enumerate(proc_batches):
             self.batches_queues[i % len(self.batches_queues)].put(batches)
 
