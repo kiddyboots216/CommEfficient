@@ -47,11 +47,7 @@ class FedEMNIST(FedDataset):
             test_data_dir = os.path.join(self.dataset_dir, "test")
             self.clients, self.test_data = read_data(test_data_dir)
 
-    def _get_train_or_val_item(self, client_id, idx_within_client, train):
-        if train:
-            dataset = self.train_data
-        else:
-            dataset = self.test_data
+    def _get_item(self, client_id, idx_within_client, dataset):
         client = self.clients[client_id]
         client_data = dataset[client]
         x = client_data["x"]
@@ -66,17 +62,18 @@ class FedEMNIST(FedDataset):
         return image, target
 
     def _get_train_item(self, client_id, idx_within_client):
-        return self._get_train_or_val_item(client_id, idx_within_client, True)
+        return self._get_item(client_id,
+                              idx_within_client,
+                              self.train_data)
 
     def _get_val_item(self, idx):
         cumsum = np.cumsum(self.val_images_per_client)
         client_id = np.searchsorted(cumsum, idx, side="right")
         cumsum = np.hstack([[0], cumsum[:-1]])
         idx_within_client = idx - cumsum[client_id]
-        return self._get_val_item_true(client_id, idx_within_client)
-
-    def _get_val_item_true(self, client_id, idx_within_client):
-        return self._get_train_or_val_item(client_id, idx_within_client, False)
+        return self._get_item(client_id,
+                              idx_within_client,
+                              self.test_data)
 
     def __len__(self):
         if self.type == "train":
