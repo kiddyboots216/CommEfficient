@@ -37,41 +37,33 @@ def read_data(data_dir):
 class FedEMNIST(FedDataset):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
         # assume EMNIST is already preprocessed
         if self.type == "train":
-            train_data_dir = os.path.join(self.dataset_dir, "train")
-            self.clients, self.train_data = read_data(train_data_dir)
+            client_datasets = []
+            for client_id in range(len(self.images_per_client)):
+                client_datasets.append(
+                        torch.load(self.client_fn(client_id))
+                    )
+            self.client_datasets = client_datasets
         else:
-            test_data_dir = os.path.join(self.dataset_dir, "test")
-            self.clients, self.test_data = read_data(test_data_dir)
+            test_data = torch.load(self.test_fn())
+            self.test_images = test_data["x"]
+            self.test_targets = test_data["y"]
 
-    def _get_item(self, client_id, idx_within_client, dataset):
-        client = self.clients[client_id]
-        client_data = dataset[client]
-        x = client_data["x"]
-        y = client_data["y"]
-        raw_image = x[idx_within_client]
-        raw_image = np.array(raw_image)
-        raw_image = np.reshape(raw_image, (28, 28))
-        target = y[idx_within_client]
+    def _get_train_item(self, client_id, idx_within_client):
+        client_dataset = self.client_datasets[client_id]
+        raw_image = client_dataset["x"][idx_within_client]
+        target = client_dataset["y"][idx_within_client]
 
         image = Image.fromarray(raw_image)
 
         return image, target
 
-    def _get_train_item(self, client_id, idx_within_client):
-        return self._get_item(client_id,
-                              idx_within_client,
-                              self.train_data)
-
     def _get_val_item(self, idx):
-        cumsum = np.cumsum(self.val_images_per_client)
-        client_id = np.searchsorted(cumsum, idx, side="right")
-        cumsum = np.hstack([[0], cumsum[:-1]])
-        idx_within_client = idx - cumsum[client_id]
-        return self._get_item(client_id,
-                              idx_within_client,
-                              self.test_data)
+        image = Image.fromarray(self.test_images[idx])
+        target = self.test_targets[idx]
+        return image, target
 
     def __len__(self):
         if self.type == "train":
@@ -80,23 +72,52 @@ class FedEMNIST(FedDataset):
             return sum(self.val_images_per_client)
 
     def prepare_datasets(self, download=False):
-        stats_fn = self.stats_fn()
-        if os.path.exists(fn):
+        if os.path.exists(self.stats_fn()):
             raise RuntimeError("won't overwrite existing stats file")
+        if os.path.exists(self.test_fn()):
+            raise RuntimeError("won't overwrite existing test set")
 
+        # original data is in json format, meaning it takes
+        # ~25 times longer to read from disk than it would if the
+        # data were in torch files
+        # rectify this, saving each client in a separate .pt file
         train_data_dir = os.path.join(self.dataset_dir, "train")
         clients, train_data = read_data(train_data_dir)
         images_per_client = [len(train_data[client_id]["y"])
                              for client_id in clients]
+        for client_id, client_data in enumerate(train_data.values()):
+            flat_images = client_data["x"]
+            images = torch.tensor(flat_images).view(-1, 28, 28)
+            targets = torch.tensor(client_data["y"])
+
+            fn = self.client_fn(client_id)
+            if os.path.exists(fn):
+                raise RuntimeError("won't overwrite existing client")
+            torch.save({"x": images, "y": targets}, fn)
+
+        # for the test data, put it all in one file (we don't
+        # care which client the test data nominally belongs to)
         test_data_dir = os.path.join(self.dataset_dir, "test")
         clients, test_data = read_data(test_data_dir)
-        val_images_per_client = [len(test_data[client_id]["y"])
-                                 for client_id in clients]
+        num_val_images = sum([len(test_data[client_id]["y"])
+                              for client_id in clients])
+        all_images = []
+        all_targets = []
+        for data_shard in enumerate(test_data.values()):
+            flat_images = client_data["x"]
+            images = torch.tensor(flat_images).view(-1, 28, 28)
+            targets = torch.tensor(client_data["y"])
+            all_images.append(images)
+            all_targets.append(targets)
+        all_images = torch.cat(all_images, dim=0)
+        all_targets = torch.cat(all_targets, dim=0)
+        torch.save({"x": all_images, "y": all_targets},
+                   self.test_fn())
+
         # save global stats to disk
         stats = {"images_per_client": images_per_client,
-                 "val_images_per_client": val_images_per_client,
-                 "num_val_images": sum(val_images_per_client)}
-        with open(stats_fn, "w") as f:
+                 "num_val_images": num_val_images}
+        with open(self.stats_fn(), "w") as f:
             f.write(json.dumps(stats))
 
     @property
