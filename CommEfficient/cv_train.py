@@ -8,10 +8,10 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import torchvision
 
-from models import configs
 import models
 from fed_aggregator import FedModel, FedOptimizer
 from utils import make_logdir, union, Timer, TableLogger, parse_args
+from utils import PiecewiseLinear
 from data_utils import FedSampler, FedCIFAR10, FedImageNet
 from data_utils import cifar_train_transforms, cifar_test_transforms
 from data_utils import imagenet_train_transforms, imagenet_val_transforms
@@ -241,12 +241,8 @@ if __name__ == "__main__":
     #args = parse_args(default_lr=0.06)
 
     args = parse_args()
-    config_class = getattr(configs, args.model + "Config")
-    config = config_class()
-    config.set_args(args)
 
     print(args)
-
 
     timer = Timer()
 
@@ -260,32 +256,26 @@ if __name__ == "__main__":
     if args.do_test:
         model_config = {
             'channels': {'prep': 1, 'layer1': 1,
-            'layer2': 1, 'layer3': 1},
+                         'layer2': 1, 'layer3': 1},
         }
         args.num_cols = 10
         args.num_rows = 1
         args.k = 10
-        args.p2 = 1
-        #args.batch_size = args.clients
     else:
         model_config = {
                 'channels': {'prep': 64, 'layer1': 128,
-                'layer2': 256, 'layer3': 512},
+                             'layer2': 256, 'layer3': 512},
         }
 
     # comment out for Fixup
     #model_config["iid"] = args.do_iid
 
-
     # make data loaders
     train_loader, test_loader = get_data_loaders(args)
 
     # instantiate ALL the things
-    #model = ResNet9(**model_config)
-    #opt = optim.SGD(model.parameters(), lr=1)
-
     model_cls = getattr(models, args.model)
-    model = model_cls(**config.model_config)
+    model = model_cls(**model_config)
 
     if args.model[:5] == "Fixup":
         print("using fixup learning rates")
@@ -308,10 +298,14 @@ if __name__ == "__main__":
     opt = FedOptimizer(opt, args)
 
     # set up learning rate stuff
-    #lr_schedule = PiecewiseLinear([0, args.pivot_epoch, args.num_epochs],
-    #                              [0, args.lr_scale, 0])
-
-    lr_schedule = config.lr_schedule
+    # original cifar10_fast repo uses [0, 5, 24] and [0, 0.4, 0]
+    # so scale that horizontall with num_epochs and vertically
+    # with lr_scale
+    num_epochs_scale = args.num_epochs / 24
+    lr_schedule = PiecewiseLinear(
+            [0, 5 * num_epochs_scale, 24 * num_epochs_scale],
+            [0, args.lr_scale,        0]
+        )
 
     # grad_reduction only controls how gradients from different
     # workers are combined

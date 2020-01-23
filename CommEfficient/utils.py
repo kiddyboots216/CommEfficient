@@ -7,6 +7,7 @@ import ctypes
 import numpy as np
 from collections import namedtuple
 import torchvision
+from collections import namedtuple
 
 import models
 
@@ -21,6 +22,10 @@ class Logger:
         print(msg.format(args))
     def critical(self, msg, args=None):
         print(msg.format(args))
+
+class PiecewiseLinear(namedtuple('PiecewiseLinear', ('knots', 'vals'))):
+    def __call__(self, t):
+        return np.interp([t], self.knots, self.vals)[0]
 
 def is_port_in_use(port):
     import socket
