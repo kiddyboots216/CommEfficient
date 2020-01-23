@@ -10,8 +10,20 @@ from PIL import Image
 
 __all__ = ["FedEMNIST"]
 
-# utils methods from Leaf which isn't installable
-def read_dir(data_dir):
+def read_data(data_dir):
+    """parses data in given train and test data directories
+
+    assumes:
+    - the data in the input directories are .json files with
+        keys 'users' and 'user_data'
+    - the set of train set users is the same as the set of test set users
+
+    Return:
+        clients: list of client ids
+        groups: list of group ids; empty list if none found
+        train_data: dictionary of train data
+        test_data: dictionary of test data
+    """
     clients = []
     groups = []
     data = defaultdict(lambda : None)
@@ -28,25 +40,6 @@ def read_dir(data_dir):
         data.update(cdata["user_data"])
 
     clients = list(sorted(data.keys()))
-    return clients, groups, data
-
-
-def read_data(data_dir):
-    """parses data in given train and test data directories
-
-    assumes:
-    - the data in the input directories are .json files with
-        keys 'users' and 'user_data'
-    - the set of train set users is the same as the set of test set users
-
-    Return:
-        clients: list of client ids
-        groups: list of group ids; empty list if none found
-        train_data: dictionary of train data
-        test_data: dictionary of test data
-    """
-    clients, groups, data = read_dir(data_dir)
-
     return clients, groups, data
 
 class FedEMNIST(FedDataset):
