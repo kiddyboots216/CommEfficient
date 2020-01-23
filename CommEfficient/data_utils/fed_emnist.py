@@ -55,15 +55,15 @@ class FedEMNIST(FedDataset):
     def _get_train_item(self, client_id, idx_within_client):
         client_dataset = self.client_datasets[client_id]
         raw_image = client_dataset["x"][idx_within_client]
-        target = client_dataset["y"][idx_within_client]
+        target = client_dataset["y"][idx_within_client].item()
 
-        image = Image.fromarray(raw_image)
+        image = Image.fromarray(raw_image.numpy())
 
         return image, target
 
     def _get_val_item(self, idx):
-        image = Image.fromarray(self.test_images[idx])
-        target = self.test_targets[idx]
+        image = Image.fromarray(self.test_images[idx].numpy())
+        target = self.test_targets[idx].item()
         return image, target
 
     def prepare_datasets(self, download=False):
