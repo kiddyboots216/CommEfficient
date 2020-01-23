@@ -4,10 +4,11 @@ import os
 import numpy as np
 
 from data_utils import FedDataset
-from torchvision.datasets import CIFAR10
+import torchvision
+from torchvision.datasets import CIFAR10, CIFAR100
 from PIL import Image
 
-__all__ = ["FedCIFAR10"]
+__all__ = ["FedCIFAR10", "FedCIFAR100"]
 
 class FedCIFAR10(FedDataset):
     def __init__(self, *args, **kwargs):
@@ -44,10 +45,11 @@ class FedCIFAR10(FedDataset):
 
     def prepare_datasets(self, download=True):
         os.makedirs(self.dataset_dir, exist_ok=True)
-        vanilla_train = CIFAR10(self.dataset_dir,
+        dataset = torchvision.datasets.__dict__.get(self.dataset_name)
+        vanilla_train = dataset(self.dataset_dir,
                                 train=True,
                                 download=download)
-        vanilla_test = CIFAR10(self.dataset_dir,
+        vanilla_test = dataset(self.dataset_dir,
                                train=False,
                                download=download)
 
@@ -123,3 +125,6 @@ class FedCIFAR10(FedDataset):
     def test_fn(self):
         return os.path.join(self.dataset_dir, "test.npz")
 
+class FedCIFAR100(FedCIFAR10):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)

@@ -242,13 +242,16 @@ def train():
 
 def get_data_loaders(args, tokenizer):
     train_dataset = FedPersonaChat(args.dataset_dir,
+                                   "Persona",
                                    tokenizer,
                                    args.num_candidates,
                                    args.max_history,
+                                   permute_personalities=True,
                                    do_iid=args.do_iid,
                                    num_clients=args.num_clients,
                                    train=True)
     val_dataset = FedPersonaChat(args.dataset_dir,
+                                 "Persona",
                                  tokenizer,
                                  args.num_candidates,
                                  args.max_history,

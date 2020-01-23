@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import os
 import torch.optim as optim
 from torch.optim.lr_scheduler import LambdaLR
 import torch.nn as nn
@@ -12,13 +13,13 @@ from models import configs
 import models
 from fed_aggregator import FedModel, FedOptimizer
 from utils import make_logdir, union, Timer, TableLogger, parse_args
-from data_utils import FedSampler, FedCIFAR10, FedImageNet
-from data_utils import cifar_train_transforms, cifar_test_transforms
+from data_utils import FedSampler, FedCIFAR10, FedImageNet, FedCIFAR100, FedEMNIST
+from data_utils import cifar10_train_transforms, cifar10_test_transforms
+from data_utils import cifar100_train_transforms, cifar100_test_transforms
 from data_utils import imagenet_train_transforms, imagenet_val_transforms
+from data_utils import femnist_train_transforms, femnist_test_transforms
 
 import torch.multiprocessing as multiprocessing
-
-from dp_functions import DPGaussianHook
 
 #from line_profiler import LineProfiler
 #import atexit
@@ -89,12 +90,40 @@ def compute_loss_val(model, batch, args):
 def train(model, opt, lr_scheduler, train_loader, test_loader,
           args, writer, loggers=(), timer=None, mal_loader=None):
     timer = timer or Timer()
+    if args.mode == "fedavg":
+        # hack to get the starting LR right for fedavg
+        lr_scheduler.step()
+        opt.step()
+
+    total_download = 0
+    total_upload = 0
+    if args.eval_before_start:
+        # val
+        test_loss, test_acc, _, _ = run_batches(
+                model, None, None, test_loader, False, args
+            )
+        test_time = timer()
+        print("Test acc at epoch 0: {:0.4f}".format(test_acc))
     for epoch in range(args.num_epochs):
+<<<<<<< HEAD
         epoch_stats = {}
-        train_loss, train_acc = run_batches(model, opt, lr_scheduler,
-                                            train_loader, True, True, args)
-        test_loss, test_acc = run_batches(model, None, None,
-                                          test_loader, False, False, args)
+
+        # train
+        train_loss, train_acc, download, upload = run_batches(
+                model, opt, lr_scheduler, train_loader, True, args
+            )
+        train_time = timer()
+        download_mb = download.sum().item() / (1024*1024)
+        upload_mb = upload.sum().item() / (1024*1024)
+        total_download += download_mb
+        total_upload += upload_mb
+
+        # val
+        test_loss, test_acc, _, _ = run_batches(
+                model, None, None, test_loader, False, args
+            )
+        test_time = timer()
+
         if args.is_malicious:
             mal_loss, mal_acc = run_batches(model, opt, lr_scheduler,
                 mal_loader, False, False, args)
@@ -103,14 +132,16 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
             if args.use_tensorboard:
                 writer.add_scalar('Loss/mal',   mal_loss,         epoch)
                 writer.add_scalar('Acc/mal',    mal_acc,          epoch)
-        train_time = timer()
-        test_time = timer()
+
+        # report epoch results
         epoch_stats.update({
             'train_time': train_time,
             'train_loss': train_loss,
             'train_acc':  train_acc,
             'test_loss':  test_loss,
             'test_acc':   test_acc,
+            'down (MiB)': round(download_mb),
+            'up (MiB)': round(upload_mb),
             'total_time': timer.total_time,
         })
         lr = lr_scheduler.get_lr()[0]
@@ -128,6 +159,15 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
             writer.add_scalar('Time/test',  test_time,        epoch)
             writer.add_scalar('Time/total', timer.total_time, epoch)
             writer.add_scalar('Lr',         lr,               epoch)
+
+    print("Total Download (MiB): {:0.2f}".format(total_download))
+    print("Total Upload (MiB): {:0.2f}".format(total_upload))
+    print("Avg Download Per Client: {:0.2f}".format(
+        total_download / args.num_clients
+    ))
+    print("Avg Upload Per Client: {:0.2f}".format(
+        total_upload / args.num_clients
+    ))
     return summary
 
 #@profile
@@ -136,9 +176,10 @@ def run_batches(model, opt, lr_scheduler, loader, training, step_scheduler, args
     losses = []
     accs = []
 
+    client_download = torch.zeros(args.num_clients)
+    client_upload = torch.zeros(args.num_clients)
     if training:
-        for i, batch in enumerate(loader):
-            loss, acc = model(batch)
+        for batch in loader:
             if args.use_local_sched:
                 for _ in range(args.num_local_iters):
                     lr_scheduler.step()
@@ -149,6 +190,11 @@ def run_batches(model, opt, lr_scheduler, loader, training, step_scheduler, args
             if batch[0].numel() < expected_numel:
                 # skip incomplete batches
                 continue
+
+            loss, acc, download, upload = model(batch)
+
+            client_download += download
+            client_upload += upload
 
             opt.step()
             #model.zero_grad()
@@ -161,20 +207,24 @@ def run_batches(model, opt, lr_scheduler, loader, training, step_scheduler, args
             loss, acc = model(batch)
             losses.extend(loss)
             accs.extend(acc)
+            if args.do_test:
+                break
 
-    return np.mean(losses), np.mean(accs)
+    return np.mean(losses), np.mean(accs), client_download, client_upload
 
 def get_data_loaders(args):
     train_transforms, val_transforms = {
      "ImageNet": (imagenet_train_transforms, imagenet_val_transforms),
-     "CIFAR10": (cifar_train_transforms, cifar_test_transforms)
+     "CIFAR10": (cifar10_train_transforms, cifar10_test_transforms),
+     "CIFAR100": (cifar100_train_transforms, cifar100_test_transforms),
+     "EMNIST": (femnist_train_transforms, femnist_test_transforms),
     }[args.dataset_name]
 
     dataset_class = globals()["Fed" + args.dataset_name]
-    train_dataset = dataset_class(args, args.dataset_dir, train_transforms,
+    train_dataset = dataset_class(args, args.dataset_dir, args.dataset_name, train_transforms,
                                   args.do_iid, args.num_clients,
                                   train=True, download=True)
-    test_dataset = dataset_class(args, args.dataset_dir, val_transforms,
+    test_dataset = dataset_class(args, args.dataset_dir, args.dataset_name, val_transforms,
                                  train=False, download=False)
 
     train_sampler = FedSampler(train_dataset,
@@ -183,14 +233,16 @@ def get_data_loaders(args):
 
     train_loader = DataLoader(train_dataset,
                               batch_sampler=train_sampler,
-                              num_workers=8,
-                              pin_memory=True)
-    test_batch_size = args.local_batch_size * args.num_workers
+                              num_workers=1)#,
+                              #multiprocessing_context="spawn",
+                              #pin_memory=True)
+    test_batch_size = args.valid_batch_size * args.num_workers
     test_loader = DataLoader(test_dataset,
                              batch_size=test_batch_size,
                              shuffle=False,
-                             num_workers=4,
-                             pin_memory=True)
+                             num_workers=1)#,
+                             #multiprocessing_context="spawn",
+                             #pin_memory=True)
 
     mal_loader = None
     if args.is_malicious:
@@ -207,6 +259,20 @@ def get_data_loaders(args):
 
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
+    """
+    import cProfile
+    import sys
+    # if check avoids hackery when not profiling
+    # Optional; hackery *seems* to work fine even when not profiling,
+    # it's just wasteful
+    if sys.modules['__main__'].__file__ == cProfile.__file__:
+        # Imports you again (does *not* use cache or execute as __main__)
+        import cv_train
+        # Replaces current contents with newly imported stuff
+        globals().update(vars(cv_train))
+        # Ensures pickle lookups on __main__ find matching version
+        sys.modules['__main__'] = cv_train
+    """
 
     # fixup
     #args = parse_args(default_lr=0.4)
@@ -221,16 +287,20 @@ if __name__ == "__main__":
     config_class = getattr(configs, args.model + "Config")
     config = config_class()
     config.set_args(args)
+
     print(args)
 
 
     timer = Timer()
     args.lr_epoch = 0.0
 
-    #Setting numpy random seed
+    # reproducibility
     np.random.seed(21)
-    # model class and config
     torch.random.manual_seed(21)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    # model class and config
     if args.do_test:
         model_config = {
             'channels': {'prep': 1, 'layer1': 1,
@@ -269,41 +339,43 @@ if __name__ == "__main__":
     model_cls = getattr(models, args.model)
     model = model_cls(**config.model_config)
 
-    params_bias = [p[1] for p in model.named_parameters()
-                        if 'bias' in p[0]]
-    params_scale = [p[1] for p in model.named_parameters()
-                         if 'scale' in p[0]]
-    params_other = [p[1] for p in model.named_parameters()
-                         if not ('bias' in p[0] or 'scale' in p[0])]
-    opt = optim.SGD([
-            {"params": params_bias, "lr": 0.1},
-            {"params": params_scale, "lr": 0.1},
-            {"params": params_other, "lr": 1}
-        ], lr=1)
+    if args.model[:5] == "Fixup":
+        print("using fixup learning rates")
+        params_bias = [p[1] for p in model.named_parameters()
+                            if 'bias' in p[0]]
+        params_scale = [p[1] for p in model.named_parameters()
+                             if 'scale' in p[0]]
+        params_other = [p[1] for p in model.named_parameters()
+                             if not ('bias' in p[0] or 'scale' in p[0])]
+        param_groups = [{"params": params_bias, "lr": 0.1},
+                        {"params": params_scale, "lr": 0.1},
+                        {"params": params_other, "lr": 1}]
+    elif args.do_finetune:
+        model.load_state_dict(torch.load(args.finetune_path + args.model + '.pt'))
+        for param in model.parameters():
+            param.requires_grad = False
+        param_groups = model.finetune_parameters()
+        """
+        param_groups = model.parameters()
+        """
+    else:
+        param_groups = model.parameters()
+    opt = optim.SGD(param_groups, lr=1)
 
 
-    hook = None
-    if args.do_dp:
-        hook_cls = DPGaussianHook(args)
-        hook = hook_cls.client_hook
-
-    # Fed-ify everything
-    model = FedModel(model, compute_loss_train, args,
-                    compute_loss_val=compute_loss_val,
-                    compute_loss_mal=compute_loss_mal,
-                    hook=hook)
+    model = FedModel(model, compute_loss_train, args, compute_loss_val)
     opt = FedOptimizer(opt, args)
 
-    # set up learning rate stuff
-    #lr_schedule = PiecewiseLinear([0, args.pivot_epoch, args.num_epochs],
-    #                              [0, args.lr_scale, 0])
     lr_schedule = config.lr_schedule
 
     # grad_reduction only controls how gradients from different
     # workers are combined
     # so the lr is multiplied by num_workers for both mean and median
-    batch_size = args.local_batch_size * args.num_workers
-    steps_per_epoch = np.ceil(len(train_loader) / batch_size)
+    if args.mode == "fedavg":
+        steps_per_epoch = train_loader.dataset.num_clients // args.num_workers
+    else:
+        batch_size = args.local_batch_size * args.num_workers
+        steps_per_epoch = np.ceil(len(train_loader) / batch_size)
     lambda_step = lambda step: lr_schedule(step / steps_per_epoch)
     lr_scheduler = LambdaLR(opt, lr_lambda=lambda_step)
 
@@ -318,3 +390,8 @@ if __name__ == "__main__":
     # and do the training
     train(model, opt, lr_scheduler, train_loader, test_loader, args,
           writer, loggers=(TableLogger(),), timer=timer, mal_loader=mal_loader)
+          writer, loggers=(TableLogger(),), timer=timer)
+    if args.do_checkpoint:
+        if not os.path.exists(args.checkpoint_path):
+            os.makedirs(args.checkpoint_path)
+        torch.save(model.state_dict(), args.checkpoint_path + args.model + '.pt')

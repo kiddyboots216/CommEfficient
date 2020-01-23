@@ -9,6 +9,8 @@ from collections import namedtuple
 import torchvision
 
 import models
+from models.configs import fed_datasets
+
 
 class Logger:
     def debug(self, msg, args=None):
@@ -21,6 +23,11 @@ class Logger:
         print(msg.format(args))
     def critical(self, msg, args=None):
         print(msg.format(args))
+
+def is_port_in_use(port):
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(('localhost', port)) == 0
 
 def make_logdir(args: dict):
     rows = args.num_rows
@@ -79,8 +86,8 @@ def parse_args(default_lr=None):
 
     # meta-args
     parser.add_argument("--test", action="store_true", dest="do_test")
-    modes = ["sketch", "true_topk", "local_topk", "localSGD", "uncompressed"]
-    parser.add_argument("--mode", choices=modes, default="uncompressed")
+    modes = ["sketch", "true_topk", "local_topk", "fedavg", "uncompressed"]
+    parser.add_argument("--mode", choices=modes, default="sketch")
     parser.add_argument("--tensorboard", dest="use_tensorboard",
                         action="store_true")
 
@@ -91,14 +98,22 @@ def parse_args(default_lr=None):
     parser.add_argument("--model", default="ResNet9",
                         help="Name of the model.",
                         choices=model_names)
+    parser.add_argument("--finetune", action="store_true", dest="do_finetune")
+    parser.add_argument("--checkpoint", action="store_true", dest="do_checkpoint")
+    parser.add_argument("--checkpoint_path", type=str,
+                        default='./checkpoint',
+                        help="Path or url to cache the model")
+    parser.add_argument("--finetune_path", type=str,
+                        default='./finetune',
+                        help="Path or url of the model cache")
+    parser.add_argument("--finetuned_from", type=str,
+                        help="Name of the dataset you pretrained on.",
+                        choices=fed_datasets.keys())
     parser.add_argument("--num_results_train", type=int, default=2)
     parser.add_argument("--num_results_val", type=int, default=2)
-    parser.add_argument("--supervised", action="store_true",
-                        dest="is_supervised")
-    fed_datasets = ["CIFAR10", "ImageNet"]
     parser.add_argument("--dataset_name", type=str, default="",
                         help="Name of the dataset.",
-                        choices=fed_datasets)
+                        choices=fed_datasets.keys())
     parser.add_argument("--dataset_dir", type=str,
                         default='./dataset',
                         help="Path or url of the dataset cache")
@@ -119,6 +134,9 @@ def parse_args(default_lr=None):
     parser.add_argument("--weight_decay", type=float, default=5e-4)
     parser.add_argument("--num_epochs", type=int, default=24,
                         help="Number of training epochs")
+    parser.add_argument("--num_fedavg_epochs", type=int, default=1)
+    parser.add_argument("--fedavg_batch_size", type=int, default=-1)
+    parser.add_argument("--fedavg_lr_decay", type=float, default=1)
     momentum_types = ["none", "local", "virtual"]
     parser.add_argument("--momentum_type", choices=momentum_types,
                         default="none")
@@ -136,6 +154,7 @@ def parse_args(default_lr=None):
     parser.add_argument("--mixup", action="store_true", dest="do_mixup")
 
     # parallelization args
+    parser.add_argument("--port", type=int, default=5315)
     parser.add_argument("--num_clients", type=int)
     parser.add_argument("--num_workers", type=int, default=1)
     default_device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -198,15 +217,24 @@ def parse_args(default_lr=None):
                         help=("Boosting malicious gradient"))
     # Differential Privacy args
     parser.add_argument("--dp", action="store_true", dest="do_dp", help=("Whether to do differentially private training)"))
-    parser.add_argument("--ledger", action="store_true", help=("Whether to use a ledger for DP"))
+    dp_modes = ["worker", "server"]
+    parser.add_argument("--dp_mode", choices=dp_modes, default="worker")
     parser.add_argument("--l2_norm_clip", type=float, default=1.0, help=("What value to clip the l2 norm to"))
-    parser.add_argument("--noise_multiplier", type=float, default=0.0, help=("Sigma squared, i.e. standard dev of noise"))
-    parser.add_argument("--num_microbatches", type=int, default=1, help=("Number of microbatches to divide each megabatch into"))
-    parser.add_argument("--epsilon", type=float, default=1.0, help=("Epsilon in eps, delta DP"))
-    parser.add_argument("--delta", type=float, default=1e-5, help=("Delta in eps, delta DP"))
-
+    parser.add_argument("--noise_multiplier", type=float, default=0.0, help=("Sigma, i.e. standard dev of noise"))
 
     args = parser.parse_args()
+    port_in_use = True
+    while port_in_use:
+        if is_port_in_use(args.port):
+            print(f"{args.port} port in use, trying next...")
+            args.port += np.random.randint(0,1000)
+        else:
+            port_in_use = False
+
+    if args.mode == "fedavg":
+        assert args.local_batch_size == -1
+        assert args.local_momentum == 0
+        assert args.error_type == "none"
 
     return args
 
@@ -237,9 +265,10 @@ def get_grad_vec(model):
     with torch.no_grad():
         # flatten
         for p in model.parameters():
-            if p.grad is None:
-                grad_vec.append(torch.zeros_like(p.data.view(-1)))
-            else:
+            if p.requires_grad:
+            #if p.grad is None:
+            #    grad_vec.append(torch.zeros_like(p.data.view(-1)))
+            #else:
                 grad_vec.append(p.grad.data.view(-1).float())
         # concat into a single vector
         grad_vec = torch.cat(grad_vec)
@@ -252,18 +281,36 @@ def zero_grad(model):
             p.grad.zero_()
 
 def get_param_vec(model):
-    return torch.cat([p.data.view(-1) for p in model.parameters()])
+    param_vec = []
+    for p in model.parameters():
+        if p.requires_grad:
+            param_vec.append(p.data.view(-1).float())
+    return torch.cat(param_vec)
+
+    #return torch.cat([p.data.view(-1) for p in model.parameters()])
 
 def set_param_vec(model, param_vec):
     start = 0
     for p in model.parameters():
-        end = start + p.numel()
-        p.data.zero_()
-        p.data.add_(param_vec[start:end].view(p.size()))
-        start = end
+        if p.requires_grad:
+            end = start + p.numel()
+            p.data.zero_()
+            p.data.add_(param_vec[start:end].view(p.size()))
+            start = end
 
 def sm2np(sm, shape, dtype=ctypes.c_float):
     # convert from shared memory object/buffer to numpy array
     nparray = np.ndarray(shape, dtype=dtype, buffer=sm)
     assert(nparray.base is sm)
     return nparray
+
+def clip_grad(l2_norm_clip, record):
+    try:
+        l2_norm = torch.norm(record)
+    except:
+        l2_norm = record.l2estimate()
+    if l2_norm < l2_norm_clip:
+        return record
+    else:
+        return record / torch.abs(l2_norm / l2_norm_clip)
+
