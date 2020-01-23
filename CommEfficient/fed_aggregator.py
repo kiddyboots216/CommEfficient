@@ -287,6 +287,7 @@ class FedModel:
         per_proc = len(batch_shards) // len(self.update_forward_grad_ps)
         proc_batches = [batch_shards[i:i + per_proc]
                         for i in range(0, len(batch_shards), per_proc)]
+
         for i, batches in enumerate(proc_batches):
             self.batches_queues[i % len(self.batches_queues)].put(batches)
 

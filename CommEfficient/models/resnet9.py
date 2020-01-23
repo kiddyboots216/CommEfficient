@@ -87,7 +87,7 @@ class BasicNet(nn.Module):
                              pool=pool, **kw)
         self.res3 = Residual(iid, channels['layer3'], **kw)
 
-        self.pool = nn.MaxPool2d(2)
+        self.pool = nn.MaxPool2d(4)
         self.linear = nn.Linear(channels['layer3'], num_classes, bias=False)
         self.classifier = Mul(weight)
 
@@ -110,6 +110,7 @@ class BasicNet(nn.Module):
             for p in m.parameters():
                 p.requires_grad = True
         return itertools.chain.from_iterable([m.parameters() for m in modules])
+        """
         prep = self.prep.prep_finetune(iid, 3, channels['prep'], **kw)
 
         layer1 = self.layer1.prep_finetune(iid, channels['prep'], channels['layer1'],
@@ -125,6 +126,7 @@ class BasicNet(nn.Module):
         layers = [prep, layer1, res1, layer2, layer3, res3]
         parameters = [itertools.chain.from_iterable(layers), itertools.chain.from_iterable([m.parameters() for m in modules])]
         return itertools.chain.from_iterable(parameters)
+        """
 
 class ResNet9(nn.Module):
     def __init__(self, iid=True, channels=None, weight=0.125, pool=nn.MaxPool2d(2),
