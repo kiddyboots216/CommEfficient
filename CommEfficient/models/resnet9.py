@@ -71,10 +71,10 @@ class Residual(nn.Module):
         return itertools.chain.from_iterable([l.prep_finetune(iid, c, c, **kw) for l in layers])
 
 class BasicNet(nn.Module):
-    def __init__(self, iid, channels, weight,  pool, num_classes, new_num_classes=None, **kw):
+    def __init__(self, iid, channels, weight,  pool, num_classes, initial_channels=3, new_num_classes=None, **kw):
         super().__init__()
         self.new_num_classes = new_num_classes
-        self.prep = ConvBN(iid, 3, channels['prep'], **kw)
+        self.prep = ConvBN(iid, initial_channels, channels['prep'], **kw)
 
         self.layer1 = ConvBN(iid, channels['prep'], channels['layer1'],
                              pool=pool, **kw)
@@ -87,7 +87,7 @@ class BasicNet(nn.Module):
                              pool=pool, **kw)
         self.res3 = Residual(iid, channels['layer3'], **kw)
 
-        self.pool = nn.MaxPool2d(4)
+        self.pool = nn.MaxPool2d(2)
         self.linear = nn.Linear(channels['layer3'], num_classes, bias=False)
         self.classifier = Mul(weight)
 
