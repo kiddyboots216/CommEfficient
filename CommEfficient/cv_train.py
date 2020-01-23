@@ -78,10 +78,6 @@ def compute_loss_val(model, batch, args):
 def train(model, opt, lr_scheduler, train_loader, test_loader,
           args, writer, loggers=(), timer=None):
     timer = timer or Timer()
-    if args.mode == "fedavg":
-        # hack to get the starting LR right for fedavg
-        lr_scheduler.step()
-        opt.step()
 
     total_download = 0
     total_upload = 0
@@ -154,6 +150,10 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
                     lr_scheduler.step()
             else:
                 lr_scheduler.step()
+
+            if lr_scheduler.get_lr() == 0:
+                # hack to get the starting LR right for fedavg
+                opt.step()
 
             expected_numel = args.num_workers * args.local_batch_size
             if batch[0].numel() < expected_numel:
