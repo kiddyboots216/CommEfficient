@@ -31,8 +31,7 @@ def read_data(data_dir):
             cdata = json.loads(inf.read())
         data.update(cdata["user_data"])
 
-    clients = list(sorted(data.keys()))
-    return clients, data
+    return data
 
 class FedEMNIST(FedDataset):
     def __init__(self, *args, **kwargs):
@@ -76,13 +75,13 @@ class FedEMNIST(FedDataset):
         # data were in torch files
         # rectify this, saving each client in a separate .pt file
         train_data_dir = os.path.join(self.dataset_dir, "train")
-        clients, train_data = read_data(train_data_dir)
-        images_per_client = [len(train_data[client_id]["y"])
-                             for client_id in clients]
+        train_data = read_data(train_data_dir)
+        images_per_client = []
         for client_id, client_data in enumerate(train_data.values()):
             flat_images = client_data["x"]
             images = torch.tensor(flat_images).view(-1, 28, 28)
             targets = torch.tensor(client_data["y"])
+            images_per_client.append(targets.numel())
 
             fn = self.client_fn(client_id)
             if os.path.exists(fn):
@@ -92,15 +91,16 @@ class FedEMNIST(FedDataset):
         # for the test data, put it all in one file (we don't
         # care which client the test data nominally belongs to)
         test_data_dir = os.path.join(self.dataset_dir, "test")
-        clients, test_data = read_data(test_data_dir)
-        num_val_images = sum([len(test_data[client_id]["y"])
-                              for client_id in clients])
+        test_data = read_data(test_data_dir)
+        num_val_images = 0
         all_images = []
         all_targets = []
         for data_shard in enumerate(test_data.values()):
             flat_images = client_data["x"]
             images = torch.tensor(flat_images).view(-1, 28, 28)
             targets = torch.tensor(client_data["y"])
+            num_val_images += targets.numel()
+
             all_images.append(images)
             all_targets.append(targets)
         all_images = torch.cat(all_images, dim=0)
