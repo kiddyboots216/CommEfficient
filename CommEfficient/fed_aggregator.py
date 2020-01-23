@@ -20,6 +20,10 @@ from utils import get_param_vec, set_param_vec, get_grad, _topk
 # gets multipled by 1/participation. See use below
 DEQUE_MAXLEN_MULT = 10
 
+def shms():
+    pid = os.getpid()
+    return [s for s in os.listdir("/dev/shm") if str(pid) in s]
+
 #from mpi4py import MPI
 #comm = MPI.COMM_WORLD
 #rank = comm.Get_rank()
@@ -254,9 +258,17 @@ class FedModel:
             shape = (self.args.grad_size,)
 
         # reduce the gradients
+        #torch.cuda.synchronize()
+        #print("before all", shms())
         transmit = torch.zeros(shape).to(self.args.device).float()
+        #torch.cuda.synchronize()
+        #print("before barrier", shms())
         torch.distributed.barrier()
+        #torch.cuda.synchronize()
+        #print("before reduce", shms())
         torch.distributed.reduce(transmit, 0)
+        #torch.cuda.synchronize()
+        #print("after reduce", shms())
 
         g_minibatch_gradient[:] = transmit / len(worker_batches)
 
