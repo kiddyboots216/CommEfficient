@@ -204,6 +204,8 @@ def run_batches(model, opt, scheduler, loader, args,
             summary = union({'batch_idx': batch_idx+1, }, batch_stats)
             logger.append(summary)
             """
+            if batch_idx > 5 and args.do_test:
+                break
         return np.mean(nlls), np.mean(accs), np.exp(np.mean(ppls))
 
 def train():
