@@ -2,18 +2,17 @@ from collections import namedtuple
 
 import numpy as np
 
-#from utils import num_classes_of_dataset
+# need one_cycle for pickle
+__all__ = ["num_classes_of_dataset", "FixupResNet9Config", "ResNet9Config", "one_cycle"]
 fed_datasets = {
         "CIFAR10": 10,
         "CIFAR100": 100,
-        "FEMNIST": 62,
+        "EMNIST": 62,
         "ImageNet": 1000,
         }
 def num_classes_of_dataset(dataset_name):
     return fed_datasets[dataset_name]
 
-# need one_cycle for pickle
-__all__ = ["FixupResNet9Config", "ResNet9Config", "one_cycle"]
 
 class PiecewiseLinear(namedtuple('PiecewiseLinear', ('knots', 'vals'))):
     def __call__(self, t):
@@ -33,7 +32,7 @@ class ResNet9Config(ModelConfig):
                 'channels': {'prep': 64, 'layer1': 128,
                              'layer2': 256, 'layer3': 512},
         }
-        self.lr_scale = 0.4
+        self.lr_scale = 0.2
         self.batch_size = 512
         self.weight_decay = 5e-4
         self.set_lr_schedule()

@@ -9,13 +9,8 @@ from collections import namedtuple
 import torchvision
 
 import models
+from models.configs import fed_datasets
 
-fed_datasets = {
-        "CIFAR10": 10,
-        "CIFAR100": 100,
-        "FEMNIST": 62,
-        "ImageNet": 1000,
-        }
 
 class Logger:
     def debug(self, msg, args=None):
@@ -310,5 +305,3 @@ def clip_grad(l2_norm_clip, record):
     else:
         return record / torch.abs(l2_norm / l2_norm_clip)
 
-def num_classes_of_dataset(args):
-    return fed_datasets[args.dataset_name]

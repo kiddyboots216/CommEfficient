@@ -13,10 +13,11 @@ from models import configs
 import models
 from fed_aggregator import FedModel, FedOptimizer
 from utils import make_logdir, union, Timer, TableLogger, parse_args
-from data_utils import FedSampler, FedCIFAR10, FedImageNet, FedCIFAR100
+from data_utils import FedSampler, FedCIFAR10, FedImageNet, FedCIFAR100, FedEMNIST
 from data_utils import cifar10_train_transforms, cifar10_test_transforms
 from data_utils import cifar100_train_transforms, cifar100_test_transforms
 from data_utils import imagenet_train_transforms, imagenet_val_transforms
+from data_utils import femnist_train_transforms, femnist_test_transforms
 
 import torch.multiprocessing as multiprocessing
 
@@ -195,6 +196,7 @@ def get_data_loaders(args):
      "ImageNet": (imagenet_train_transforms, imagenet_val_transforms),
      "CIFAR10": (cifar10_train_transforms, cifar10_test_transforms),
      "CIFAR100": (cifar100_train_transforms, cifar100_test_transforms),
+     "EMNIST": (femnist_train_transforms, femnist_test_transforms),
     }[args.dataset_name]
 
     dataset_class = globals()["Fed" + args.dataset_name]

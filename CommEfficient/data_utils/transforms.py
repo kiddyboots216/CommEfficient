@@ -41,12 +41,19 @@ cifar100_test_transforms = transforms.Compose([
         transforms.Normalize(cifar100_mean, cifar100_std)	
     ])
 
+femnist_mean = (0.9637)
+femnist_std = (0.1597)
+
 femnist_train_transforms = transforms.Compose([
+        transforms.RandomCrop(28, padding=4, padding_mode="reflect"),	
+        transforms.RandomHorizontalFlip(),	
         transforms.ToTensor(),
+        transforms.Normalize(femnist_mean, femnist_std),
     ])
 
 femnist_test_transforms = transforms.Compose([
         transforms.ToTensor(),
+        transforms.Normalize(femnist_mean, femnist_std),
     ])
 
 _imagenet_normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
