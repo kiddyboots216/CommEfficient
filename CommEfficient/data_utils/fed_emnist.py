@@ -1,4 +1,4 @@
-import json
+import orjson as json
 import os
 from collections import defaultdict
 
@@ -21,7 +21,7 @@ def read_dir(data_dir):
     for f in files:
         file_path = os.path.join(data_dir,f)
         with open(file_path, 'r') as inf:
-            cdata = json.load(inf)
+            cdata = json.loads(inf.read())
         clients.extend(cdata['users'])
         if 'hierarchies' in cdata:
             groups.extend(cdata['hierarchies'])
