@@ -208,7 +208,9 @@ class FedModel:
         # bytes needed to download, but as long as maxlen is large
         # enough, this error will be negligible
         maxlen = self.ps_weights_history.maxlen
-        stale = self.client_num_stale_iters[unique_clients].clamp(0, maxlen)
+        stale = self.client_num_stale_iters[unique_clients].clamp(
+                0, maxlen - 1
+            )
         client_prev_weights = [self.ps_weights_history[-(s + 1)]
                                for s in stale]
         # the ceil(...).sum() call just counts how many entries
