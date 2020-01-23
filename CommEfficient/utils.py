@@ -163,6 +163,10 @@ def parse_args(default_lr=None):
     parser.add_argument("--local_sched", action="store_true", dest="use_local_sched")
     parser.add_argument("--share_ps_gpu", action="store_true")
     parser.add_argument("--iid", action="store_true", dest="do_iid")
+    parser.add_argument("--train_dataloader_workers",
+                        type=int, default=0)
+    parser.add_argument("--val_dataloader_workers",
+                        type=int, default=0)
 
     # GPT2 args
     parser.add_argument("--num_dialogs", type=int, default=1)

@@ -200,14 +200,14 @@ def get_data_loaders(args):
 
     train_loader = DataLoader(train_dataset,
                               batch_sampler=train_sampler,
-                              num_workers=2)#,
+                              num_workers=args.train_dataloader_workers)
                               #multiprocessing_context="spawn",
                               #pin_memory=True)
     test_batch_size = args.valid_batch_size * args.num_workers
     test_loader = DataLoader(test_dataset,
                              batch_size=test_batch_size,
                              shuffle=False,
-                             num_workers=0)#,
+                             num_workers=args.val_dataloader_workers)
                              #multiprocessing_context="spawn",
                              #pin_memory=True)
 
