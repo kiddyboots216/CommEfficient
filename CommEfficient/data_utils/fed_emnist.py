@@ -65,12 +65,6 @@ class FedEMNIST(FedDataset):
         target = self.test_targets[idx]
         return image, target
 
-    def __len__(self):
-        if self.type == "train":
-            return sum(self.images_per_client)
-        elif self.type == "val":
-            return sum(self.val_images_per_client)
-
     def prepare_datasets(self, download=False):
         if os.path.exists(self.stats_fn()):
             raise RuntimeError("won't overwrite existing stats file")
@@ -119,13 +113,3 @@ class FedEMNIST(FedDataset):
                  "num_val_images": num_val_images}
         with open(self.stats_fn(), "w") as f:
             f.write(json.dumps(stats))
-
-    @property
-    def data_per_client(self):
-        return self.images_per_client
-
-    @property
-    def num_clients(self):
-        return len(self.clients)
-
-
