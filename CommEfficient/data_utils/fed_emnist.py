@@ -57,11 +57,9 @@ class FedEMNIST(FedDataset):
         if self.type == "train":
             train_data_dir = self.dataset_dir + 'train'
             self.clients, _, self.train_data = read_data(train_data_dir)
-            self.images_per_client = np.array([len(self.train_data[client_id]['y']) for client_id in self.clients])
         else:
             test_data_dir = self.dataset_dir + 'test'
             self.clients, _, self.test_data = read_data(test_data_dir)
-            self.val_images_per_client = np.array([len(self.test_data[client_id]['y']) for client_id in self.clients])
 
     def _get_train_or_val_item(self, client_id, idx_within_client, train):
         if train:
@@ -94,19 +92,29 @@ class FedEMNIST(FedDataset):
     def _get_val_item_true(self, client_id, idx_within_client):
         return self._get_train_or_val_item(client_id, idx_within_client, False)
 
-    def _load_meta(self, train):
-        return
-
     def __len__(self):
-        # hardcoded because I don't want to compute the sum every time
         if self.type == "train":
-            return 721410
+            return sum(self.images_per_client)
         elif self.type == "val":
-            return 81895
+            return sum(self.val_images_per_client)
 
     def prepare_datasets(self, download=False):
-        return 
-        raise RuntimeError("EMNIST should already be here!")
+        train_data_dir = self.dataset_dir + 'train'
+        clients, _, train_data = read_data(train_data_dir)
+        images_per_client = [len(train_data[client_id]['y']) for client_id in clients]
+        test_data_dir = self.dataset_dir + 'test'
+        clients, _, test_data = read_data(test_data_dir)
+        val_images_per_client = [len(test_data[client_id]['y']) for client_id in clients]
+        # save global stats to disk
+        fn = self.stats_fn()
+        if os.path.exists(fn):
+            raise RuntimeError("won't overwrite existing stats file")
+        stats = {"images_per_client": images_per_client,
+                "val_images_per_client": val_images_per_client,
+                 "num_val_images": sum(val_images_per_client)}
+        with open(fn, "w") as f:
+            json.dump(stats, f)
+        #raise RuntimeError("EMNIST should already be here!")
 
     @property
     def data_per_client(self):
