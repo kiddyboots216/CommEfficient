@@ -132,4 +132,9 @@ class FedEMNIST(FedDataset):
     def num_clients(self):
         return len(self.clients)
 
-
+    def _load_meta(self, train):
+        with open(self.stats_fn(), "r") as f:
+            stats = json.load(f)
+            self.images_per_client = np.array(stats["images_per_client"])
+            self.val_images_per_client = np.array(stats["val_images_per_client"])
+            self.num_val_images = stats["num_val_images"]
