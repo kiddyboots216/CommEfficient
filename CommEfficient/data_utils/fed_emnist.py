@@ -115,3 +115,10 @@ class FedEMNIST(FedDataset):
                  "num_val_images": num_val_images}
         with open(self.stats_fn(), "w") as f:
             f.write(json.dumps(stats))
+
+    def test_fn(self):
+        return os.path.join(self.dataset_dir, "test", "test.pt")
+
+    def client_fn(self, client_id):
+        fn = "client{}.pt".format(client_id)
+        return os.path.join(self.dataset_dir, "test", fn)
