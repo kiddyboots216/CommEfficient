@@ -327,7 +327,6 @@ if __name__ == "__main__":
     model = FedModel(model, compute_loss_train, args, compute_loss_val)
     opt = FedOptimizer(opt, args)
 
-<<<<<<< HEAD
     # set up learning rate stuff
     # original cifar10_fast repo uses [0, 5, 24] and [0, 0.4, 0]
     # so scale that horizontall with num_epochs and vertically
