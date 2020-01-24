@@ -154,7 +154,7 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
     client_download = torch.zeros(args.num_clients)
     client_upload = torch.zeros(args.num_clients)
     if training:
-        for batch in loader:
+        for i, batch in enumerate(loader):
             if args.use_local_sched:
                 for _ in range(args.num_local_iters):
                     lr_scheduler.step()
@@ -167,7 +167,7 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
 
             expected_numel = args.num_workers * args.local_batch_size
             if batch[0].numel() < expected_numel:
-                # skip incomplete batches
+            #    # skip incomplete batches
                 continue
 
             loss, acc, download, upload = model(batch)
@@ -222,6 +222,7 @@ def get_data_loaders(args):
                              num_workers=args.val_dataloader_workers)
                              #multiprocessing_context="spawn",
                              #pin_memory=True)
+    print(len(train_loader), len(test_loader))
 
     return train_loader, test_loader
 
@@ -289,6 +290,8 @@ if __name__ == "__main__":
                          "new_num_classes": num_new_classes})
     model_config.update({"bn_bias_freeze": args.do_finetune,
                          "bn_weight_freeze": args.do_finetune})
+    if args.dataset_name == "EMNIST":
+        model_config["initial_channels"] = 1
 
     # comment out for Fixup
     #model_config["iid"] = args.do_iid

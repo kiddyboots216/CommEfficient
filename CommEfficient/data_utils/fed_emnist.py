@@ -99,9 +99,10 @@ class FedEMNIST(FedDataset):
             images_per_client.append(targets.numel())
 
             fn = self.client_fn(client_id)
-            if os.path.exists(fn):
-                raise RuntimeError("won't overwrite existing client")
-            torch.save({"x": images, "y": targets}, fn)
+            if not os.path.exists(fn):
+                torch.save({"x": images, "y": targets}, fn)
+            #else:
+                #raise RuntimeError("won't overwrite existing client")
 
         # for the test data, put it all in one file (we don't
         # care which client the test data nominally belongs to)
@@ -110,7 +111,7 @@ class FedEMNIST(FedDataset):
         num_val_images = 0
         all_images = []
         all_targets = []
-        for data_shard in enumerate(test_data.values()):
+        for client_id, client_data in enumerate(test_data.values()):
             flat_images = client_data["x"]
             images = torch.tensor(flat_images).view(-1, 28, 28)
             targets = torch.tensor(client_data["y"])

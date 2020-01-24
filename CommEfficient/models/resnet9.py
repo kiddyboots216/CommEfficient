@@ -71,10 +71,10 @@ class Residual(nn.Module):
         return itertools.chain.from_iterable([l.prep_finetune(iid, c, c, **kw) for l in layers])
 
 class BasicNet(nn.Module):
-    def __init__(self, iid, channels, weight,  pool, num_classes, new_num_classes=None, **kw):
+    def __init__(self, iid, channels, weight,  pool, num_classes, initial_channels=3, new_num_classes=None, **kw):
         super().__init__()
         self.new_num_classes = new_num_classes
-        self.prep = ConvBN(iid, 3, channels['prep'], **kw)
+        self.prep = ConvBN(iid, initial_channels, channels['prep'], **kw)
 
         self.layer1 = ConvBN(iid, channels['prep'], channels['layer1'],
                              pool=pool, **kw)
@@ -110,6 +110,7 @@ class BasicNet(nn.Module):
             for p in m.parameters():
                 p.requires_grad = True
         return itertools.chain.from_iterable([m.parameters() for m in modules])
+        """
         prep = self.prep.prep_finetune(iid, 3, channels['prep'], **kw)
 
         layer1 = self.layer1.prep_finetune(iid, channels['prep'], channels['layer1'],
@@ -125,6 +126,7 @@ class BasicNet(nn.Module):
         layers = [prep, layer1, res1, layer2, layer3, res3]
         parameters = [itertools.chain.from_iterable(layers), itertools.chain.from_iterable([m.parameters() for m in modules])]
         return itertools.chain.from_iterable(parameters)
+        """
 
 class ResNet9(nn.Module):
     def __init__(self, iid=True, channels=None, weight=0.125, pool=nn.MaxPool2d(2),
