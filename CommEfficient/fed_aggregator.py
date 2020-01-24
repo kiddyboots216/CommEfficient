@@ -82,7 +82,7 @@ class FedModel:
                 param_vec.append(p.data.view(-1))
         param_vec = torch.cat(param_vec)
         args.grad_size = grad_size
-        print("grad_size", grad_size)
+        print("grad_size", args.grad_size)
         self.args = args
 
         # ps_weights needs to be in shared memory so the workers can

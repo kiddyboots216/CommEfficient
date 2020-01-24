@@ -101,7 +101,6 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
         test_time = timer()
         print("Test acc at epoch 0: {:0.4f}".format(test_acc))
     for epoch in range(args.num_epochs):
-<<<<<<< HEAD
         epoch_stats = {}
 
         # train
@@ -121,8 +120,8 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
         test_time = timer()
 
         if args.is_malicious:
-            mal_loss, mal_acc = run_batches(model, opt, lr_scheduler,
-                mal_loader, False, False, args)
+            mal_loss, mal_acc, _, _ = run_batches(model, opt, lr_scheduler,
+                mal_loader, False, args)
             epoch_stats['mal_loss'] = mal_loss
             epoch_stats['mal_acc'] = mal_acc
             if args.use_tensorboard:
@@ -167,7 +166,7 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
     return summary
 
 #@profile
-def run_batches(model, opt, lr_scheduler, loader, training, step_scheduler, args):
+def run_batches(model, opt, lr_scheduler, loader, training, args):
     model.train(training)
     losses = []
     accs = []
@@ -221,10 +220,10 @@ def get_data_loaders(args):
     }[args.dataset_name]
 
     dataset_class = globals()["Fed" + args.dataset_name]
-    train_dataset = dataset_class(args, args.dataset_dir, args.dataset_name, train_transforms,
-                                  args.do_iid, args.num_clients,
+    train_dataset = dataset_class(args, args.dataset_dir, args.dataset_name, transform=train_transforms,
+                                  do_iid=args.do_iid, num_clients=args.num_clients,
                                   train=True, download=True)
-    test_dataset = dataset_class(args, args.dataset_dir, args.dataset_name, val_transforms,
+    test_dataset = dataset_class(args, args.dataset_dir, args.dataset_name, transform=val_transforms,
                                  train=False, download=False)
 
     train_sampler = FedSampler(train_dataset,
@@ -247,8 +246,8 @@ def get_data_loaders(args):
 
     mal_loader = None
     if args.is_malicious:
-        mal_dataset = dataset_class(args, args.dataset_dir, train_transforms,
-                                  args.do_iid, args.num_clients,
+        mal_dataset = dataset_class(args, args.dataset_dir, args.dataset_name, transform=train_transforms,
+                                  do_iid=args.do_iid, num_clients=args.num_clients,
                                   train=True, download=False, malicious=True)
         mal_loader = DataLoader(mal_dataset, 
                                 batch_size=args.mal_targets,
@@ -402,7 +401,6 @@ if __name__ == "__main__":
     # and do the training
     train(model, opt, lr_scheduler, train_loader, test_loader, args,
           writer, loggers=(TableLogger(),), timer=timer, mal_loader=mal_loader)
-          writer, loggers=(TableLogger(),), timer=timer)
     if args.do_checkpoint:
         if not os.path.exists(args.checkpoint_path):
             os.makedirs(args.checkpoint_path)

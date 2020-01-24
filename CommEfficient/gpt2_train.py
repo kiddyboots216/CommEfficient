@@ -6,9 +6,8 @@ from pytorch_transformers import (AdamW, OpenAIGPTDoubleHeadsModel,
                                   GPT2Tokenizer, WEIGHTS_NAME, CONFIG_NAME)
 
 from fed_aggregator import FedOptimizer, FedModel
-from utils import make_logdir
+from utils import make_logdir, PiecewiseLinear
 from utils import TableLogger, Timer, union
-from models.configs import PiecewiseLinear
 import torch
 from torch.optim import SGD
 from torch.utils.tensorboard import SummaryWriter
@@ -95,7 +94,8 @@ def compute_loss_train(model, batch, args):
         mc_labels=mc_labels, lm_labels=lm_labels
     )
     loss = ((lm_loss * args.lm_coef + mc_loss * args.mc_coef)
-            / args.num_train_batch_shards)
+            #/ args.num_train_batch_shards
+            )
     # there are no metrics, but still need to return a tuple
     return loss,
 
@@ -146,27 +146,38 @@ def train_gpt2(model, opt, scheduler, train_loader, val_loader,
         print()
         valLogger.append(summary)
 
-def run_batches(model, opt, scheduler, loader, args,
+def run_batches(model, opt, lr_scheduler, loader, args,
                 timer, training, logger=None, writer=None):
+    model.train(training)
+    client_download = torch.zeros(args.num_clients)
+    client_upload = torch.zeros(args.num_clients)
     num_clients = args.num_clients
     clients = np.arange(num_clients)
 
     if training:
-        model.train(True)
         losses = []
         for batch_idx, batch in enumerate(loader):
-            loss, = model(batch)
-            scheduler.step()
+            lr_scheduler.step()
+            if lr_scheduler.get_lr() == 0:
+                # hack to get the starting LR right for fedavg
+                opt.step()
+            loss, download, upload = model(batch)
+            client_download += download
+            client_upload += upload
             opt.step()
             loss = np.mean(loss)
             losses.append(loss)
             train_time = timer()
+            #download_mb = client_download.sum().item() / (1024*1024)
+            #upload_mb = client_upload.sum().item() / (1024*1024)
             batch_stats = {
                 'train_time': train_time,
                 'train_loss': loss,
                 'total_time': timer.total_time,
+                #'down (MiB)': round(download_mb),
+                #'up (MiB)': round(upload_mb),
             }
-            lr = scheduler.get_lr()[0]
+            lr = lr_scheduler.get_lr()[0]
 
             writer.add_scalar('training/loss', loss, batch_idx)
             writer.add_scalar('Lr', lr, batch_idx)
@@ -180,7 +191,6 @@ def run_batches(model, opt, scheduler, loader, args,
         return np.mean(losses)
 
     else:
-        model.train(False)
         nlls, accs, ppls = [], [], []
         for batch_idx, batch in enumerate(loader):
             nll, acc = model(batch)
@@ -188,18 +198,6 @@ def run_batches(model, opt, scheduler, loader, args,
             acc = np.mean(acc)
             nlls.append(nll)
             accs.append(acc)
-            """
-            val_time = timer()
-            batch_stats = {
-                'test_time': val_time,
-                'test_nll': nll,
-                'test_acc': acc,
-                'test_ppl': ppl,
-                'total_time': timer.total_time,
-            }
-            summary = union({'batch_idx': batch_idx+1, }, batch_stats)
-            logger.append(summary)
-            """
             if batch_idx > 5 and args.do_test:
                 break
         return np.mean(nlls), np.mean(accs), np.exp(np.mean(ppls))
@@ -257,7 +255,6 @@ def train():
 
 def get_data_loaders(args, tokenizer):
     train_dataset = FedPersonaChat(args.dataset_dir,
-                                   "Persona",
                                    tokenizer,
                                    args.num_candidates,
                                    args.max_history,
@@ -266,7 +263,6 @@ def get_data_loaders(args, tokenizer):
                                    num_clients=args.num_clients,
                                    train=True)
     val_dataset = FedPersonaChat(args.dataset_dir,
-                                 "Persona",
                                  tokenizer,
                                  args.num_candidates,
                                  args.max_history,
