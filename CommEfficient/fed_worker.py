@@ -121,7 +121,6 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
 
         if is_train:
             # reduce the locally summed g across devices
-            torch.distributed.barrier()
             torch.distributed.reduce(sum_g, 0)
 
 def process_batch(batch, model, ps_weights, client_weights,

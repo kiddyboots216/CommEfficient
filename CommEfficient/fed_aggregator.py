@@ -261,16 +261,9 @@ class FedModel:
             shape = (self.args.grad_size,)
 
         # reduce the gradients
-        #torch.cuda.synchronize()
-        #print("before all", shms())
         transmit = torch.zeros(shape).to(self.args.device).float()
-        #torch.cuda.synchronize()
-        #print("before barrier", shms())
-        torch.distributed.barrier()
-        #torch.cuda.synchronize()
         #print("before reduce", shms())
         torch.distributed.reduce(transmit, 0)
-        #torch.cuda.synchronize()
         #print("after reduce", shms())
 
         g_minibatch_gradient[:] = transmit / len(worker_batches)
