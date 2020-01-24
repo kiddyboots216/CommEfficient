@@ -45,13 +45,14 @@ femnist_mean = (0.9637,)
 femnist_std = (0.1597,)
 
 femnist_train_transforms = transforms.Compose([
-        transforms.RandomCrop(28, padding=4, padding_mode="reflect"),	
-        transforms.RandomHorizontalFlip(),	
+        transforms.RandomCrop(32, padding=6, padding_mode="constant",
+                              fill=1.0),
         transforms.ToTensor(),
         transforms.Normalize(femnist_mean, femnist_std),
     ])
 
 femnist_test_transforms = transforms.Compose([
+        transforms.Pad(2, fill=1.0),
         transforms.ToTensor(),
         transforms.Normalize(femnist_mean, femnist_std),
     ])
