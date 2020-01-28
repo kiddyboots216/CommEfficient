@@ -119,7 +119,7 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
             'up (MiB)': round(upload_mb),
             'total_time': timer.total_time,
         }
-        lr = lr_scheduler.get_lr()[0]
+        lr = lr_scheduler.get_last_lr()[0]
         summary = union({'epoch': epoch+1,
                          'lr': lr},
                         epoch_stats)
@@ -161,7 +161,7 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
             else:
                 lr_scheduler.step()
 
-            if lr_scheduler.get_lr() == 0:
+            if lr_scheduler.get_last_lr() == 0:
                 # hack to get the starting LR right for fedavg
                 opt.step()
 
