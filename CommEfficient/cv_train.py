@@ -167,7 +167,7 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
 
             expected_numel = args.num_workers * args.local_batch_size
             if batch[0].numel() < expected_numel:
-            #    # skip incomplete batches
+                # skip incomplete batches
                 continue
 
             loss, acc, download, upload = model(batch)
