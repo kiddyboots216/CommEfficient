@@ -166,10 +166,18 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
                 print("HACK STEP")
                 opt.step()
 
-            expected_numel = args.num_workers * args.local_batch_size
-            if batch[0].numel() < expected_numel:
-                # skip incomplete batches
-                continue
+            if args.local_batch_size == -1:
+                expected_num_clients = args.num_workers
+                if torch.unique(batch[0]).numel() < expected_num_clients:
+                    # skip if there weren't enough clients left
+                    print("SKIPPING BATCH: NOT ENOUGH CLIENTS")
+                    continue
+            else:
+                expected_numel = args.num_workers * args.local_batch_size
+                if batch[0].numel() < expected_numel:
+                    # skip incomplete batches
+                    print("SKIPPING BATCH: NOT ENOUGH DATA")
+                    continue
 
             loss, acc, download, upload = model(batch)
 
