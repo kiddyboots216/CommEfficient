@@ -80,7 +80,7 @@ class FedDataset(torch.utils.data.Dataset):
             client_id = np.searchsorted(cumsum, idx, side="right")
             cumsum = np.hstack([[0], cumsum[:-1]])
             idx_within_client = idx - cumsum[client_id]
-            if client_id == self.mal_id:
+            if client_id == self.mal_id and self.is_malicious:
                 image, target = self._get_mal_item(idx_within_client)
 
             else:

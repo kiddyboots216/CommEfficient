@@ -1,3 +1,5 @@
+import warnings
+warnings.filterwarnings('ignore')
 import torch
 import numpy as np
 import os
@@ -94,12 +96,21 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
     total_download = 0
     total_upload = 0
     if args.eval_before_start:
-        # val
-        test_loss, test_acc, _, _ = run_batches(
-                model, None, None, test_loader, False, args
-            )
-        test_time = timer()
-        print("Test acc at epoch 0: {:0.4f}".format(test_acc))
+        if args.is_malicious:
+            # mal
+            mal_loss, mal_acc, _, _ = run_batches(model, None, None,
+                mal_loader, False, args)
+            print("Mal acc at epoch 0: {:0.4f}".format(mal_acc))
+            if args.use_tensorboard:
+                writer.add_scalar('Loss/mal',   mal_loss,         -1)
+                writer.add_scalar('Acc/mal',    mal_acc,          -1)
+        else:
+            # val
+            test_loss, test_acc, _, _ = run_batches(
+                    model, None, None, test_loader, False, args
+                )
+            test_time = timer()
+            print("Test acc at epoch 0: {:0.4f}".format(test_acc))
     for epoch in range(args.num_epochs):
         epoch_stats = {}
 
@@ -251,8 +262,7 @@ def get_data_loaders(args):
                                   train=True, download=False, malicious=True)
         mal_loader = DataLoader(mal_dataset, 
                                 batch_size=args.mal_targets,
-                                num_workers=4, 
-                                pin_memory=True)
+                                num_workers=args.val_dataloader_workers)
 
     return train_loader, test_loader, mal_loader
 

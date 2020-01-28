@@ -290,16 +290,25 @@ class FedModel:
                         for i in range(num_shards)]
 
         per_proc = len(batch_shards) // len(self.update_forward_grad_ps)
+        if per_proc == 0:
+            per_proc = 999
         proc_batches = [batch_shards[i:i + per_proc]
                         for i in range(0, len(batch_shards), per_proc)]
 
+        queue_idxs = []
         for i, batches in enumerate(proc_batches):
-            self.batches_queues[i % len(self.batches_queues)].put(batches)
+            queue_idx = i % len(self.batches_queues)
+            self.batches_queues[queue_idx].put(batches)
+            print("inserted into ", queue_idx)
+            queue_idxs.append(queue_idx)
+        print("queue_idxs", queue_idxs)
 
         # get results from each process (which have already been aggregated
         # over the batches we gave to that process)
         results = []
-        for q in self.results_queues:
+        for queue_idx in queue_idxs:
+            print("dequeue from ", queue_idx)
+            q = self.results_queues[queue_idx]
             results.extend(q.get(timeout=10))
         return split_results(results, self.args.num_results_val)
 
