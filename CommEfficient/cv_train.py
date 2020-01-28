@@ -161,8 +161,9 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
             else:
                 lr_scheduler.step()
 
-            if lr_scheduler.get_last_lr() == 0:
+            if lr_scheduler.get_last_lr()[0] == 0:
                 # hack to get the starting LR right for fedavg
+                print("HACK STEP")
                 opt.step()
 
             expected_numel = args.num_workers * args.local_batch_size
