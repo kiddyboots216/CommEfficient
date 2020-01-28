@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=48 # number of cores per task
 # I think gpu:4 will request 4 of any kind of gpu per node,
 # and gpu:v100_32:8 should request 8 v100_32 per node
-#SBATCH --gres=gpu:8
-##SBATCH --nodelist=steropes # if you need specific nodes
+#SBATCH --gres=gpu:3
+#SBATCH --nodelist=como # if you need specific nodes
 #SBATCH --exclude=atlas,blaze # nodes not yet on SLURM-only
 #SBATCH -t 2-2:00 # time requested (D-HH:MM)
 # slurm will cd to this directory before running the script
@@ -57,16 +57,15 @@ KMP_INIT_AT_FORK=FALSE OMP_NUM_THREADS=8 python gpt2_train.py \
     --lm_coef=2.0 \
     --max_history=2 \
     --num_epochs=1 \
-    --num_dialogs 2 \
     --num_candidates=4 \
     --personality_permutations=2 \
     --num_train_batch_shards 4 \
-    --max_grad_norm 1 \
+    --max_grad_norm 4 \
     --num_val_batch_shards 4 \
     --local_batch_size 8 \
-    --num_clients 1 \
+    --num_clients 7 \
     --iid \
-    --num_devices 8 \
+    --num_devices 3 \
     --local_momentum 0.0 \
     --virtual_momentum 0.9 \
     --num_workers 7 \

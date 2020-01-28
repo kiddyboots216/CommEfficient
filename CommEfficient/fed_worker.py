@@ -253,9 +253,11 @@ def forward_grad(model, batch, compute_loss, args, compute_grad=True):
 
         # accumulate loss & metrics, weighted by how many data points
         # were actually used
-        accum_loss += loss.item() * microbatch[0].size()[0]
+        accum_loss += loss.item() 
+        #* microbatch[0].size()[0]
         for i, m in enumerate(metrics):
-            accum_metrics[i] += m.item() * microbatch[0].size()[0]
+            accum_metrics[i] += m.item()
+            #* microbatch[0].size()[0]
 
         # backward pass
         if compute_grad:
@@ -267,7 +269,8 @@ def forward_grad(model, batch, compute_loss, args, compute_grad=True):
                                        args.max_grad_norm)
 
     # "average" here is over the data in the batch
-    average_loss = accum_loss / batch[0].size()[0]
+    average_loss = accum_loss 
+    #/ batch[0].size()[0]
     average_metrics = [m / batch[0].size()[0] for m in accum_metrics]
 
     results = [average_loss] + average_metrics

@@ -94,7 +94,7 @@ def compute_loss_train(model, batch, args):
         mc_labels=mc_labels, lm_labels=lm_labels
     )
     loss = ((lm_loss * args.lm_coef + mc_loss * args.mc_coef)
-            #/ args.num_train_batch_shards
+            / args.num_train_batch_shards
             )
     # there are no metrics, but still need to return a tuple
     return loss,
@@ -123,6 +123,9 @@ def train_gpt2(model, opt, scheduler, train_loader, val_loader,
                                  args, timer, training=True,
                                  logger=logger, writer=writer)
         model.save_pretrained(log_dir)
+        test_gpt2(model, val_loader, args, timer=timer, writer=writer)
+
+def test_gpt2(model, val_loader, args, logger=None, timer=None, writer=None):
         nll, acc, ppl = run_batches(model, None, None, val_loader, args,
                                     timer, training=False,
                                     logger=TableLogger(), writer=writer)
@@ -138,13 +141,9 @@ def train_gpt2(model, opt, scheduler, train_loader, val_loader,
         writer.add_scalar('validation/nll', nll)
         writer.add_scalar('validation/acc', acc)
         writer.add_scalar('validation/ppl', ppl)
-        valLogger = TableLogger()
-        lr = scheduler.get_lr()[0]
-        summary = union({'epoch': epoch+1,
-                         'lr': lr},
-                        epoch_stats)
+        valLogger = logger or TableLogger()
         print()
-        valLogger.append(summary)
+        valLogger.append(epoch_stats)
 
 def run_batches(model, opt, lr_scheduler, loader, args,
                 timer, training, logger=None, writer=None):
@@ -161,6 +160,13 @@ def run_batches(model, opt, lr_scheduler, loader, args,
             if lr_scheduler.get_lr() == 0:
                 # hack to get the starting LR right for fedavg
                 opt.step()
+
+            expected_numel = args.num_workers * args.local_batch_size
+            true_numel = batch[0].numel()
+            if true_numel < expected_numel:
+                # skip incomplete batches
+                print(f"True numel {true_numel} < expected numel {expected_numel}")
+                continue
             loss, download, upload = model(batch)
             client_download += download
             client_upload += upload
@@ -168,6 +174,7 @@ def run_batches(model, opt, lr_scheduler, loader, args,
             loss = np.mean(loss)
             losses.append(loss)
             train_time = timer()
+            # causes an error for some reason?
             #download_mb = client_download.sum().item() / (1024*1024)
             #upload_mb = client_upload.sum().item() / (1024*1024)
             batch_stats = {
@@ -217,6 +224,8 @@ def train():
         model_class = OpenAIGPTDoubleHeadsModel
 
     tokenizer = tokenizer_class.from_pretrained(args.model_checkpoint)
+    if args.do_finetune:
+        args.model_checkpoint = args.finetune_path
     model = model_class.from_pretrained(args.model_checkpoint)
 
     args.len_tokenizer = len(tokenizer)
@@ -249,7 +258,10 @@ def train():
     lambda_step = lambda x: lr_schedule(x)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
                                                   lr_lambda=[lambda_step])
-    train_gpt2(model, optimizer, scheduler, train_loader, val_loader, args,
+    if args.do_finetune:
+        test_gpt2(model, val_loader, args, logger=TableLogger(), timer=timer, writer=writer)
+    else:
+        train_gpt2(model, optimizer, scheduler, train_loader, val_loader, args,
                log_dir, writer=writer, logger=TableLogger(), timer=timer)
     model.finalize()
 

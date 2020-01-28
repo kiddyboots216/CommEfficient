@@ -201,6 +201,8 @@ class FedModel:
         # gradients on. The process will sum gradients locally, then
         # will reduce/sum across all processes
         per_proc = len(worker_batches) // len(self.update_forward_grad_ps)
+        if per_proc == 0:
+            return
         proc_batches = [worker_batches[i:i + per_proc]
                         for i in range(0, len(worker_batches), per_proc)]
 
@@ -277,7 +279,12 @@ class FedModel:
         batch_shards = [tuple(l[i] for l in split)
                         for i in range(num_shards)]
 
-        per_proc = len(batch_shards) // len(self.update_forward_grad_ps)
+        try:
+            per_proc = len(batch_shards) // len(self.update_forward_grad_ps)
+        except:
+            per_proc = len(batch_shards) // self.args.num_workers
+        if per_proc == 0:
+            return
         proc_batches = [batch_shards[i:i + per_proc]
                         for i in range(0, len(batch_shards), per_proc)]
 
