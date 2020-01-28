@@ -337,7 +337,7 @@ if __name__ == "__main__":
     # grad_reduction only controls how gradients from different
     # workers are combined
     # so the lr is multiplied by num_workers for both mean and median
-    if args.mode == "fedavg":
+    if args.local_batch_size == -1:
         steps_per_epoch = train_loader.dataset.num_clients // args.num_workers
     else:
         batch_size = args.local_batch_size * args.num_workers
