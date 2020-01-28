@@ -328,15 +328,10 @@ if __name__ == "__main__":
     model = FedModel(model, compute_loss_train, args, compute_loss_val)
     opt = FedOptimizer(opt, args)
 
-    # set up learning rate stuff
+    # set up learning rate scheduler
     # original cifar10_fast repo uses [0, 5, 24] and [0, 0.4, 0]
-    # so scale that horizontall with num_epochs and vertically
-    # with lr_scale
-    num_epochs_scale = args.num_epochs / 24
-    lr_schedule = PiecewiseLinear(
-            [0, 5 * num_epochs_scale, 24 * num_epochs_scale],
-            [0, args.lr_scale,        0]
-        )
+    lr_schedule = PiecewiseLinear([0, args.pivot_epoch, args.num_epochs],
+                                  [0, args.lr_scale,                  0])
 
     # grad_reduction only controls how gradients from different
     # workers are combined
