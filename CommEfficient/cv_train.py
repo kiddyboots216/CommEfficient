@@ -226,7 +226,6 @@ def get_data_loaders(args):
 
     return train_loader, test_loader
 
-
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
     """
@@ -326,7 +325,6 @@ if __name__ == "__main__":
         param_groups = model.parameters()
     opt = optim.SGD(param_groups, lr=1)
 
-
     model = FedModel(model, compute_loss_train, args, compute_loss_val)
     opt = FedOptimizer(opt, args)
 
@@ -362,6 +360,7 @@ if __name__ == "__main__":
     # and do the training
     train(model, opt, lr_scheduler, train_loader, test_loader, args,
           writer, loggers=(TableLogger(),), timer=timer)
+    model.finalize()
     if args.do_checkpoint:
         if not os.path.exists(args.checkpoint_path):
             os.makedirs(args.checkpoint_path)
