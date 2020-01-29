@@ -12,7 +12,7 @@ import torchvision
 import models
 from fed_aggregator import FedModel, FedOptimizer
 from utils import make_logdir, union, Timer, TableLogger, parse_args
-from utils import PiecewiseLinear, num_classes_of_dataset
+from utils import PiecewiseLinear, Exp, num_classes_of_dataset
 from data_utils import FedSampler, FedCIFAR10, FedImageNet, FedCIFAR100, FedEMNIST
 from data_utils import cifar10_train_transforms, cifar10_test_transforms
 from data_utils import cifar100_train_transforms, cifar100_test_transforms
@@ -119,7 +119,7 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
             'up (MiB)': round(upload_mb),
             'total_time': timer.total_time,
         }
-        lr = lr_scheduler.get_lr()[0]
+        lr = lr_scheduler.get_last_lr()[0]
         summary = union({'epoch': epoch+1,
                          'lr': lr},
                         epoch_stats)
@@ -161,14 +161,23 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
             else:
                 lr_scheduler.step()
 
-            if lr_scheduler.get_lr() == 0:
+            if lr_scheduler.get_last_lr()[0] == 0:
                 # hack to get the starting LR right for fedavg
+                print("HACK STEP")
                 opt.step()
 
-            expected_numel = args.num_workers * args.local_batch_size
-            if batch[0].numel() < expected_numel:
-            #    # skip incomplete batches
-                continue
+            if args.local_batch_size == -1:
+                expected_num_clients = args.num_workers
+                if torch.unique(batch[0]).numel() < expected_num_clients:
+                    # skip if there weren't enough clients left
+                    print("SKIPPING BATCH: NOT ENOUGH CLIENTS")
+                    continue
+            else:
+                expected_numel = args.num_workers * args.local_batch_size
+                if batch[0].numel() < expected_numel:
+                    # skip incomplete batches
+                    print("SKIPPING BATCH: NOT ENOUGH DATA")
+                    continue
 
             loss, acc, download, upload = model(batch)
 
@@ -225,7 +234,6 @@ def get_data_loaders(args):
     print(len(train_loader), len(test_loader))
 
     return train_loader, test_loader
-
 
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
@@ -326,24 +334,18 @@ if __name__ == "__main__":
         param_groups = model.parameters()
     opt = optim.SGD(param_groups, lr=1)
 
-
     model = FedModel(model, compute_loss_train, args, compute_loss_val)
     opt = FedOptimizer(opt, args)
 
-    # set up learning rate stuff
+    # set up learning rate scheduler
     # original cifar10_fast repo uses [0, 5, 24] and [0, 0.4, 0]
-    # so scale that horizontall with num_epochs and vertically
-    # with lr_scale
-    num_epochs_scale = args.num_epochs / 24
-    lr_schedule = PiecewiseLinear(
-            [0, 5 * num_epochs_scale, 24 * num_epochs_scale],
-            [0, args.lr_scale,        0]
-        )
+    lr_schedule = PiecewiseLinear([0, args.pivot_epoch, args.num_epochs],
+                                  [0, args.lr_scale,                  0])
 
     # grad_reduction only controls how gradients from different
     # workers are combined
     # so the lr is multiplied by num_workers for both mean and median
-    if args.mode == "fedavg":
+    if args.local_batch_size == -1:
         steps_per_epoch = train_loader.dataset.num_clients // args.num_workers
     else:
         batch_size = args.local_batch_size * args.num_workers
@@ -362,6 +364,7 @@ if __name__ == "__main__":
     # and do the training
     train(model, opt, lr_scheduler, train_loader, test_loader, args,
           writer, loggers=(TableLogger(),), timer=timer)
+    model.finalize()
     if args.do_checkpoint:
         if not os.path.exists(args.checkpoint_path):
             os.makedirs(args.checkpoint_path)

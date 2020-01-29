@@ -268,7 +268,7 @@ class FedModel:
         torch.distributed.reduce(transmit, 0)
         #print("after reduce", shms())
 
-        g_minibatch_gradient[:] = transmit / len(worker_batches)
+        g_minibatch_gradient[:] = transmit / batch[0].size()[0]
 
         split = split_results(results, self.args.num_results_train)
         return split + [download_bytes, upload_bytes]

@@ -27,6 +27,13 @@ class PiecewiseLinear(namedtuple('PiecewiseLinear', ('knots', 'vals'))):
     def __call__(self, t):
         return np.interp([t], self.knots, self.vals)[0]
 
+class Exp(namedtuple("Exp", ("warmup_epochs", "amplitude", "decay_len"))):
+    def __call__(self, t):
+        if t < self.warmup_epochs:
+            return np.interp([t], [0, self.warmup_epochs], [0, self.amplitude])[0]
+        else:
+            return self.amplitude * 10**(-(t - self.warmup_epochs) / self.decay_len)
+
 fed_datasets = {"CIFAR10": 10,
                 "CIFAR100": 100,
                 "EMNIST": 62,

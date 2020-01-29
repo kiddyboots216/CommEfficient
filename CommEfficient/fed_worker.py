@@ -93,12 +93,19 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
                             # accumulate results
                             for i in range(len(accum_results)):
                                 accum_results[i] += results[i]
+                        # g is the sum of gradients over examples, but
+                        # we need to update the model with the avg grad
+                        g /= batch[0].size()[0]
                         decay = args.fedavg_lr_decay ** step
                         local_ps_weights -= g * lr * decay
                         step += 1
                 # compute average results from accum_results
                 results = [r / n_steps for r in accum_results]
                 g = original_ps_weights - local_ps_weights
+                # weight by the batch size (which in the case of fedavg
+                # is the client's dataset size) so that clients without
+                # much data are downweighted
+                g *= batch[0].size()[0]
 
                 # reset local_ps_weights so that if this process has
                 # to process another worker batch, the next worker
@@ -171,16 +178,9 @@ def local_step(model, velocity, error, batch, compute_loss, args):
     # g is a (possibly compressed) gradient
     g, results = forward_grad(model, batch, compute_loss, args)
 
-    # reduce the importance of this gradient if the batch size was smaller
-    # than usual
-    expected_batch_size = 0
-    if args.mode == "fedavg":
-        expected_batch_size = args.fedavg_batch_size
-        if expected_batch_size == -1:
-            expected_batch_size = batch[0].size(0)
-    else:
-        expected_batch_size = args.local_batch_size
-    g = g * batch[0].size(0) / expected_batch_size
+    # locally, we need to deal with the sum of gradients across
+    # examples, since we will torch.distributed.reduce the to_transmits,
+    g *= batch[0].size(0)
 
     # if needed, do local momentum
     if args.local_momentum > 0:
