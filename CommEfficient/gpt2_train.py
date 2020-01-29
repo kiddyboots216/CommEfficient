@@ -286,12 +286,13 @@ def get_data_loaders(args, tokenizer):
     train_loader = DataLoader(train_dataset,
                               batch_sampler=train_sampler,
                               collate_fn=personachat_collate_fn,
-                              num_workers=0)
+                              num_workers=args.train_dataloader_workers)
 
     val_batch_size = args.local_batch_size * args.num_workers
     val_loader = DataLoader(val_dataset, batch_size=val_batch_size,
                             collate_fn=personachat_collate_fn,
-                            shuffle=False)
+                            shuffle=False,
+                            num_workers=args.val_dataloader_workers)
 
     return train_loader, val_loader
 
