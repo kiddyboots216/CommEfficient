@@ -49,20 +49,21 @@ export PYTHONUNBUFFERED=1
 # do ALL the research
 rsync -zarh --exclude ".git/*" --exclude "*.out" ~/CommEfficient /data/ashwineep/
 cd /data/ashwineep/CommEfficient/CommEfficient
-KMP_INIT_AT_FORK=FALSE OMP_NUM_THREADS=8 python gpt2_train.py \
+CUDA_VISIBLE_DEVICES=5,6,7 KMP_INIT_AT_FORK=FALSE OMP_NUM_THREADS=8 python gpt2_train.py \
     --dataset_dir /data/ashwineep/datasets/persona_chat/ \
     --model_checkpoint gpt2 \
     --num_results_train 1 \
     --num_results_val 2 \
     --lm_coef=2.0 \
     --max_history=2 \
-    --num_epochs=1 \
+    --num_epochs=2 \
     --num_candidates=4 \
     --personality_permutations=2 \
     --num_train_batch_shards 4 \
     --max_grad_norm 4 \
     --num_val_batch_shards 4 \
     --local_batch_size 8 \
+    --valid_batch_size 8 \
     --num_clients 7 \
     --iid \
     --num_devices 3 \

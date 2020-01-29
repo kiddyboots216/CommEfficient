@@ -94,7 +94,7 @@ def compute_loss_train(model, batch, args):
         mc_labels=mc_labels, lm_labels=lm_labels
     )
     loss = ((lm_loss * args.lm_coef + mc_loss * args.mc_coef)
-            / args.num_train_batch_shards
+            #/ args.num_train_batch_shards
             )
     # there are no metrics, but still need to return a tuple
     return loss,
@@ -120,10 +120,10 @@ def train_gpt2(model, opt, scheduler, train_loader, val_loader,
     logger = logger or TableLogger()
     for epoch in range(epochs):
         mean_train_loss = run_batches(model, opt, scheduler, train_loader,
-                                 args, timer, training=True,
+                                 args, timer, epoch=epoch, training=True,
                                  logger=logger, writer=writer)
-        model.save_pretrained(log_dir)
-        test_gpt2(model, val_loader, args, timer=timer, writer=writer)
+    model.save_pretrained(log_dir)
+    test_gpt2(model, val_loader, args, timer=timer, writer=writer)
 
 def test_gpt2(model, val_loader, args, logger=None, timer=None, writer=None):
         nll, acc, ppl = run_batches(model, None, None, val_loader, args,
@@ -146,7 +146,7 @@ def test_gpt2(model, val_loader, args, logger=None, timer=None, writer=None):
         valLogger.append(epoch_stats)
 
 def run_batches(model, opt, lr_scheduler, loader, args,
-                timer, training, logger=None, writer=None):
+                timer, training, epoch=None, logger=None, writer=None):
     model.train(training)
     client_download = torch.zeros(args.num_clients)
     client_upload = torch.zeros(args.num_clients)
@@ -185,11 +185,12 @@ def run_batches(model, opt, lr_scheduler, loader, args,
                 #'up (MiB)': round(upload_mb),
             }
             lr = lr_scheduler.get_lr()[0]
+            epoch_idxs = epoch * len(loader)
 
-            writer.add_scalar('training/loss', loss, batch_idx)
-            writer.add_scalar('Lr', lr, batch_idx)
-            writer.add_scalar('Time/train', train_time, batch_idx)
-            summary = union({'batch_idx': batch_idx+1,
+            writer.add_scalar('training/loss', loss, batch_idx + epoch_idxs)
+            writer.add_scalar('Lr', lr, batch_idx + epoch_idxs)
+            writer.add_scalar('Time/train', train_time, batch_idx + epoch_idxs)
+            summary = union({'batch_idx': batch_idx+1 + epoch_idxs,
                              'lr': lr},
                             batch_stats)
             logger.append(summary)
@@ -212,7 +213,7 @@ def run_batches(model, opt, lr_scheduler, loader, args,
 def train():
     args = parse_args(default_lr=4e-2)
 
-    logger.info("Arguments: %s", pformat(args))
+    print(args)
 
     timer = Timer()
     logger.info("Prepare tokenizer, pretrained model and optimizer.")
