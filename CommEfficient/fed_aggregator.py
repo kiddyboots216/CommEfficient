@@ -64,6 +64,14 @@ class FedModel:
             torch.cuda.set_device(args.num_devices-1)
 
         num_clients = args.num_clients
+        # TODO hack
+        if args.num_clients is None:
+            num_clients = {"EMNIST": 3500,
+                           "CIFAR10": None, # don't support non-iid cifar
+                           None: 175468 # personachat
+                           }[args.dataset_name]
+        self.num_clients = num_clients
+
         device = args.device
         self.model = input_model
         self.compute_loss_train = compute_loss
@@ -118,10 +126,10 @@ class FedModel:
         # transmitted holds what the workers sent to the PS
         shape = None
         if args.mode == "sketch":
-            shape = (args.num_clients, args.num_rows, args.num_cols)
+            shape = (num_clients, args.num_rows, args.num_cols)
         elif args.mode in ["local_topk", "true_topk", "fedavg",
                            "uncompressed"]:
-            shape = (args.num_clients, args.grad_size)
+            shape = (num_clients, args.grad_size)
         print(f"Shared memory array shape: {shape}")
 
         # don't make these arrays unless we need them
@@ -239,7 +247,7 @@ class FedModel:
                     "sketch": self.args.num_rows * self.args.num_cols,
                     "fedavg": self.args.grad_size
                 }[self.args.mode] * 4
-        upload_bytes = torch.zeros(self.args.num_clients)
+        upload_bytes = torch.zeros(self.num_clients)
         upload_bytes[unique_clients] = upload_bytes_participating
         self.client_num_stale_iters[unique_clients] = 0
         self.client_num_stale_iters += 1

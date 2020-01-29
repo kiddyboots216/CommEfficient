@@ -138,10 +138,10 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
     print("Total Download (MiB): {:0.2f}".format(total_download))
     print("Total Upload (MiB): {:0.2f}".format(total_upload))
     print("Avg Download Per Client: {:0.2f}".format(
-        total_download / args.num_clients
+        total_download / train_loader.dataset.num_clients
     ))
     print("Avg Upload Per Client: {:0.2f}".format(
-        total_upload / args.num_clients
+        total_upload / train_loader.dataset.num_clients
     ))
     return summary
 
@@ -151,9 +151,12 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
     losses = []
     accs = []
 
-    client_download = torch.zeros(args.num_clients)
-    client_upload = torch.zeros(args.num_clients)
+    client_download = None
+    client_upload = None
     if training:
+        num_clients = loader.dataset.num_clients
+        client_download = torch.zeros(num_clients)
+        client_upload = torch.zeros(num_clients)
         for i, batch in enumerate(loader):
             if args.use_local_sched:
                 for _ in range(args.num_local_iters):
