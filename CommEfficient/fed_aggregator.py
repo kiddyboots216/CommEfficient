@@ -310,7 +310,7 @@ class FedModel:
         # get results from each process (which have already been aggregated
         # over the batches we gave to that process)
         results = []
-        for queue_idx in queue_idxs:
+        for queue_idx in set(queue_idxs):
             #print("dequeue from ", queue_idx)
             q = self.results_queues[queue_idx]
             results.extend(q.get())
@@ -356,13 +356,13 @@ class FedModel:
             self.batches_queues[queue_idx].put(batches)
             #print("inserted into ", queue_idx)
             queue_idxs.append(queue_idx)
-        #print("queue_idxs", queue_idxs)
+        print("queue_idxs", queue_idxs)
 
         # get results from each process (which have already been aggregated
         # over the batches we gave to that process)
         results = []
-        for queue_idx in queue_idxs:
-            #print("dequeue from ", queue_idx)
+        for queue_idx in set(queue_idxs):
+            print("dequeue from ", queue_idx)
             q = self.results_queues[queue_idx]
             results.extend(q.get(timeout=10))
         return split_results(results, self.args.num_results_val)
