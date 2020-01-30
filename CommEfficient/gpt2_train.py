@@ -88,14 +88,17 @@ def compute_loss_train(model, batch, args):
     (input_ids, mc_token_ids, lm_labels,
             mc_labels, token_type_ids) = batch
 
-    lm_loss, mc_loss, *_ = model(
+    if args.do_test:
+        loss = torch.tensor([1.0])
+    else:
+        lm_loss, mc_loss, *_ = model(
         input_ids, token_type_ids=token_type_ids,
         mc_token_ids=mc_token_ids,
         mc_labels=mc_labels, lm_labels=lm_labels
     )
-    loss = ((lm_loss * args.lm_coef + mc_loss * args.mc_coef)
-            #/ args.num_train_batch_shards
-            )
+        loss = ((lm_loss * args.lm_coef + mc_loss * args.mc_coef)
+                #/ args.num_train_batch_shards
+                )
     # there are no metrics, but still need to return a tuple
     return loss,
 
@@ -152,9 +155,9 @@ def run_batches(model, opt, lr_scheduler, loader, args,
     client_upload = torch.zeros(args.num_clients)
     num_clients = args.num_clients
     clients = np.arange(num_clients)
-    epoch_idxs = epoch * len(loader) / (args.local_batch_size * args.num_workers)
 
     if training:
+        epoch_idxs = epoch * len(loader) / (args.local_batch_size * args.num_workers)
         losses = []
         for batch_idx, batch in enumerate(loader):
             lr_scheduler.step()
@@ -194,8 +197,6 @@ def run_batches(model, opt, lr_scheduler, loader, args,
                              'lr': lr},
                             batch_stats)
             logger.append(summary)
-            if batch_idx > 5 and args.do_test:
-                break
         return np.mean(losses)
 
     else:

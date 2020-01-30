@@ -166,7 +166,10 @@ def process_batch(batch, model, ps_weights, client_weights,
             if client_errors is not None:
                 error = client_errors[client_id].to(args.device)
 
-            results, transmit = local_step(model, velocity, error, batch,
+            if args.do_test:
+                results, transmit = (1.0,), torch.zeros(args.grad_size).to(args.device)
+            else:
+                results, transmit = local_step(model, velocity, error, batch,
                                            compute_loss_train, args)
         else:
             model.eval()
