@@ -152,6 +152,7 @@ def run_batches(model, opt, lr_scheduler, loader, args,
     client_upload = torch.zeros(args.num_clients)
     num_clients = args.num_clients
     clients = np.arange(num_clients)
+    epoch_idxs = epoch * len(loader) / (args.local_batch_size * args.num_workers)
 
     if training:
         losses = []
@@ -185,7 +186,6 @@ def run_batches(model, opt, lr_scheduler, loader, args,
                 #'up (MiB)': round(upload_mb),
             }
             lr = lr_scheduler.get_lr()[0]
-            epoch_idxs = epoch * len(loader)
 
             writer.add_scalar('training/loss', loss, batch_idx + epoch_idxs)
             writer.add_scalar('Lr', lr, batch_idx + epoch_idxs)
