@@ -2,8 +2,6 @@ import orjson as json
 import os
 from collections import defaultdict
 
-import numpy as np
-
 from data_utils import FedDataset, FedCIFAR10
 import torch
 from PIL import Image
@@ -41,21 +39,36 @@ class FedEMNIST(FedDataset):
 
         # assume EMNIST is already preprocessed
         if self.type == "train":
-            client_datasets = []
+            # we can't store each client dataset in its own tensor,
+            # since if we run with multiple dataloading workers, each
+            # shared memory tensor requires a file descriptor, and
+            # some systems limit users to 1024 open file descriptors
+            # client i's data is between client_offsets[i] and
+            # client_offsets[i+1]
+            client_images = []
+            client_targets = []
+            client_offsets = [0]
             for client_id in range(len(self.images_per_client)):
-                client_datasets.append(
-                        torch.load(self.client_fn(client_id))
-                    )
-            self.client_datasets = client_datasets
+                cdata = torch.load(self.client_fn(client_id))
+                client_images.append(cdata["x"])
+                client_targets.append(cdata["y"])
+                offset = client_offsets[client_id]
+                client_offsets.append(offset + cdata["y"].numel())
+            self.client_images = torch.cat(client_images, dim=0)
+            self.client_targets = torch.cat(client_targets, dim=0)
+            self.client_offsets = torch.tensor(client_offsets)
         else:
             test_data = torch.load(self.test_fn())
             self.test_images = test_data["x"]
             self.test_targets = test_data["y"]
 
     def _get_train_item(self, client_id, idx_within_client):
-        client_dataset = self.client_datasets[client_id]
-        raw_image = client_dataset["x"][idx_within_client]
-        target = client_dataset["y"][idx_within_client].item()
+        start = self.client_offsets[client_id]
+        end = self.client_offsets[client_id + 1]
+        client_images = self.client_images[start:end]
+        client_targets = self.client_targets[start:end]
+        raw_image = client_images[idx_within_client]
+        target = client_targets[idx_within_client].item()
 
         image = Image.fromarray(raw_image.numpy())
 
