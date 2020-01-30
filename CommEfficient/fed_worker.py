@@ -114,11 +114,13 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
 
             else:
                 # for all non-fedavg modes, we just do a single step
+                #print("processing batch...", rank)
                 g, results = process_batch(
                         batch, model, local_ps_weights, client_weights,
                         client_errors, client_velocities,
-                        compute_loss_train, compute_loss_val, args
+                        compute_loss_train, compute_loss_val, args, rank
                     )
+                #print("batch processed...", rank)
 
             if is_train:
                 sum_g += g
@@ -132,7 +134,7 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
 
 def process_batch(batch, model, ps_weights, client_weights,
                   client_errors, client_velocities,
-                  compute_loss_train, compute_loss_val, args):
+                  compute_loss_train, compute_loss_val, args, rank):
         client_indices = batch[0]
         is_train = client_indices[0] != -1
         batch = batch[1:]
@@ -173,8 +175,10 @@ def process_batch(batch, model, ps_weights, client_weights,
                                            compute_loss_train, args)
         else:
             model.eval()
+            #print("doing forward grad...", rank)
             results = forward_grad(model, batch, compute_loss_val, args,
                                    compute_grad=False)
+            #print("done forward grad...", rank)
         return transmit, results
 
 def local_step(model, velocity, error, batch, compute_loss, args):

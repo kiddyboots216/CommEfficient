@@ -293,6 +293,7 @@ class FedModel:
         upload_bytes = torch.zeros(self.num_clients)
         upload_bytes[unique_clients] = upload_bytes_participating
 
+        """
         for q, batches in zip(self.batches_queues, proc_batches):
             q.put(batches)
         # now every process has the batches assigned to it
@@ -302,6 +303,22 @@ class FedModel:
         for results_queue in self.results_queues:
             r = results_queue.get()
             results.extend(r)
+        """
+	
+        queue_idxs = []
+        for i, batches in enumerate(proc_batches):
+            queue_idx = i % len(self.batches_queues)
+            self.batches_queues[queue_idx].put(batches)
+            queue_idxs.append(queue_idx)
+        #print("queue_idxs", queue_idxs)
+
+        # get results from each process (which have already been aggregated
+        # over the batches we gave to that process)
+        results = []
+        for queue_idx in set(queue_idxs):
+            #print("dequeueing from ", queue_idx)
+            q = self.results_queues[queue_idx]
+            results.extend(q.get(timeout=10))
 
         if self.args.mode == "sketch":
             shape = (self.args.num_rows, self.args.num_cols)
@@ -335,14 +352,21 @@ class FedModel:
         proc_batches = [batch_shards[i:i + per_proc]
                         for i in range(0, len(batch_shards), per_proc)]
 
+        queue_idxs = []
         for i, batches in enumerate(proc_batches):
-            self.batches_queues[i % len(self.batches_queues)].put(batches)
+            queue_idx = i % len(self.batches_queues)
+            self.batches_queues[queue_idx].put(batches)
+            queue_idxs.append(queue_idx)
+        #print("queue_idxs", queue_idxs)
 
         # get results from each process (which have already been aggregated
         # over the batches we gave to that process)
         results = []
-        for q in self.results_queues:
+        for queue_idx in set(queue_idxs):
+            #print("dequeueing from ", queue_idx)
+            q = self.results_queues[queue_idx]
             results.extend(q.get(timeout=10))
+
         return split_results(results, self.args.num_results_val)
 
     def __call__(self, batch):

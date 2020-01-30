@@ -227,7 +227,8 @@ def train():
 
     tokenizer = tokenizer_class.from_pretrained(args.model_checkpoint)
     if args.do_finetune:
-        args.model_checkpoint = args.finetune_path
+        if not args.do_test:
+            args.model_checkpoint = args.finetune_path
     model = model_class.from_pretrained(args.model_checkpoint)
 
     args.len_tokenizer = len(tokenizer)
