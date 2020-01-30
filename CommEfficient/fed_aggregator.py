@@ -64,6 +64,14 @@ class FedModel:
             torch.cuda.set_device(args.num_devices-1)
 
         num_clients = args.num_clients
+        # TODO hack
+        if args.num_clients is None:
+            num_clients = {"EMNIST": 3500,
+                           "CIFAR10": None, # don't support non-iid cifar
+                           None: 175468 # personachat
+                           }[args.dataset_name]
+        self.num_clients = num_clients
+
         device = args.device
         self.model = input_model
         self.compute_loss_train = compute_loss
@@ -88,26 +96,41 @@ class FedModel:
         # store the initial weights of the model
         g_ps_weights[:] = param_vec[:]
 
-        # keep a deque of past ps_weights so we can calculate number of
-        # bytes a sparsely participating worker needs to download each
-        # iteration
+        if (self.args.num_epochs <= 1
+                and self.args.local_batch_size == -1):
+            # keeping track of download bytes is simpler in this
+            # case (see comments in _call_train)
+            self.updated_since_init = torch.zeros(args.grad_size,
+                                                  dtype=torch.bool,
+                                                  device=args.device)
+            self.prev_ps_weights = g_ps_weights.clone()
+        else:
+            # keeping track of download bytes is harder (see comments
+            # in _call_train)
 
-        # if clients are picked randomly, then a single client getting
-        # picked is a poisson process with rate participation
-        # so the probability that a client won't be picked for more than
-        # 10/participation iterations is 1/e^10  < 0.005%
-        participation = args.num_workers / args.num_clients
-        maxlen = int(DEQUE_MAXLEN_MULT / participation)
-        self.ps_weights_history = deque([], maxlen=maxlen)
-        self.client_num_stale_iters = torch.zeros(args.num_clients).long()
+            # keep a deque of past ps_weights so we can calculate
+            # number of bytes a sparsely participating worker needs
+            # to download each iteration
 
-        # g_lr is the current LR (used for fedavg) updated by FedOptimizer
+            # if clients are picked randomly, then a single client
+            # getting picked is a poisson process with rate
+            # participation, so the probability that a client won't
+            # be picked for more than 10/participation iterations
+            # is 1/e^10  < 0.005%
+            participation = args.num_workers / num_clients
+            maxlen = int(DEQUE_MAXLEN_MULT / participation)
+            self.ps_weights_history = deque([], maxlen=maxlen)
+            self.client_num_stale_iters = torch.zeros(num_clients).long()
+
+        # g_lr is the current LR (used for fedavg) updated by
+        # FedOptimizer
         g_lr = torch.zeros(1).float().share_memory_()
 
         # everyone gets ps_weights at the beginning of each round if
         # not args.topk_down, so no need for this array
         if args.do_topk_down:
-            # client weights emulates each client's possibly stale weights
+            # client weights emulates each client's possibly stale
+            # weights
             shape = (num_clients, args.grad_size)
             self.client_weights = torch.zeros(shape).share_memory_()
             # copy ps_weights into every row of client_weights
@@ -118,10 +141,10 @@ class FedModel:
         # transmitted holds what the workers sent to the PS
         shape = None
         if args.mode == "sketch":
-            shape = (args.num_clients, args.num_rows, args.num_cols)
+            shape = (num_clients, args.num_rows, args.num_cols)
         elif args.mode in ["local_topk", "true_topk", "fedavg",
                            "uncompressed"]:
-            shape = (args.num_clients, args.grad_size)
+            shape = (num_clients, args.grad_size)
         print(f"Shared memory array shape: {shape}")
 
         # don't make these arrays unless we need them
@@ -206,34 +229,60 @@ class FedModel:
         proc_batches = [worker_batches[i:i + per_proc]
                         for i in range(0, len(worker_batches), per_proc)]
 
-        # the -1st entry of ps_weights_history is the current ps weights
-        # on the very first iteration, all clients are entirely up-to-date,
-        # so they will have no download cost. After that,
-        # client_num_stale_iters will never have a zero in it
-        self.ps_weights_history.append(g_ps_weights.clone().cpu())
+        download_bytes = None
+        if (self.args.num_epochs <= 1
+                and self.args.local_batch_size == -1):
+            # we can just maintain a single boolean tensor which is
+            # True if the corresponding weight has been updated
+            # since the beginning of training
+            diff = g_ps_weights - self.prev_ps_weights
+            updated = torch.ceil(diff.abs()).clamp(0, 1).bool()
+            self.updated_since_init |= updated
+            self.prev_ps_weights = g_ps_weights.clone()
+            dload_participating = 4. * self.updated_since_init.sum()
+            download_bytes = torch.zeros(self.num_clients)
+            download_bytes[unique_clients] = dload_participating
+        else:
+            # we have to keep a full history of the ps weights
+            # at every iteration, since a client could need to be
+            # updated to the current ps weights from any arbitrary
+            # previous iteration
 
-        # figure out what the latest model weights each client has.
-        # Clamping by maxlen/participation will underestimate the number of
-        # bytes needed to download, but as long as maxlen is large
-        # enough, this error will be negligible
-        maxlen = self.ps_weights_history.maxlen
-        stale = self.client_num_stale_iters[unique_clients].clamp(
-                0, maxlen - 1
-            )
-        client_prev_weights = [self.ps_weights_history[-(s + 1)]
-                               for s in stale]
-        # the ceil(...).sum() call just counts how many entries
-        # g_ps_weights and prev disagree on -- this is the number of
-        # new weights that the client needs to download
-        # (it's the same as torch.where(g_ps_weights == prev)[0].numel(),
-        #  but ~6x faster)
-        ps_weights_cpu = g_ps_weights.cpu()
-        download_bytes_participating = 4 * torch.tensor(
-                [torch.ceil((ps_weights_cpu - prev).abs()).clamp(0, 1).sum()
-                 for prev in client_prev_weights]
-            )
-        download_bytes = torch.zeros(self.args.num_clients)
-        download_bytes[unique_clients] = download_bytes_participating
+            # the -1st entry of ps_weights_history is the current
+            # ps weights. On the very first iteration, all clients
+            # are entirely up-to-date, so they will have no download
+            # cost. After that, client_num_stale_iters will never
+            # have a zero in it
+            self.ps_weights_history.append(g_ps_weights.clone().cpu())
+            # figure out what the latest model weights each client
+            # has. Clamping by maxlen/participation will
+            # underestimate the number of bytes needed to download,
+            # but as long as maxlen is large enough, this error
+            # will be negligible
+            maxlen = self.ps_weights_history.maxlen
+            stale = self.client_num_stale_iters[unique_clients].clamp(
+                    0, maxlen - 1
+                )
+            client_prev_weights = [self.ps_weights_history[-(s + 1)]
+                                   for s in stale]
+            # the ceil(...).sum() call just counts how many entries
+            # g_ps_weights and prev disagree on -- this is the
+            # number of new weights that the client needs to download
+            # (it's the same as
+            #  torch.where(g_ps_weights != prev)[0].numel(),
+            #  but ~6x faster)
+            ps_weights_cpu = g_ps_weights.cpu()
+            download_bytes_participating = 4 * torch.tensor(
+                    [torch.ceil(
+                        (ps_weights_cpu - prev).abs()
+                     ).clamp(0, 1).sum()
+                     for prev in client_prev_weights]
+                )
+            download_bytes = torch.zeros(self.num_clients)
+            download_bytes[unique_clients] = download_bytes_participating
+            self.client_num_stale_iters[unique_clients] = 0
+            self.client_num_stale_iters += 1
+
         upload_bytes_participating = {
                     "uncompressed": self.args.grad_size,
                     "true_topk": self.args.grad_size,
@@ -241,10 +290,8 @@ class FedModel:
                     "sketch": self.args.num_rows * self.args.num_cols,
                     "fedavg": self.args.grad_size
                 }[self.args.mode] * 4
-        upload_bytes = torch.zeros(self.args.num_clients)
+        upload_bytes = torch.zeros(self.num_clients)
         upload_bytes[unique_clients] = upload_bytes_participating
-        self.client_num_stale_iters[unique_clients] = 0
-        self.client_num_stale_iters += 1
 
         for q, batches in zip(self.batches_queues, proc_batches):
             q.put(batches)
