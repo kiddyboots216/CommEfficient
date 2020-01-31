@@ -88,17 +88,14 @@ def compute_loss_train(model, batch, args):
     (input_ids, mc_token_ids, lm_labels,
             mc_labels, token_type_ids) = batch
 
-    if args.do_test:
-        loss = torch.tensor([1.0])
-    else:
-        lm_loss, mc_loss, *_ = model(
-        input_ids, token_type_ids=token_type_ids,
-        mc_token_ids=mc_token_ids,
-        mc_labels=mc_labels, lm_labels=lm_labels
-    )
-        loss = ((lm_loss * args.lm_coef + mc_loss * args.mc_coef)
-                #/ args.num_train_batch_shards
-                )
+    lm_loss, mc_loss, *_ = model(
+    input_ids, token_type_ids=token_type_ids,
+    mc_token_ids=mc_token_ids,
+    mc_labels=mc_labels, lm_labels=lm_labels
+)
+    loss = ((lm_loss * args.lm_coef + mc_loss * args.mc_coef)
+            #/ args.num_train_batch_shards
+            )
     # there are no metrics, but still need to return a tuple
     return loss,
 
@@ -197,6 +194,8 @@ def run_batches(model, opt, lr_scheduler, loader, args,
                              'lr': lr},
                             batch_stats)
             logger.append(summary)
+            if batch_idx > 5 and args.do_test:
+                break
         return np.mean(losses)
 
     else:
@@ -209,7 +208,7 @@ def run_batches(model, opt, lr_scheduler, loader, args,
             accs.append(acc)
             if batch_idx > 5 and args.do_test:
                 break
-        return np.mean(nlls), np.mean(accs), np.exp(np.mean(ppls))
+        return np.mean(nlls), np.mean(accs), np.exp(np.mean(nlls))
 
 def train():
     args = parse_args(default_lr=4e-2)

@@ -303,22 +303,36 @@ class FedModel:
         for results_queue in self.results_queues:
             r = results_queue.get()
             results.extend(r)
-        """
 	
         queue_idxs = []
         for i, batches in enumerate(proc_batches):
             queue_idx = i % len(self.batches_queues)
             self.batches_queues[queue_idx].put(batches)
             queue_idxs.append(queue_idx)
+        """
+        queue_idxs = []
+
+        for i, queue in enumerate(self.batches_queues):
+            batch_idx = i % len(proc_batches)
+            chosen_batch = proc_batches[batch_idx]
+            queue.put(chosen_batch)
+            queue_idxs.append(i)
+
+        results = []
+        for i, q in enumerate(self.results_queues):
+            r = q.get(timeout=60)
+            if i in queue_idxs:
+                results.extend(r)
         #print("queue_idxs", queue_idxs)
 
         # get results from each process (which have already been aggregated
         # over the batches we gave to that process)
-        results = []
+        """
         for queue_idx in set(queue_idxs):
             #print("dequeueing from ", queue_idx)
             q = self.results_queues[queue_idx]
-            results.extend(q.get(timeout=10))
+            results.extend(q.get(timeout=20))
+        """
 
         if self.args.mode == "sketch":
             shape = (self.args.num_rows, self.args.num_cols)
@@ -352,6 +366,7 @@ class FedModel:
         proc_batches = [batch_shards[i:i + per_proc]
                         for i in range(0, len(batch_shards), per_proc)]
 
+        """
         queue_idxs = []
         for i, batches in enumerate(proc_batches):
             queue_idx = i % len(self.batches_queues)
@@ -365,7 +380,21 @@ class FedModel:
         for queue_idx in set(queue_idxs):
             #print("dequeueing from ", queue_idx)
             q = self.results_queues[queue_idx]
-            results.extend(q.get(timeout=10))
+            results.extend(q.get(timeout=20))
+        """
+        queue_idxs = []
+
+        for i, queue in enumerate(self.batches_queues):
+            batch_idx = i % len(proc_batches)
+            chosen_batch = proc_batches[batch_idx]
+            queue.put(chosen_batch)
+            queue_idxs.append(i)
+
+        results = []
+        for i, q in enumerate(self.results_queues):
+            r = q.get(timeout=20)
+            if i in queue_idxs:
+                results.extend(r)
 
         return split_results(results, self.args.num_results_val)
 
