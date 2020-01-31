@@ -533,7 +533,7 @@ def _server_helper_true_topk(gradient, Vvelocity, Verror, args, lr):
     if args.local_momentum > 0:
         rows = g_participating_clients.view(-1,1)
         nz = update.nonzero()[:,0]
-        g_client_velocities[rows, nz].zero_()
+        g_client_velocities[rows, nz] = 0
 
 
     # error feedback
