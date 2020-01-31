@@ -93,6 +93,7 @@ class FedModel:
         # update themselves with (possibly an approximation of) the
         # latest PS weights
         g_ps_weights = torch.zeros(args.grad_size).float()
+
         # store the initial weights of the model
         g_ps_weights[:] = param_vec[:]
 
@@ -164,8 +165,6 @@ class FedModel:
 
         # now that we've started the child processes,
         # we can safely move things to CUDA
-        g_ps_weights = g_ps_weights.to(args.device)
-
         g_minibatch_gradient = torch.zeros(shape[1:]).to(args.device)
 
         # set up tracking of downloaded bytes
@@ -454,7 +453,8 @@ class FedOptimizer(torch.optim.Optimizer):
                 1 if self.args.mode == "fedavg" else lr)
 
         # update ps_weights, momentums, and errors
-        g_ps_weights -= weight_update
+        # g_ps_weights is stored on the host in shared memory
+        g_ps_weights -= weight_update.cpu()
 
         self.Vvelocity[:] = new_Vvelocity
         self.Verror[:] = new_Verror
