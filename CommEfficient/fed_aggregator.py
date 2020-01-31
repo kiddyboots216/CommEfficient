@@ -225,6 +225,9 @@ class FedModel:
         # will reduce/sum across all processes
         per_proc = len(worker_batches) // len(self.update_forward_grad_ps)
         if per_proc == 0:
+            # We should never get here, but this is always going to throw
+            # an error since the 3rd argument to range in the below line
+            # can never be 0
             return
         proc_batches = [worker_batches[i:i + per_proc]
                         for i in range(0, len(worker_batches), per_proc)]
@@ -293,23 +296,6 @@ class FedModel:
         upload_bytes = torch.zeros(self.num_clients)
         upload_bytes[unique_clients] = upload_bytes_participating
 
-        """
-        for q, batches in zip(self.batches_queues, proc_batches):
-            q.put(batches)
-        # now every process has the batches assigned to it
-
-        # and collect results
-        results = []
-        for results_queue in self.results_queues:
-            r = results_queue.get()
-            results.extend(r)
-	
-        queue_idxs = []
-        for i, batches in enumerate(proc_batches):
-            queue_idx = i % len(self.batches_queues)
-            self.batches_queues[queue_idx].put(batches)
-            queue_idxs.append(queue_idx)
-        """
         queue_idxs = []
 
         for i, queue in enumerate(self.batches_queues):
@@ -318,21 +304,13 @@ class FedModel:
             queue.put(chosen_batch)
             queue_idxs.append(i)
 
+        # get results from each process (which have already been aggregated
+        # over the batches we gave to that process)
         results = []
         for i, q in enumerate(self.results_queues):
             r = q.get(timeout=60)
             if i in queue_idxs:
                 results.extend(r)
-        #print("queue_idxs", queue_idxs)
-
-        # get results from each process (which have already been aggregated
-        # over the batches we gave to that process)
-        """
-        for queue_idx in set(queue_idxs):
-            #print("dequeueing from ", queue_idx)
-            q = self.results_queues[queue_idx]
-            results.extend(q.get(timeout=20))
-        """
 
         if self.args.mode == "sketch":
             shape = (self.args.num_rows, self.args.num_cols)
@@ -357,31 +335,13 @@ class FedModel:
         batch_shards = [tuple(l[i] for l in split)
                         for i in range(num_shards)]
 
-        try:
-            per_proc = len(batch_shards) // len(self.update_forward_grad_ps)
-        except:
-            per_proc = len(batch_shards) // self.args.num_workers
+        per_proc = len(batch_shards) // len(self.update_forward_grad_ps)
         if per_proc == 0:
+            # see comment in _call_train
             return
         proc_batches = [batch_shards[i:i + per_proc]
                         for i in range(0, len(batch_shards), per_proc)]
 
-        """
-        queue_idxs = []
-        for i, batches in enumerate(proc_batches):
-            queue_idx = i % len(self.batches_queues)
-            self.batches_queues[queue_idx].put(batches)
-            queue_idxs.append(queue_idx)
-        #print("queue_idxs", queue_idxs)
-
-        # get results from each process (which have already been aggregated
-        # over the batches we gave to that process)
-        results = []
-        for queue_idx in set(queue_idxs):
-            #print("dequeueing from ", queue_idx)
-            q = self.results_queues[queue_idx]
-            results.extend(q.get(timeout=20))
-        """
         queue_idxs = []
 
         for i, queue in enumerate(self.batches_queues):

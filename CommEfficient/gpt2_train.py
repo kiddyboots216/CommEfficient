@@ -89,13 +89,11 @@ def compute_loss_train(model, batch, args):
             mc_labels, token_type_ids) = batch
 
     lm_loss, mc_loss, *_ = model(
-    input_ids, token_type_ids=token_type_ids,
-    mc_token_ids=mc_token_ids,
-    mc_labels=mc_labels, lm_labels=lm_labels
-)
-    loss = ((lm_loss * args.lm_coef + mc_loss * args.mc_coef)
-            #/ args.num_train_batch_shards
-            )
+        input_ids, token_type_ids=token_type_ids,
+        mc_token_ids=mc_token_ids,
+        mc_labels=mc_labels, lm_labels=lm_labels
+    )
+    loss = (lm_loss * args.lm_coef + mc_loss * args.mc_coef)
     # there are no metrics, but still need to return a tuple
     return loss,
 
@@ -116,12 +114,25 @@ def add_special_tokens_(model, tokenizer):
 def train_gpt2(model, opt, scheduler, train_loader, val_loader,
         args, log_dir, writer, logger=None, timer=None):
     timer = timer or Timer()
-    epochs = args.num_epochs
-    logger = logger or TableLogger()
-    for epoch in range(epochs):
-        mean_train_loss = run_batches(model, opt, scheduler, train_loader,
-                                 args, timer, epoch=epoch, training=True,
-                                 logger=logger, writer=writer)
+
+    total_download = 0
+    total_upload = 0
+    for epoch in range(args.num_epochs):
+        mean_train_loss, download, upload = run_batches(model, opt, scheduler, 
+            train_loader, args, timer, epoch=epoch, training=True,
+            logger=logger, writer=writer)
+        download_mb = download.sum().item() / (1024*1024)
+        upload_mb = upload.sum().item() / (1024*1024)
+        total_download += download_mb
+        total_upload += upload_mb
+    print("Total Download (MiB): {:0.2f}".format(total_download))
+    print("Total Upload (MiB): {:0.2f}".format(total_upload))
+    print("Avg Download Per Client: {:0.2f}".format(
+        total_download / train_loader.dataset.num_clients
+    ))
+    print("Avg Upload Per Client: {:0.2f}".format(
+        total_upload / train_loader.dataset.num_clients
+    ))
     model.save_pretrained(log_dir)
     test_gpt2(model, val_loader, args, timer=timer, writer=writer)
 
@@ -150,8 +161,6 @@ def run_batches(model, opt, lr_scheduler, loader, args,
     model.train(training)
     client_download = torch.zeros(args.num_clients)
     client_upload = torch.zeros(args.num_clients)
-    num_clients = args.num_clients
-    clients = np.arange(num_clients)
 
     if training:
         epoch_idxs = epoch * len(loader) / (args.local_batch_size * args.num_workers)
@@ -169,21 +178,22 @@ def run_batches(model, opt, lr_scheduler, loader, args,
                 print(f"True numel {true_numel} < expected numel {expected_numel}")
                 continue
             loss, download, upload = model(batch)
+
             client_download += download
             client_upload += upload
+
             opt.step()
             loss = np.mean(loss)
             losses.append(loss)
             train_time = timer()
-            # causes an error for some reason?
-            #download_mb = client_download.sum().item() / (1024*1024)
-            #upload_mb = client_upload.sum().item() / (1024*1024)
+            download_mb = download.sum().item() / (1024*1024)
+            upload_mb = upload.sum().item() / (1024*1024)
             batch_stats = {
                 'train_time': train_time,
                 'train_loss': loss,
                 'total_time': timer.total_time,
-                #'down (MiB)': round(download_mb),
-                #'up (MiB)': round(upload_mb),
+                'down (MiB)': round(download_mb),
+                'up (MiB)': round(upload_mb),
             }
             lr = lr_scheduler.get_lr()[0]
 
@@ -196,7 +206,7 @@ def run_batches(model, opt, lr_scheduler, loader, args,
             logger.append(summary)
             if batch_idx > 5 and args.do_test:
                 break
-        return np.mean(losses)
+        return np.mean(losses), client_download, client_upload
 
     else:
         nlls, accs, ppls = [], [], []
