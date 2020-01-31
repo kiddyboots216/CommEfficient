@@ -233,7 +233,7 @@ class FedModel:
             # We should never get here, but this is always going to throw
             # an error since the 3rd argument to range in the below line
             # can never be 0
-            return
+            assert False
         proc_batches = [worker_batches[i:i + per_proc]
                         for i in range(0, len(worker_batches), per_proc)]
 
@@ -346,7 +346,7 @@ class FedModel:
         per_proc = len(batch_shards) // len(self.update_forward_grad_ps)
         if per_proc == 0:
             # see comment in _call_train
-            return
+            assert False
         proc_batches = [batch_shards[i:i + per_proc]
                         for i in range(0, len(batch_shards), per_proc)]
 
