@@ -192,7 +192,6 @@ def parse_args(default_lr=None):
                         type=int, default=0)
 
     # GPT2 args
-    parser.add_argument("--num_dialogs", type=int, default=1)
     parser.add_argument("--model_checkpoint", type=str, default="gpt2",
                         help="Path, url or short name of the model")
     parser.add_argument("--num_candidates", type=int, default=2,

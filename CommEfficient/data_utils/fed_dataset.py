@@ -10,6 +10,7 @@ class FedDataset(torch.utils.data.Dataset):
     def __init__(self, args, dataset_dir, dataset_name, transform=None,
                  do_iid=False, num_clients=None,
                  train=True, download=False, malicious=False):
+        self.args = args
         self.dataset_dir = dataset_dir
         self.dataset_name = dataset_name
         self.transform = transform
@@ -95,7 +96,7 @@ class FedDataset(torch.utils.data.Dataset):
             client_id = -1
         elif self.type == "mal":
             image, target = self._get_mal_item(idx)
-            client_id = 0
+            client_id = -1
 
         if self.transform is not None:
             image = self.transform(image)

@@ -152,8 +152,9 @@ class FedModel:
         print(f"Shared memory array shape: {shape}")
 
         # don't make these arrays unless we need them
-        if args.error_type == "local" or args.local_momentum > 0:
+        if args.error_type == "local":
             self.client_errors = torch.zeros(shape).share_memory_()
+        if args.local_momentum > 0:
             g_client_velocities = torch.zeros(shape).share_memory_()
 
         g_minibatch_gradient = torch.zeros(shape[1:]).to(args.device)
@@ -229,6 +230,11 @@ class FedModel:
         # gradients on. The process will sum gradients locally, then
         # will reduce/sum across all processes
         per_proc = len(worker_batches) // len(self.update_forward_grad_ps)
+        if per_proc == 0:
+            # We should never get here, but this is always going to throw
+            # an error since the 3rd argument to range in the below line
+            # can never be 0
+            return
         proc_batches = [worker_batches[i:i + per_proc]
                         for i in range(0, len(worker_batches), per_proc)]
 
@@ -296,30 +302,24 @@ class FedModel:
         upload_bytes = torch.zeros(self.num_clients)
         upload_bytes[unique_clients] = upload_bytes_participating
 
-        #for q, batches in zip(self.batches_queues, proc_batches):
-        #    q.put(batches)
-        # now every process has the batches assigned to it
         queue_idxs = []
-        for i, batches in enumerate(proc_batches):
-            queue_idx = i % len(self.batches_queues)
-            self.batches_queues[queue_idx].put(batches)
-            #print("inserted into ", queue_idx)
-            queue_idxs.append(queue_idx)
-        #print("queue_idxs", queue_idxs)
+
+        for i, queue in enumerate(self.batches_queues):
+            batch_idx = i % len(proc_batches)
+            chosen_batch = proc_batches[batch_idx]
+            queue.put(chosen_batch)
+            queue_idxs.append(i)
 
         # get results from each process (which have already been aggregated
         # over the batches we gave to that process)
         results = []
-        for queue_idx in set(queue_idxs):
-            #print("dequeue from ", queue_idx)
-            q = self.results_queues[queue_idx]
-            results.extend(q.get())
-
-        ## and collect results
-        #results = []
-        #for results_queue in self.results_queues:
-        #    r = results_queue.get()
-        #    results.extend(r)
+        for i, q in enumerate(self.results_queues):
+            # procs might take a long time to process may workers, but
+            # we need a timeout eventually in case the worker crashes
+            print("dequeueing ", i)
+            r = q.get(timeout=600)
+            if i in queue_idxs:
+                results.extend(r)
 
         if self.args.mode == "sketch":
             shape = (self.args.num_rows, self.args.num_cols)
@@ -345,26 +345,23 @@ class FedModel:
                         for i in range(num_shards)]
 
         per_proc = len(batch_shards) // len(self.update_forward_grad_ps)
-        if per_proc == 0:
-            per_proc = 999
         proc_batches = [batch_shards[i:i + per_proc]
                         for i in range(0, len(batch_shards), per_proc)]
 
         queue_idxs = []
-        for i, batches in enumerate(proc_batches):
-            queue_idx = i % len(self.batches_queues)
-            self.batches_queues[queue_idx].put(batches)
-            #print("inserted into ", queue_idx)
-            queue_idxs.append(queue_idx)
-        print("queue_idxs", queue_idxs)
 
-        # get results from each process (which have already been aggregated
-        # over the batches we gave to that process)
+        for i, queue in enumerate(self.batches_queues):
+            batch_idx = i % len(proc_batches)
+            chosen_batch = proc_batches[batch_idx]
+            queue.put(chosen_batch)
+            queue_idxs.append(i)
+
         results = []
-        for queue_idx in set(queue_idxs):
-            print("dequeue from ", queue_idx)
-            q = self.results_queues[queue_idx]
-            results.extend(q.get(timeout=10))
+        for i, q in enumerate(self.results_queues):
+            r = q.get(timeout=60)
+            if i in queue_idxs:
+                results.extend(r)
+
         return split_results(results, self.args.num_results_val)
 
     def __call__(self, batch):

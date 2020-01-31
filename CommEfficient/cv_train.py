@@ -78,6 +78,9 @@ def compute_loss_train(model, batch, args):
         return compute_loss_ce(model, batch, args)
 
 def compute_loss_mal(model, batch, args):
+    loss, accuracy = compute_loss_ce(model, batch, args)
+    boosted_loss = args.mal_boost * loss
+    return boosted_loss, accuracy
     images, targets = batch
     pred = model(images)
     loss = ce_criterion(pred, targets)
@@ -98,18 +101,15 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
     if args.eval_before_start:
         if args.is_malicious:
             # mal
-            mal_loss, mal_acc, _, _ = run_batches(model, None, None,
-                mal_loader, False, args)
+            mal_loss, mal_acc, _, _ = run_batches(
+                    model, None, None, mal_loader, False, args
+                )
             print("Mal acc at epoch 0: {:0.4f}".format(mal_acc))
-            if args.use_tensorboard:
-                writer.add_scalar('Loss/mal',   mal_loss,         -1)
-                writer.add_scalar('Acc/mal',    mal_acc,          -1)
-        # val
-        test_loss, test_acc, _, _ = run_batches(
-                model, None, None, test_loader, False, args
-            )
-        test_time = timer()
-        print("Test acc at epoch 0: {:0.4f}".format(test_acc))
+            # val
+            test_loss, test_acc, _, _ = run_batches(
+                    model, None, None, test_loader, False, args
+                )
+            print("Test acc at epoch 0: {:0.4f}".format(test_acc))
     for epoch in range(args.num_epochs):
         epoch_stats = {}
 
@@ -221,6 +221,11 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
             #model.zero_grad()
             losses.extend(loss)
             accs.extend(acc)
+            if args.dataset_name == "EMNIST":
+                lr = lr_scheduler.get_last_lr()[0]
+                print("LR: {:0.5f}, Loss: {:0.5f}, Acc: {:0.5f}".format(
+                        lr, loss.mean().item(), acc.mean().item()
+                     ))
             if args.do_test:
                 break
     else:
@@ -268,17 +273,20 @@ def get_data_loaders(args):
 
     mal_loader = None
     if args.is_malicious:
-        mal_dataset = dataset_class(args, args.dataset_dir, args.dataset_name, transform=train_transforms,
-                                  do_iid=args.do_iid, num_clients=args.num_clients,
-                                  train=True, download=False, malicious=True)
+        mal_dataset = dataset_class(args, args.dataset_dir, args.dataset_name, transform=val_transforms,
+                                 train=False, download=False, malicious=True)
         mal_loader = DataLoader(mal_dataset, 
-                                batch_size=args.mal_targets,
-                                num_workers=args.val_dataloader_workers)
+                                batch_size=test_batch_size,
+                                shuffle=False,
+                                #batch_size=args.mal_targets,
+                                num_workers=args.val_dataloader_workers
+                                )
 
     return train_loader, test_loader, mal_loader
 
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
+    print("MY PID:", os.getpid())
     """
     import cProfile
     import sys
