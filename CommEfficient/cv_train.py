@@ -277,8 +277,8 @@ if __name__ == "__main__":
     timer = Timer()
 
     # reproducibility
-    np.random.seed(21)
-    torch.random.manual_seed(21)
+    np.random.seed(args.seed)
+    torch.random.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
