@@ -195,16 +195,30 @@ def local_step(model, velocity, error, batch, compute_loss, args):
         to_transmit = velocity if velocity is not None else g
 
     if args.mode == "local_topk":
-        assert args.error_type == "local"
+        assert args.error_type in ["local", "none"]
         # topk is impossibly slow on CPU, very fast on GPU
         to_transmit = _topk(to_transmit.to(args.device), k=args.k)
+
         nz = to_transmit.nonzero()
-        # error feedback
-        error[nz] = 0
+        if error is not None:
+            # error feedback
+            error[nz] = 0
 
         # if we're doing local momentum, do momentum factor masking
         if args.local_momentum > 0:
             velocity[nz] = 0
+
+    # sketched sgd with local error accumulation doesn't really make
+    # sense, since when we send a sketch we don't know what portion
+    # of the sketch is the "error"
+    if error is not None:
+        assert args.mode not in ["sketch", "uncompressed"]
+
+    # we want to do momentum factor masking for all the compression
+    # methods, but that's not possible to do for sketching, since
+    # it's unknown which coordinates to mask out
+    if velocity is not None:
+        assert args.mode != "sketch"
 
     return results, to_transmit
 

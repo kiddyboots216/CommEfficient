@@ -544,7 +544,7 @@ def _server_helper_true_topk(gradient, Vvelocity, Verror, args, lr):
     return update * lr, Vvelocity, Verror
 
 def _server_helper_local_topk(local_topk_grad, Vvelocity, Verror, args, lr):
-    assert args.error_type == "local"
+    assert args.error_type in ["local", "none"]
 
     """
     # make a sparse tensor of the local topk
