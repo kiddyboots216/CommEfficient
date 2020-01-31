@@ -92,35 +92,9 @@ class FedModel:
         # ps_weights needs to be in shared memory so the workers can
         # update themselves with (possibly an approximation of) the
         # latest PS weights
-        g_ps_weights = torch.zeros(args.grad_size).to(args.device).float()
+        g_ps_weights = torch.zeros(args.grad_size).float()
         # store the initial weights of the model
         g_ps_weights[:] = param_vec[:]
-
-        if (self.args.num_epochs <= 1
-                and self.args.local_batch_size == -1):
-            # keeping track of download bytes is simpler in this
-            # case (see comments in _call_train)
-            self.updated_since_init = torch.zeros(args.grad_size,
-                                                  dtype=torch.bool,
-                                                  device=args.device)
-            self.prev_ps_weights = g_ps_weights.clone()
-        else:
-            # keeping track of download bytes is harder (see comments
-            # in _call_train)
-
-            # keep a deque of past ps_weights so we can calculate
-            # number of bytes a sparsely participating worker needs
-            # to download each iteration
-
-            # if clients are picked randomly, then a single client
-            # getting picked is a poisson process with rate
-            # participation, so the probability that a client won't
-            # be picked for more than 10/participation iterations
-            # is 1/e^10  < 0.005%
-            participation = args.num_workers / num_clients
-            maxlen = int(DEQUE_MAXLEN_MULT / participation)
-            self.ps_weights_history = deque([], maxlen=maxlen)
-            self.client_num_stale_iters = torch.zeros(num_clients).long()
 
         # g_lr is the current LR (used for fedavg) updated by
         # FedOptimizer
@@ -152,8 +126,6 @@ class FedModel:
             self.client_errors = torch.zeros(shape).share_memory_()
         if args.local_momentum > 0:
             g_client_velocities = torch.zeros(shape).share_memory_()
-
-        g_minibatch_gradient = torch.zeros(shape[1:]).to(args.device)
 
         if args.share_ps_gpu:
             n_worker_gpus = args.num_devices
@@ -189,6 +161,39 @@ class FedModel:
         os.environ["MASTER_PORT"] = str(args.port)
         torch.distributed.init_process_group("nccl", rank=0,
                                              world_size=world_size)
+
+        # now that we've started the child processes,
+        # we can safely move things to CUDA
+        g_ps_weights = g_ps_weights.to(args.device)
+
+        g_minibatch_gradient = torch.zeros(shape[1:]).to(args.device)
+
+        # set up tracking of downloaded bytes
+        if (self.args.num_epochs <= 1
+                and self.args.local_batch_size == -1):
+            # keeping track of download bytes is simpler in this
+            # case (see comments in _call_train)
+            self.updated_since_init = torch.zeros(args.grad_size,
+                                                  dtype=torch.bool,
+                                                  device=args.device)
+            self.prev_ps_weights = g_ps_weights.clone()
+        else:
+            # keeping track of download bytes is harder (see comments
+            # in _call_train)
+
+            # keep a deque of past ps_weights so we can calculate
+            # number of bytes a sparsely participating worker needs
+            # to download each iteration
+
+            # if clients are picked randomly, then a single client
+            # getting picked is a poisson process with rate
+            # participation, so the probability that a client won't
+            # be picked for more than 10/participation iterations
+            # is 1/e^10  < 0.005%
+            participation = args.num_workers / num_clients
+            maxlen = int(DEQUE_MAXLEN_MULT / participation)
+            self.ps_weights_history = deque([], maxlen=maxlen)
+            self.client_num_stale_iters = torch.zeros(num_clients).long()
 
     def finalize(self):
         # tell workers we're done
