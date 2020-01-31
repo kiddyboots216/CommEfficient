@@ -611,7 +611,7 @@ def _server_helper_sketched(sketched_grad, Vvelocity, Verror, args, lr):
     # which is expensive. So instead, just zero out the momentum sketch
     # anywhere where update is nonzero
     nz = sketched_update.nonzero()
-    Vvelocity[nz[:,0], nz[:,1]].zero_()
+    Vvelocity[nz[:,0], nz[:,1]] = 0
 
     return update * lr, Vvelocity, Verror
 
