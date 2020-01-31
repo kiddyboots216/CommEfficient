@@ -148,8 +148,9 @@ class FedModel:
         print(f"Shared memory array shape: {shape}")
 
         # don't make these arrays unless we need them
-        if args.error_type == "local" or args.local_momentum > 0:
+        if args.error_type == "local":
             self.client_errors = torch.zeros(shape).share_memory_()
+        if args.local_momentum > 0:
             g_client_velocities = torch.zeros(shape).share_memory_()
 
         g_minibatch_gradient = torch.zeros(shape[1:]).to(args.device)
