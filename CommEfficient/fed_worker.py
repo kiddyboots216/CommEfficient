@@ -29,7 +29,7 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
             # as if we were different workers for each batch
             # each batch in batches will have data belonging to a
             # single client (asserted in process_batch)
-            batches = batches_queue.get(timeout=30)
+            batches = batches_queue.get(timeout=120)
         except queue.Empty:
             print("batch queue was empty")
             return
