@@ -333,5 +333,5 @@ def clip_grad(l2_norm_clip, record):
     if l2_norm < l2_norm_clip:
         return record
     else:
-        return record / torch.abs(l2_norm / l2_norm_clip)
+        return record / float(torch.abs(torch.tensor(l2_norm) / l2_norm_clip))
 
