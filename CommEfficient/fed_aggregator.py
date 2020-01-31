@@ -316,7 +316,6 @@ class FedModel:
         for i, q in enumerate(self.results_queues):
             # procs might take a long time to process may workers, but
             # we need a timeout eventually in case the worker crashes
-            print("dequeueing ", i)
             r = q.get(timeout=600)
             if i in queue_idxs:
                 results.extend(r)
@@ -345,6 +344,8 @@ class FedModel:
                         for i in range(num_shards)]
 
         per_proc = len(batch_shards) // len(self.update_forward_grad_ps)
+        if per_proc == 0:
+            per_proc = 999
         proc_batches = [batch_shards[i:i + per_proc]
                         for i in range(0, len(batch_shards), per_proc)]
 
