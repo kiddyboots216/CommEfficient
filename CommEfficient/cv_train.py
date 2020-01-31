@@ -245,6 +245,7 @@ def get_data_loaders(args):
 
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
+    print("MY PID:", os.getpid())
     """
     import cProfile
     import sys
