@@ -191,6 +191,11 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
             #model.zero_grad()
             losses.extend(loss)
             accs.extend(acc)
+            if args.dataset_name == "EMNIST":
+                lr = lr_scheduler.get_last_lr()[0]
+                print("LR: {:0.5f}, Loss: {:0.5f}, Acc: {:0.5f}".format(
+                        lr, loss.mean().item(), acc.mean().item()
+                     ))
             if args.do_test:
                 break
     else:
