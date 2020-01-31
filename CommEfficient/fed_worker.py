@@ -117,7 +117,7 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
                 g, results = process_batch(
                         batch, model, local_ps_weights, client_weights,
                         client_errors, client_velocities,
-                        compute_loss_train, compute_loss_val, args
+                        compute_loss_train, compute_loss_val, args, 
                     )
 
             if is_train:
@@ -264,7 +264,7 @@ def forward_grad(model, batch, compute_loss, args, compute_grad=True):
     # gradient clipping
     if compute_grad and args.max_grad_norm is not None:
         torch.nn.utils.clip_grad_norm_(model.parameters(),
-                                       args.max_grad_norm)
+                                       args.max_grad_norm * num_iters)
 
     # "average" here is over the data in the batch
     average_loss = accum_loss / batch[0].size()[0]

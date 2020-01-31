@@ -6,9 +6,8 @@ from pytorch_transformers import (AdamW, OpenAIGPTDoubleHeadsModel,
                                   GPT2Tokenizer, WEIGHTS_NAME, CONFIG_NAME)
 
 from fed_aggregator import FedOptimizer, FedModel
-from utils import make_logdir
+from utils import make_logdir, PiecewiseLinear
 from utils import TableLogger, Timer, union
-from models.configs import PiecewiseLinear
 import torch
 from torch.optim import SGD
 from torch.utils.tensorboard import SummaryWriter
@@ -94,8 +93,7 @@ def compute_loss_train(model, batch, args):
         mc_token_ids=mc_token_ids,
         mc_labels=mc_labels, lm_labels=lm_labels
     )
-    loss = ((lm_loss * args.lm_coef + mc_loss * args.mc_coef)
-            / args.num_train_batch_shards)
+    loss = (lm_loss * args.lm_coef + mc_loss * args.mc_coef)
     # there are no metrics, but still need to return a tuple
     return loss,
 
@@ -116,13 +114,29 @@ def add_special_tokens_(model, tokenizer):
 def train_gpt2(model, opt, scheduler, train_loader, val_loader,
         args, log_dir, writer, logger=None, timer=None):
     timer = timer or Timer()
-    epochs = args.num_epochs
-    logger = logger or TableLogger()
-    for epoch in range(epochs):
-        mean_train_loss = run_batches(model, opt, scheduler, train_loader,
-                                 args, timer, training=True,
-                                 logger=logger, writer=writer)
-        model.save_pretrained(log_dir)
+
+    total_download = 0
+    total_upload = 0
+    for epoch in range(args.num_epochs):
+        mean_train_loss, download, upload = run_batches(model, opt, scheduler, 
+            train_loader, args, timer, epoch=epoch, training=True,
+            logger=logger, writer=writer)
+        download_mb = download.sum().item() / (1024*1024)
+        upload_mb = upload.sum().item() / (1024*1024)
+        total_download += download_mb
+        total_upload += upload_mb
+    print("Total Download (MiB): {:0.2f}".format(total_download))
+    print("Total Upload (MiB): {:0.2f}".format(total_upload))
+    print("Avg Download Per Client: {:0.2f}".format(
+        total_download / train_loader.dataset.num_clients
+    ))
+    print("Avg Upload Per Client: {:0.2f}".format(
+        total_upload / train_loader.dataset.num_clients
+    ))
+    model.save_pretrained(log_dir)
+    test_gpt2(model, val_loader, args, timer=timer, writer=writer)
+
+def test_gpt2(model, val_loader, args, logger=None, timer=None, writer=None):
         nll, acc, ppl = run_batches(model, None, None, val_loader, args,
                                     timer, training=False,
                                     logger=TableLogger(), writer=writer)
@@ -138,49 +152,63 @@ def train_gpt2(model, opt, scheduler, train_loader, val_loader,
         writer.add_scalar('validation/nll', nll)
         writer.add_scalar('validation/acc', acc)
         writer.add_scalar('validation/ppl', ppl)
-        valLogger = TableLogger()
-        lr = scheduler.get_lr()[0]
-        summary = union({'epoch': epoch+1,
-                         'lr': lr},
-                        epoch_stats)
+        valLogger = logger or TableLogger()
         print()
-        valLogger.append(summary)
+        valLogger.append(epoch_stats)
 
-def run_batches(model, opt, scheduler, loader, args,
-                timer, training, logger=None, writer=None):
-    num_clients = args.num_clients
-    clients = np.arange(num_clients)
+def run_batches(model, opt, lr_scheduler, loader, args,
+                timer, training, epoch=None, logger=None, writer=None):
+    model.train(training)
+    client_download = torch.zeros(args.num_clients)
+    client_upload = torch.zeros(args.num_clients)
 
     if training:
-        model.train(True)
+        epoch_idxs = epoch * len(loader) / (args.local_batch_size * args.num_workers)
         losses = []
         for batch_idx, batch in enumerate(loader):
-            loss, = model(batch)
-            scheduler.step()
+            lr_scheduler.step()
+            if lr_scheduler.get_lr() == 0:
+                # hack to get the starting LR right for fedavg
+                opt.step()
+
+            expected_numel = args.num_workers * args.local_batch_size
+            true_numel = batch[0].numel()
+            if true_numel < expected_numel:
+                # skip incomplete batches
+                print(f"True numel {true_numel} < expected numel {expected_numel}")
+                continue
+            loss, download, upload = model(batch)
+
+            client_download += download
+            client_upload += upload
+
             opt.step()
             loss = np.mean(loss)
             losses.append(loss)
             train_time = timer()
+            download_mb = download.sum().item() / (1024*1024)
+            upload_mb = upload.sum().item() / (1024*1024)
             batch_stats = {
                 'train_time': train_time,
                 'train_loss': loss,
                 'total_time': timer.total_time,
+                'down (MiB)': round(download_mb),
+                'up (MiB)': round(upload_mb),
             }
-            lr = scheduler.get_lr()[0]
+            lr = lr_scheduler.get_lr()[0]
 
-            writer.add_scalar('training/loss', loss, batch_idx)
-            writer.add_scalar('Lr', lr, batch_idx)
-            writer.add_scalar('Time/train', train_time, batch_idx)
-            summary = union({'batch_idx': batch_idx+1,
+            writer.add_scalar('training/loss', loss, batch_idx + epoch_idxs)
+            writer.add_scalar('Lr', lr, batch_idx + epoch_idxs)
+            writer.add_scalar('Time/train', train_time, batch_idx + epoch_idxs)
+            summary = union({'batch_idx': batch_idx+1 + epoch_idxs,
                              'lr': lr},
                             batch_stats)
             logger.append(summary)
             if batch_idx > 5 and args.do_test:
                 break
-        return np.mean(losses)
+        return np.mean(losses), client_download, client_upload
 
     else:
-        model.train(False)
         nlls, accs, ppls = [], [], []
         for batch_idx, batch in enumerate(loader):
             nll, acc = model(batch)
@@ -188,26 +216,14 @@ def run_batches(model, opt, scheduler, loader, args,
             acc = np.mean(acc)
             nlls.append(nll)
             accs.append(acc)
-            """
-            val_time = timer()
-            batch_stats = {
-                'test_time': val_time,
-                'test_nll': nll,
-                'test_acc': acc,
-                'test_ppl': ppl,
-                'total_time': timer.total_time,
-            }
-            summary = union({'batch_idx': batch_idx+1, }, batch_stats)
-            logger.append(summary)
-            """
             if batch_idx > 5 and args.do_test:
                 break
-        return np.mean(nlls), np.mean(accs), np.exp(np.mean(ppls))
+        return np.mean(nlls), np.mean(accs), np.exp(np.mean(nlls))
 
 def train():
     args = parse_args(default_lr=4e-2)
 
-    logger.info("Arguments: %s", pformat(args))
+    print(args)
 
     timer = Timer()
     logger.info("Prepare tokenizer, pretrained model and optimizer.")
@@ -219,6 +235,9 @@ def train():
         model_class = OpenAIGPTDoubleHeadsModel
 
     tokenizer = tokenizer_class.from_pretrained(args.model_checkpoint)
+    if args.do_finetune:
+        if not args.do_test:
+            args.model_checkpoint = args.finetune_path
     model = model_class.from_pretrained(args.model_checkpoint)
 
     args.len_tokenizer = len(tokenizer)
@@ -251,13 +270,15 @@ def train():
     lambda_step = lambda x: lr_schedule(x)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
                                                   lr_lambda=[lambda_step])
-    train_gpt2(model, optimizer, scheduler, train_loader, val_loader, args,
+    if args.do_finetune:
+        test_gpt2(model, val_loader, args, logger=TableLogger(), timer=timer, writer=writer)
+    else:
+        train_gpt2(model, optimizer, scheduler, train_loader, val_loader, args,
                log_dir, writer=writer, logger=TableLogger(), timer=timer)
     model.finalize()
 
 def get_data_loaders(args, tokenizer):
     train_dataset = FedPersonaChat(args.dataset_dir,
-                                   "Persona",
                                    tokenizer,
                                    args.num_candidates,
                                    args.max_history,
@@ -266,7 +287,6 @@ def get_data_loaders(args, tokenizer):
                                    num_clients=args.num_clients,
                                    train=True)
     val_dataset = FedPersonaChat(args.dataset_dir,
-                                 "Persona",
                                  tokenizer,
                                  args.num_candidates,
                                  args.max_history,
@@ -277,15 +297,21 @@ def get_data_loaders(args, tokenizer):
     train_loader = DataLoader(train_dataset,
                               batch_sampler=train_sampler,
                               collate_fn=personachat_collate_fn,
-                              num_workers=0)
+                              num_workers=args.train_dataloader_workers)
 
     val_batch_size = args.local_batch_size * args.num_workers
     val_loader = DataLoader(val_dataset, batch_size=val_batch_size,
                             collate_fn=personachat_collate_fn,
-                            shuffle=False)
+                            shuffle=False,
+                            num_workers=args.val_dataloader_workers)
 
     return train_loader, val_loader
 
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
+    # reproducibility
+    np.random.seed(21)
+    torch.random.manual_seed(21)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     train()
