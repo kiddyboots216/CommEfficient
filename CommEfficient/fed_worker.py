@@ -117,7 +117,7 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
                 g, results = process_batch(
                         batch, model, local_ps_weights, client_weights,
                         client_errors, client_velocities,
-                        compute_loss_train, compute_loss_val, args, rank
+                        compute_loss_train, compute_loss_val, args, 
                     )
 
             if is_train:
