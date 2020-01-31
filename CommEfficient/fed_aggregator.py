@@ -299,7 +299,9 @@ class FedModel:
         # and collect results
         results = []
         for results_queue in self.results_queues:
-            r = results_queue.get()
+            # procs might take a long time to process may workers, but
+            # we need a timeout eventually in case the worker crashes
+            r = results_queue.get(timeout=600)
             results.extend(r)
 
         if self.args.mode == "sketch":
