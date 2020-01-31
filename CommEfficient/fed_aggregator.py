@@ -175,7 +175,7 @@ class FedModel:
             self.updated_since_init = torch.zeros(args.grad_size,
                                                   dtype=torch.bool,
                                                   device=args.device)
-            self.prev_ps_weights = g_ps_weights.clone()
+            self.prev_ps_weights = g_ps_weights.clone().to(args.device)
         else:
             # keeping track of download bytes is harder (see comments
             # in _call_train)
@@ -243,10 +243,11 @@ class FedModel:
             # we can just maintain a single boolean tensor which is
             # True if the corresponding weight has been updated
             # since the beginning of training
-            diff = g_ps_weights - self.prev_ps_weights
+            ps_weights_gpu = g_ps_weights.to(self.args.device)
+            diff = ps_weights_gpu - self.prev_ps_weights
             updated = torch.ceil(diff.abs()).clamp(0, 1).bool()
             self.updated_since_init |= updated
-            self.prev_ps_weights = g_ps_weights.clone()
+            self.prev_ps_weights = ps_weights_gpu
             dload_participating = 4. * self.updated_since_init.sum()
             download_bytes = torch.zeros(self.num_clients)
             download_bytes[unique_clients] = dload_participating
