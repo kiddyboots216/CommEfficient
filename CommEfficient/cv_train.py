@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import math
 import os
 import torch.optim as optim
 from torch.optim.lr_scheduler import LambdaLR
@@ -78,6 +79,14 @@ def compute_loss_train(model, batch, args):
 def compute_loss_val(model, batch, args):
     return compute_loss_ce(model, batch, args)
 
+def steps_per_epoch(local_batch_size, dataset, num_workers):
+    if local_batch_size == -1:
+        spe = dataset.num_clients // num_workers
+    else:
+        batch_size = local_batch_size * num_workers
+        spe = np.ceil(len(dataset) / batch_size)
+    return spe
+
 def train(model, opt, lr_scheduler, train_loader, test_loader,
           args, writer, loggers=(), timer=None):
     timer = timer or Timer()
@@ -91,10 +100,17 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
             )
         test_time = timer()
         print("Test acc at epoch 0: {:0.4f}".format(test_acc))
-    for epoch in range(args.num_epochs):
+    # ceil in case num_epochs in case we want to do a
+    # fractional number of epochs
+    for epoch in range(math.ceil(args.num_epochs)):
+        if epoch == math.ceil(args.num_epochs) - 1:
+            epoch_fraction = args.num_epochs - epoch
+        else:
+            epoch_fraction = 1
         # train
         train_loss, train_acc, download, upload = run_batches(
-                model, opt, lr_scheduler, train_loader, True, args
+                model, opt, lr_scheduler, train_loader,
+                True, epoch_fraction, args
             )
         train_time = timer()
         download_mb = download.sum().item() / (1024*1024)
@@ -104,7 +120,7 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
 
         # val
         test_loss, test_acc, _, _ = run_batches(
-                model, None, None, test_loader, False, args
+                model, None, None, test_loader, False, 1, args
             )
         test_time = timer()
 
@@ -146,18 +162,33 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
     return summary
 
 #@profile
-def run_batches(model, opt, lr_scheduler, loader, training, args):
+def run_batches(model, opt, lr_scheduler, loader,
+                training, epoch_fraction, args):
+    if not training and epoch_fraction != 1:
+        raise ValueError("Must do full epochs for val")
+    if epoch_fraction > 1 or epoch_fraction <= 0:
+        msg = "Invalid epoch_fraction {}.".format(epoch_fraction)
+        msg += " Should satisfy 0 < epoch_fraction <= 1"
+        raise ValueError(msg)
+
     model.train(training)
     losses = []
     accs = []
 
     client_download = None
     client_upload = None
+    start_time = 0
     if training:
         num_clients = loader.dataset.num_clients
         client_download = torch.zeros(num_clients)
         client_upload = torch.zeros(num_clients)
+        spe = steps_per_epoch(args.local_batch_size, loader.dataset,
+                              args.num_workers)
         for i, batch in enumerate(loader):
+            # only carry out an epoch_fraction portion of the epoch
+            if i > spe * epoch_fraction:
+                break
+
             if args.use_local_sched:
                 for _ in range(args.num_local_iters):
                     lr_scheduler.step()
@@ -354,12 +385,10 @@ if __name__ == "__main__":
     # grad_reduction only controls how gradients from different
     # workers are combined
     # so the lr is multiplied by num_workers for both mean and median
-    if args.local_batch_size == -1:
-        steps_per_epoch = train_loader.dataset.num_clients // args.num_workers
-    else:
-        batch_size = args.local_batch_size * args.num_workers
-        steps_per_epoch = np.ceil(len(train_loader) / batch_size)
-    lambda_step = lambda step: lr_schedule(step / steps_per_epoch)
+    spe = steps_per_epoch(args.local_batch_size,
+                          train_loader.dataset,
+                          args.num_workers)
+    lambda_step = lambda step: lr_schedule(step / spe)
     lr_scheduler = LambdaLR(opt, lr_lambda=lambda_step)
 
     # set up output
