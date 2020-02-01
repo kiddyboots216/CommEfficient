@@ -276,7 +276,7 @@ def forward_grad(model, batch, compute_loss, args, compute_grad=True):
             loss.backward()
 
     # gradient clipping
-    if compute_grad and args.max_grad_norm is not None:
+    if compute_grad and args.max_grad_norm is not None and args.mode not in ["sketch"]:
         torch.nn.utils.clip_grad_norm_(model.parameters(),
                                        args.max_grad_norm * num_iters)
 
@@ -303,6 +303,9 @@ def forward_grad(model, batch, compute_loss, args, compute_grad=True):
             r=args.num_rows, device=args.device,
             numBlocks=args.num_blocks)
         sketch.accumulateVec(grad)
+        # gradient clipping
+        if compute_grad and args.max_grad_norm is not None:
+            sketch = clip_grad(args.max_grad_norm * num_iters, sketch)
         g = sketch.table
     elif args.mode == "true_topk":
         g = grad
