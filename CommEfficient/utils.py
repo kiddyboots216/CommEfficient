@@ -53,9 +53,8 @@ def make_logdir(args: dict):
     cols = args.num_cols
     k = args.k
     mode = args.mode
-    num_local_iters = args.num_local_iters
     sketch_str = f"{mode}: {rows} x {cols}" if mode == "sketch" else f"{mode}"
-    k_str = f"k: {k}" if mode in ["sketch", "true_topk", "local_topk"] else f"num_local_iters: {num_local_iters}"
+    k_str = f"k: {k}" if mode in ["sketch", "true_topk", "local_topk"] else ""
     workers = args.num_workers
     clients = args.num_clients
     clients_str = f"{workers}/{clients}"
@@ -112,7 +111,6 @@ def parse_args(default_lr=None):
     parser.add_argument("--seed", type=int, default=21)
 
     # data/model args
-    parser.add_argument("--num_data", type=int, default=50000)
     model_names = [m for m in dir(models)
                      if m[:2] != "__" and m[0].isupper()]
     parser.add_argument("--model", default="ResNet9",
@@ -170,8 +168,6 @@ def parse_args(default_lr=None):
                         help="How to combine gradients from workers")
     parser.add_argument("--lr_scale", type=float, default=default_lr)
     parser.add_argument("--pivot_epoch", type=float, default=5)
-    parser.add_argument("--mixup_alpha", type=float, default=1)
-    parser.add_argument("--mixup", action="store_true", dest="do_mixup")
 
     # parallelization args
     parser.add_argument("--port", type=int, default=5315)
@@ -184,8 +180,6 @@ def parse_args(default_lr=None):
     parser.add_argument("--num_devices", type=int,
                         default=1,
                         help="Number of gpus")
-    parser.add_argument("--num_local_iters", type=int, default=1)
-    parser.add_argument("--local_sched", action="store_true", dest="use_local_sched")
     parser.add_argument("--share_ps_gpu", action="store_true")
     parser.add_argument("--iid", action="store_true", dest="do_iid")
     parser.add_argument("--train_dataloader_workers",
@@ -202,7 +196,7 @@ def parse_args(default_lr=None):
                         help=("Number of previous exchanges to keep"
                               " in history"))
     parser.add_argument("--local_batch_size", type=int, default=8,
-                        help="Batch size for training")
+                        help="Batch size for training (-1 corresponds to fedavg)")
     parser.add_argument("--valid_batch_size", type=int, default=8,
                         help="Batch size for validation")
     parser.add_argument("--num_train_batch_shards", type=int,
@@ -225,9 +219,6 @@ def parse_args(default_lr=None):
     parser.add_argument("--eval_before_start", action='store_true',
                         help=("If true start with a first evaluation"
                               " before training"))
-    parser.add_argument("--fp16", type=str, default="",
-                        help=("Set to O0, O1, O2 or O3 for fp16 training"
-                              " (see apex documentation)"))
 
     # Differential Privacy args
     parser.add_argument("--dp", action="store_true", dest="do_dp", help=("Whether to do differentially private training)"))

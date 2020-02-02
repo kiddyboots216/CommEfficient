@@ -114,11 +114,18 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
 
             else:
                 # for all non-fedavg modes, we just do a single step
-                g, results = process_batch(
-                        batch, model, local_ps_weights, client_weights,
-                        client_errors, client_velocities,
-                        compute_loss_train, compute_loss_val, args, 
-                    )
+                if args.do_test:
+                    # daniel says don't commit debugging code but i don't want to type this out everytime 
+                    if is_train:
+                        g, results = torch.ones(args.grad_size).cuda(), tuple(1.0 for _ in range(args.num_results_train))
+                    else:
+                        g, results = torch.ones(args.grad_size).cuda(), tuple(1.0 for _ in range(args.num_results_val))
+                else:
+                    g, results = process_batch(
+                            batch, model, local_ps_weights, client_weights,
+                            client_errors, client_velocities,
+                            compute_loss_train, compute_loss_val, args, 
+                        )
 
             if is_train:
                 sum_g += g

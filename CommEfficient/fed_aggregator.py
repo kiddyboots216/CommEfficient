@@ -86,7 +86,6 @@ class FedModel:
                 param_vec.append(p.data.view(-1))
         param_vec = torch.cat(param_vec)
         args.grad_size = grad_size
-        print("grad_size", grad_size)
         self.args = args
 
         # ps_weights needs to be in shared memory so the workers can
@@ -120,7 +119,6 @@ class FedModel:
         elif args.mode in ["local_topk", "true_topk", "fedavg",
                            "uncompressed"]:
             shape = (num_clients, args.grad_size)
-        print(f"Shared memory array shape: {shape}")
 
         # don't make these arrays unless we need them
         if args.error_type == "local":
@@ -233,8 +231,7 @@ class FedModel:
             # We should never get here, but this is always going to throw
             # an error since the 3rd argument to range in the below line
             # can never be 0
-            per_proc = 999
-            #assert False
+            assert False
         proc_batches = [worker_batches[i:i + per_proc]
                         for i in range(0, len(worker_batches), per_proc)]
 
@@ -310,6 +307,7 @@ class FedModel:
             chosen_batch = proc_batches[batch_idx]
             queue.put(chosen_batch)
             queue_idxs.append(i)
+
 
         # get results from each process (which have already been aggregated
         # over the batches we gave to that process)
