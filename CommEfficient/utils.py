@@ -151,7 +151,7 @@ def parse_args(default_lr=None):
     parser.add_argument("--local_momentum", type=float, default=0.9)
     parser.add_argument("--virtual_momentum", type=float, default=0)
     parser.add_argument("--weight_decay", type=float, default=5e-4)
-    parser.add_argument("--num_epochs", type=int, default=24,
+    parser.add_argument("--num_epochs", type=float, default=24,
                         help="Number of training epochs")
     parser.add_argument("--num_fedavg_epochs", type=int, default=1)
     parser.add_argument("--fedavg_batch_size", type=int, default=-1)
