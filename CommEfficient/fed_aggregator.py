@@ -166,8 +166,8 @@ class FedModel:
         g_minibatch_gradient = torch.zeros(shape[1:]).to(args.device)
 
         # set up tracking of downloaded bytes
-        if (self.args.num_epochs <= 1
-                or self.args.local_batch_size == -1):
+        if ((self.args.num_epochs <= 1 and self.args.local_batch_size == -1)
+                or (self.args.dataset_name == "PERSONA")): # HACK for PERSONA
             # keeping track of download bytes is simpler in this
             # case (see comments in _call_train)
             self.updated_since_init = torch.zeros(args.grad_size,
