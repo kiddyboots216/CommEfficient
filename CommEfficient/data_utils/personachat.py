@@ -42,10 +42,8 @@ class FedPersonaChat(torch.utils.data.Dataset):
         self.type = "train" if train else "val"
 
         self.do_iid = do_iid
-        """
         if not do_iid and num_clients is not None:
             raise ValueError("can't specify # clients when non-iid")
-        """
         self._num_clients = num_clients
 
         if download and not os.path.exists(dataset_dir):

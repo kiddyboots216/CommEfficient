@@ -12,6 +12,7 @@ import torch
 from torch.optim import SGD
 from torch.utils.tensorboard import SummaryWriter
 from utils import parse_args, Logger
+import math
 
 from torch.utils.data import DataLoader
 from data_utils import FedSampler
@@ -117,9 +118,14 @@ def train_gpt2(model, opt, scheduler, train_loader, val_loader,
 
     total_download = 0
     total_upload = 0
-    for epoch in range(int(args.num_epochs)):
+    for epoch in range(math.ceil(args.num_epochs)):
+        model.set_epoch_num(epoch)
+        if epoch == math.ceil(args.num_epochs) - 1:
+            epoch_fraction = args.num_epochs - epoch
+        else:
+            epoch_fraction = 1
         mean_train_loss, download, upload = run_batches(model, opt, scheduler, 
-            train_loader, args, timer, epoch=epoch, training=True,
+            train_loader, args, timer, epoch_fraction=epoch_fraction, training=True,
             logger=logger, writer=writer)
         download_mb = download.sum().item() / (1024*1024)
         upload_mb = upload.sum().item() / (1024*1024)
@@ -157,7 +163,14 @@ def test_gpt2(model, val_loader, args, logger=None, timer=None, writer=None):
         valLogger.append(epoch_stats)
 
 def run_batches(model, opt, lr_scheduler, loader, args,
-                timer, training, epoch=None, logger=None, writer=None):
+                timer, training, epoch_fraction=None, logger=None, writer=None):
+    if not training and epoch_fraction != 1:
+        raise ValueError("Must do full epochs for val")
+    if epoch_fraction > 1 or epoch_fraction <= 0:
+        msg = "Invalid epoch_fraction {}.".format(epoch_fraction)
+        msg += " Should satisfy 0 < epoch_fraction <= 1"
+        raise ValueError(msg)
+
     model.train(training)
     client_download = torch.zeros(loader.dataset.num_clients)
     client_upload = torch.zeros(loader.dataset.num_clients)
@@ -166,12 +179,15 @@ def run_batches(model, opt, lr_scheduler, loader, args,
                           args.num_workers)
 
     if training:
-        epoch_idxs = epoch * spe
+        epoch_idxs = epoch_fraction * spe
         losses = []
         for batch_idx, batch in enumerate(loader):
             if batch_idx > 2 and args.do_test and batch_idx < spe - 10:
                 print("skipping ", batch_idx)
                 continue
+            # only carry out an epoch_fraction portion of the epoch
+            if batch_idx > spe * epoch_fraction:
+                break
             lr_scheduler.step()
             if lr_scheduler.get_lr() == 0:
                 # hack to get the starting LR right for fedavg

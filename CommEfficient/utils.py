@@ -196,7 +196,7 @@ def parse_args(default_lr=None):
                         help=("Number of previous exchanges to keep"
                               " in history"))
     parser.add_argument("--local_batch_size", type=int, default=8,
-                        help="Batch size for training (-1 corresponds to fedavg)")
+                        help="Batch size for training (-1 uses all data the client has)")
     parser.add_argument("--valid_batch_size", type=int, default=8,
                         help="Batch size for validation")
     parser.add_argument("--num_train_batch_shards", type=int,
