@@ -7,7 +7,7 @@ from pytorch_transformers import (AdamW, OpenAIGPTDoubleHeadsModel,
 
 from fed_aggregator import FedOptimizer, FedModel
 from utils import make_logdir, PiecewiseLinear
-from utils import TableLogger, Timer, union
+from utils import TableLogger, Timer, union, steps_per_epoch
 import torch
 from torch.optim import SGD
 from torch.utils.tensorboard import SummaryWriter
@@ -117,7 +117,7 @@ def train_gpt2(model, opt, scheduler, train_loader, val_loader,
 
     total_download = 0
     total_upload = 0
-    for epoch in range(args.num_epochs):
+    for epoch in range(int(args.num_epochs)):
         mean_train_loss, download, upload = run_batches(model, opt, scheduler, 
             train_loader, args, timer, epoch=epoch, training=True,
             logger=logger, writer=writer)
@@ -159,8 +159,8 @@ def test_gpt2(model, val_loader, args, logger=None, timer=None, writer=None):
 def run_batches(model, opt, lr_scheduler, loader, args,
                 timer, training, epoch=None, logger=None, writer=None):
     model.train(training)
-    client_download = torch.zeros(args.num_clients)
-    client_upload = torch.zeros(args.num_clients)
+    client_download = torch.zeros(loader.dataset.num_clients)
+    client_upload = torch.zeros(loader.dataset.num_clients)
 
     if training:
         epoch_idxs = epoch * len(loader) / (args.local_batch_size * args.num_workers)
@@ -176,7 +176,7 @@ def run_batches(model, opt, lr_scheduler, loader, args,
             if true_numel < expected_numel:
                 # skip incomplete batches
                 print(f"True numel {true_numel} < expected numel {expected_numel}")
-                continue
+                #continue
             loss, download, upload = model(batch)
 
             client_download += download
@@ -264,8 +264,11 @@ def train():
     model = FedModel(model, compute_loss_train, args, compute_loss_val)
     optimizer = FedOptimizer(optimizer, args)
     batch_size = args.local_batch_size * args.num_workers
+    spe = steps_per_epoch(args.local_batch_size,
+                          train_loader.dataset,
+                          args.num_workers)
     lr_schedule = PiecewiseLinear(
-            [0, args.num_epochs * len(train_loader) / batch_size],
+            [0, args.num_epochs * spe],
             [args.lr_scale, 0.0])
     lambda_step = lambda x: lr_schedule(x)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
@@ -299,7 +302,7 @@ def get_data_loaders(args, tokenizer):
                               collate_fn=personachat_collate_fn,
                               num_workers=args.train_dataloader_workers)
 
-    val_batch_size = args.local_batch_size * args.num_workers
+    val_batch_size = args.valid_batch_size * args.num_workers
     val_loader = DataLoader(val_dataset, batch_size=val_batch_size,
                             collate_fn=personachat_collate_fn,
                             shuffle=False,

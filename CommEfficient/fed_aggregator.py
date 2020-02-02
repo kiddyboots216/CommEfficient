@@ -68,7 +68,7 @@ class FedModel:
         if args.num_clients is None:
             num_clients = {"EMNIST": 3500,
                            "CIFAR10": None, # don't support non-iid cifar
-                           None: 175468 # personachat
+                           "PERSONA": 17568 # personachat
                            }[args.dataset_name]
         self.num_clients = num_clients
 
@@ -169,7 +169,7 @@ class FedModel:
 
         # set up tracking of downloaded bytes
         if (self.args.num_epochs <= 1
-                and self.args.local_batch_size == -1):
+                or self.args.local_batch_size == -1):
             # keeping track of download bytes is simpler in this
             # case (see comments in _call_train)
             self.updated_since_init = torch.zeros(args.grad_size,
@@ -233,13 +233,14 @@ class FedModel:
             # We should never get here, but this is always going to throw
             # an error since the 3rd argument to range in the below line
             # can never be 0
-            assert False
+            per_proc = 999
+            #assert False
         proc_batches = [worker_batches[i:i + per_proc]
                         for i in range(0, len(worker_batches), per_proc)]
 
         download_bytes = None
         if (self.args.num_epochs <= 1
-                and self.args.local_batch_size == -1):
+                or self.args.local_batch_size == -1):
             # we can just maintain a single boolean tensor which is
             # True if the corresponding weight has been updated
             # since the beginning of training

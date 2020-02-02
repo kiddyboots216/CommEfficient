@@ -13,7 +13,7 @@ import torchvision
 import models
 from fed_aggregator import FedModel, FedOptimizer
 from utils import make_logdir, union, Timer, TableLogger, parse_args
-from utils import PiecewiseLinear, Exp, num_classes_of_dataset
+from utils import PiecewiseLinear, Exp, num_classes_of_dataset, steps_per_epoch
 from data_utils import FedSampler, FedCIFAR10, FedImageNet, FedCIFAR100, FedEMNIST
 from data_utils import cifar10_train_transforms, cifar10_test_transforms
 from data_utils import cifar100_train_transforms, cifar100_test_transforms
@@ -78,14 +78,6 @@ def compute_loss_train(model, batch, args):
 
 def compute_loss_val(model, batch, args):
     return compute_loss_ce(model, batch, args)
-
-def steps_per_epoch(local_batch_size, dataset, num_workers):
-    if local_batch_size == -1:
-        spe = dataset.num_clients // num_workers
-    else:
-        batch_size = local_batch_size * num_workers
-        spe = np.ceil(len(dataset) / batch_size)
-    return spe
 
 def train(model, opt, lr_scheduler, train_loader, test_loader,
           args, writer, loggers=(), timer=None):

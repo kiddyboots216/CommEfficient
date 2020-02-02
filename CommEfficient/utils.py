@@ -37,7 +37,8 @@ class Exp(namedtuple("Exp", ("warmup_epochs", "amplitude", "decay_len"))):
 fed_datasets = {"CIFAR10": 10,
                 "CIFAR100": 100,
                 "EMNIST": 62,
-                "ImageNet": 1000}
+                "ImageNet": 1000,
+                "PERSONA": -1}
 
 def num_classes_of_dataset(dataset_name):
     return fed_datasets[dataset_name]
@@ -326,4 +327,12 @@ def clip_grad(l2_norm_clip, record):
         return record
     else:
         return record / float(torch.abs(torch.tensor(l2_norm) / l2_norm_clip))
+
+def steps_per_epoch(local_batch_size, dataset, num_workers):
+    if local_batch_size == -1:
+        spe = dataset.num_clients // num_workers
+    else:
+        batch_size = local_batch_size * num_workers
+        spe = np.ceil(len(dataset) / batch_size)
+    return spe
 
