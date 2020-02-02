@@ -305,7 +305,7 @@ def forward_grad(model, batch, compute_loss, args, compute_grad=True):
         sketch.accumulateVec(grad)
         # gradient clipping
         if compute_grad and args.max_grad_norm is not None:
-            sketch = clip_grad(args.max_grad_norm * num_iters, sketch)
+            sketch = clip_grad(args.max_grad_norm, sketch)
         g = sketch.table
     elif args.mode == "true_topk":
         g = grad
