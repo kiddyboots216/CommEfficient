@@ -2,6 +2,7 @@ import torch
 import numpy as np
 import math
 import os
+import time
 import torch.optim as optim
 from torch.optim.lr_scheduler import LambdaLR
 import torch.nn as nn
@@ -204,13 +205,16 @@ def run_batches(model, opt, lr_scheduler, loader,
                 expected_num_clients = args.num_workers
                 if torch.unique(batch[0]).numel() < expected_num_clients:
                     # skip if there weren't enough clients left
-                    print("SKIPPING BATCH: NOT ENOUGH CLIENTS")
+                    msg = "SKIPPING BATCH: NOT ENOUGH CLIENTS ({} < {})"
+                    print(msg.format(torch.unique(batch[0]).numel(),
+                                     expected_num_clients))
                     continue
             else:
                 expected_numel = args.num_workers * args.local_batch_size
                 if batch[0].numel() < expected_numel:
                     # skip incomplete batches
-                    print("SKIPPING BATCH: NOT ENOUGH DATA")
+                    msg = "SKIPPING BATCH: NOT ENOUGH DATA ({} < {})"
+                    print(msg.format(batch[0].numel(), expected_numel))
                     continue
 
             loss, acc, download, upload = model(batch)
@@ -224,9 +228,10 @@ def run_batches(model, opt, lr_scheduler, loader,
             accs.extend(acc)
             if args.dataset_name == "EMNIST":
                 lr = lr_scheduler.get_last_lr()[0]
-                print("LR: {:0.5f}, Loss: {:0.5f}, Acc: {:0.5f}".format(
-                        lr, loss.mean().item(), acc.mean().item()
+                print("LR: {:0.5f}, Loss: {:0.5f}, Acc: {:0.5f}, Time: {:0.2f}".format(
+                        lr, loss.mean().item(), acc.mean().item(), time.time() - start_time
                      ))
+                start_time = time.time()
             if args.do_test:
                 break
     else:
