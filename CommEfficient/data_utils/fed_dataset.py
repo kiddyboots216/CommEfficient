@@ -17,8 +17,8 @@ class FedDataset(torch.utils.data.Dataset):
         self._num_clients = num_clients
         self.type = "train" if train else "val"
 
-        #if not do_iid and num_clients is not None:
-        #    raise ValueError("can't specify # clients when non-iid")
+        if not do_iid and num_clients is not None:
+            raise ValueError("can't specify # clients when non-iid")
 
         if not os.path.exists(self.stats_fn()):
             self.prepare_datasets(download=download)

@@ -7,11 +7,12 @@ from pytorch_transformers import (AdamW, OpenAIGPTDoubleHeadsModel,
 
 from fed_aggregator import FedOptimizer, FedModel
 from utils import make_logdir, PiecewiseLinear
-from utils import TableLogger, Timer, union
+from utils import TableLogger, Timer, union, steps_per_epoch
 import torch
 from torch.optim import SGD
 from torch.utils.tensorboard import SummaryWriter
 from utils import parse_args, Logger
+import math
 
 from torch.utils.data import DataLoader
 from data_utils import FedSampler
@@ -117,9 +118,14 @@ def train_gpt2(model, opt, scheduler, train_loader, val_loader,
 
     total_download = 0
     total_upload = 0
-    for epoch in range(args.num_epochs):
+    for epoch in range(math.ceil(args.num_epochs)):
+        model.set_epoch_num(epoch)
+        if epoch == math.ceil(args.num_epochs) - 1:
+            epoch_fraction = args.num_epochs - epoch
+        else:
+            epoch_fraction = 1
         mean_train_loss, download, upload = run_batches(model, opt, scheduler, 
-            train_loader, args, timer, epoch=epoch, training=True,
+            train_loader, args, timer, epoch_fraction=epoch_fraction, training=True,
             logger=logger, writer=writer)
         download_mb = download.sum().item() / (1024*1024)
         upload_mb = upload.sum().item() / (1024*1024)
@@ -157,26 +163,49 @@ def test_gpt2(model, val_loader, args, logger=None, timer=None, writer=None):
         valLogger.append(epoch_stats)
 
 def run_batches(model, opt, lr_scheduler, loader, args,
-                timer, training, epoch=None, logger=None, writer=None):
+                timer, training, epoch_fraction=None, logger=None, writer=None):
+    if not training and epoch_fraction != 1:
+        raise ValueError("Must do full epochs for val")
+    if epoch_fraction > 1 or epoch_fraction <= 0:
+        msg = "Invalid epoch_fraction {}.".format(epoch_fraction)
+        msg += " Should satisfy 0 < epoch_fraction <= 1"
+        raise ValueError(msg)
+
     model.train(training)
-    client_download = torch.zeros(args.num_clients)
-    client_upload = torch.zeros(args.num_clients)
+    client_download = torch.zeros(loader.dataset.num_clients)
+    client_upload = torch.zeros(loader.dataset.num_clients)
+    spe = steps_per_epoch(args.local_batch_size,
+                          loader.dataset,
+                          args.num_workers)
 
     if training:
-        epoch_idxs = epoch * len(loader) / (args.local_batch_size * args.num_workers)
+        epoch_idxs = model.epoch_num * spe
         losses = []
         for batch_idx, batch in enumerate(loader):
+            if batch_idx > 2 and args.do_test and batch_idx < spe - 10:
+                print("skipping ", batch_idx)
+                continue
+            # only carry out an epoch_fraction portion of the epoch
+            if batch_idx > spe * epoch_fraction:
+                break
             lr_scheduler.step()
             if lr_scheduler.get_lr() == 0:
                 # hack to get the starting LR right for fedavg
                 opt.step()
 
-            expected_numel = args.num_workers * args.local_batch_size
-            true_numel = batch[0].numel()
-            if true_numel < expected_numel:
-                # skip incomplete batches
-                print(f"True numel {true_numel} < expected numel {expected_numel}")
-                continue
+            if args.local_batch_size == -1:
+                expected_num_clients = args.num_workers
+                if torch.unique(batch[0]).numel() < expected_num_clients:
+                    # skip if there weren't enough clients left
+                    print("SKIPPING BATCH: NOT ENOUGH CLIENTS")
+                    continue
+            else:
+                expected_numel = args.num_workers * args.local_batch_size
+                if batch[0].numel() < expected_numel:
+                    # skip incomplete batches
+                    print("SKIPPING BATCH: NOT ENOUGH DATA")
+                    continue
+
             loss, download, upload = model(batch)
 
             client_download += download
@@ -204,20 +233,19 @@ def run_batches(model, opt, lr_scheduler, loader, args,
                              'lr': lr},
                             batch_stats)
             logger.append(summary)
-            if batch_idx > 5 and args.do_test:
-                break
         return np.mean(losses), client_download, client_upload
 
     else:
         nlls, accs, ppls = [], [], []
         for batch_idx, batch in enumerate(loader):
+            if batch_idx > 5 and args.do_test and batch_idx < spe - 5:
+                print("skipping ", batch_idx)
+                continue
             nll, acc = model(batch)
             nll = np.mean(nll)
             acc = np.mean(acc)
             nlls.append(nll)
             accs.append(acc)
-            if batch_idx > 5 and args.do_test:
-                break
         return np.mean(nlls), np.mean(accs), np.exp(np.mean(nlls))
 
 def train():
@@ -263,9 +291,12 @@ def train():
     logger.info("Initializing everything")
     model = FedModel(model, compute_loss_train, args, compute_loss_val)
     optimizer = FedOptimizer(optimizer, args)
-    batch_size = args.local_batch_size * args.num_workers
+    spe = steps_per_epoch(args.local_batch_size,
+                          train_loader.dataset,
+                          args.num_workers)
+    print("Steps per epoch", spe)
     lr_schedule = PiecewiseLinear(
-            [0, args.num_epochs * len(train_loader) / batch_size],
+            [0, args.num_epochs * spe],
             [args.lr_scale, 0.0])
     lambda_step = lambda x: lr_schedule(x)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
@@ -299,7 +330,7 @@ def get_data_loaders(args, tokenizer):
                               collate_fn=personachat_collate_fn,
                               num_workers=args.train_dataloader_workers)
 
-    val_batch_size = args.local_batch_size * args.num_workers
+    val_batch_size = args.valid_batch_size * args.num_workers
     val_loader = DataLoader(val_dataset, batch_size=val_batch_size,
                             collate_fn=personachat_collate_fn,
                             shuffle=False,

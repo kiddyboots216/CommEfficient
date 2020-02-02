@@ -68,7 +68,7 @@ class FedModel:
         if args.num_clients is None:
             num_clients = {"EMNIST": 3500,
                            "CIFAR10": None, # don't support non-iid cifar
-                           None: 175468 # personachat
+                           "PERSONA": 17568 # personachat
                            }[args.dataset_name]
         self.num_clients = num_clients
 
@@ -86,7 +86,6 @@ class FedModel:
                 param_vec.append(p.data.view(-1))
         param_vec = torch.cat(param_vec)
         args.grad_size = grad_size
-        print("grad_size", grad_size)
         self.args = args
 
         # ps_weights needs to be in shared memory so the workers can
@@ -120,7 +119,6 @@ class FedModel:
         elif args.mode in ["local_topk", "true_topk", "fedavg",
                            "uncompressed"]:
             shape = (num_clients, args.grad_size)
-        print(f"Shared memory array shape: {shape}")
 
         # don't make these arrays unless we need them
         if args.error_type == "local":
@@ -169,7 +167,7 @@ class FedModel:
 
         # set up tracking of downloaded bytes
         if (self.args.num_epochs <= 1
-                and self.args.local_batch_size == -1):
+                or self.args.local_batch_size == -1):
             # keeping track of download bytes is simpler in this
             # case (see comments in _call_train)
             self.updated_since_init = torch.zeros(args.grad_size,
@@ -206,6 +204,9 @@ class FedModel:
     def train(self, training):
         self.training = training
 
+    def set_epoch_num(self, epoch_num):
+        self.epoch_num = epoch_num
+
     def save_pretrained(self, log_dir):
         global g_ps_weights
         set_param_vec(self.model, g_ps_weights.cpu())
@@ -237,20 +238,22 @@ class FedModel:
         proc_batches = [worker_batches[i:i + per_proc]
                         for i in range(0, len(worker_batches), per_proc)]
 
-        download_bytes = None
-        if (self.args.num_epochs <= 1
-                and self.args.local_batch_size == -1):
-            # we can just maintain a single boolean tensor which is
-            # True if the corresponding weight has been updated
-            # since the beginning of training
-            ps_weights_gpu = g_ps_weights.to(self.args.device)
-            diff = ps_weights_gpu - self.prev_ps_weights
-            updated = torch.ceil(diff.abs()).clamp(0, 1).bool()
-            self.updated_since_init |= updated
-            self.prev_ps_weights = ps_weights_gpu
-            dload_participating = 4. * self.updated_since_init.sum()
-            download_bytes = torch.zeros(self.num_clients)
-            download_bytes[unique_clients] = dload_participating
+        download_bytes = torch.zeros(self.num_clients)
+        if (
+            self.args.num_epochs <= 1 and self.args.local_batch_size == -1
+            ) or (self.args.dataset_name in ["PERSONA"]): # HACK for PERSONA
+            if not(self.args.dataset_name in ["PERSONA"] and self.epoch_num > 0):
+                # HACK for PERSONA
+                # we can just maintain a single boolean tensor which is
+                # True if the corresponding weight has been updated
+                # since the beginning of training
+                ps_weights_gpu = g_ps_weights.to(self.args.device)
+                diff = ps_weights_gpu - self.prev_ps_weights
+                updated = torch.ceil(diff.abs()).clamp(0, 1).bool()
+                self.updated_since_init |= updated
+                self.prev_ps_weights = ps_weights_gpu
+                dload_participating = 4. * self.updated_since_init.sum()
+                download_bytes[unique_clients] = dload_participating
         else:
             # we have to keep a full history of the ps weights
             # at every iteration, since a client could need to be
@@ -287,20 +290,20 @@ class FedModel:
                      ).clamp(0, 1).sum()
                      for prev in client_prev_weights]
                 )
-            download_bytes = torch.zeros(self.num_clients)
             download_bytes[unique_clients] = download_bytes_participating
             self.client_num_stale_iters[unique_clients] = 0
             self.client_num_stale_iters += 1
 
-        upload_bytes_participating = {
-                    "uncompressed": self.args.grad_size,
-                    "true_topk": self.args.grad_size,
-                    "local_topk": self.args.k,
-                    "sketch": self.args.num_rows * self.args.num_cols,
-                    "fedavg": self.args.grad_size
-                }[self.args.mode] * 4
         upload_bytes = torch.zeros(self.num_clients)
-        upload_bytes[unique_clients] = upload_bytes_participating
+        if not(self.args.dataset_name in ["PERSONA"] and self.epoch_num > 0):
+            upload_bytes_participating = {
+                        "uncompressed": self.args.grad_size,
+                        "true_topk": self.args.grad_size,
+                        "local_topk": self.args.k,
+                        "sketch": self.args.num_rows * self.args.num_cols,
+                        "fedavg": self.args.grad_size
+                    }[self.args.mode] * 4
+            upload_bytes[unique_clients] = upload_bytes_participating
 
         queue_idxs = []
 
@@ -309,6 +312,7 @@ class FedModel:
             chosen_batch = proc_batches[batch_idx]
             queue.put(chosen_batch)
             queue_idxs.append(i)
+
 
         # get results from each process (which have already been aggregated
         # over the batches we gave to that process)
