@@ -179,7 +179,7 @@ def run_batches(model, opt, lr_scheduler, loader, args,
                           args.num_workers)
 
     if training:
-        epoch_idxs = epoch_fraction * spe
+        epoch_idxs = model.epoch_num * spe
         losses = []
         for batch_idx, batch in enumerate(loader):
             if batch_idx > 2 and args.do_test and batch_idx < spe - 10:
