@@ -204,9 +204,6 @@ class FedModel:
     def train(self, training):
         self.training = training
 
-    def set_epoch_num(self, epoch_num):
-        self.epoch_num = epoch_num
-
     def save_pretrained(self, log_dir):
         global g_ps_weights
         set_param_vec(self.model, g_ps_weights.cpu())

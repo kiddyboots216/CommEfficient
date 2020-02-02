@@ -119,14 +119,15 @@ def train_gpt2(model, opt, scheduler, train_loader, val_loader,
     total_download = 0
     total_upload = 0
     for epoch in range(math.ceil(args.num_epochs)):
-        model.set_epoch_num(epoch)
         if epoch == math.ceil(args.num_epochs) - 1:
             epoch_fraction = args.num_epochs - epoch
         else:
             epoch_fraction = 1
-        mean_train_loss, download, upload = run_batches(model, opt, scheduler, 
-            train_loader, args, timer, epoch_fraction=epoch_fraction, training=True,
-            logger=logger, writer=writer)
+        mean_train_loss, download, upload = run_batches(
+                model, opt, scheduler, train_loader, args, timer, epoch=epoch,
+                epoch_fraction=epoch_fraction, training=True, logger=logger,
+                writer=writer
+            )
 
         # fed_aggregator's download tracking only works for the first epoch
         if epoch == 0:
@@ -165,8 +166,8 @@ def test_gpt2(model, val_loader, args, logger=None, timer=None, writer=None):
         print()
         valLogger.append(epoch_stats)
 
-def run_batches(model, opt, lr_scheduler, loader, args,
-                timer, training, epoch_fraction=None, logger=None, writer=None):
+def run_batches(model, opt, lr_scheduler, loader, args, timer, training,
+                epoch=None, epoch_fraction=None, logger=None, writer=None):
     if not training and epoch_fraction != 1:
         raise ValueError("Must do full epochs for val")
     if epoch_fraction > 1 or epoch_fraction <= 0:
@@ -182,7 +183,7 @@ def run_batches(model, opt, lr_scheduler, loader, args,
                           args.num_workers)
 
     if training:
-        epoch_idxs = model.epoch_num * spe
+        epoch_idxs = epoch * spe
         losses = []
         for batch_idx, batch in enumerate(loader):
             if batch_idx > 2 and args.do_test and batch_idx < spe - 10:
