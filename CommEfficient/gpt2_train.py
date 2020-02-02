@@ -127,16 +127,19 @@ def train_gpt2(model, opt, scheduler, train_loader, val_loader,
         mean_train_loss, download, upload = run_batches(model, opt, scheduler, 
             train_loader, args, timer, epoch_fraction=epoch_fraction, training=True,
             logger=logger, writer=writer)
-        download_mb = download.sum().item() / (1024*1024)
-        upload_mb = upload.sum().item() / (1024*1024)
-        total_download += download_mb
-        total_upload += upload_mb
-    print("Total Download (MiB): {:0.2f}".format(total_download))
-    print("Total Upload (MiB): {:0.2f}".format(total_upload))
-    print("Avg Download Per Client: {:0.2f}".format(
+
+        # fed_aggregator's download tracking only works for the first epoch
+        if epoch == 0:
+            download_mb = download.sum().item() / (1024*1024)
+            upload_mb = upload.sum().item() / (1024*1024)
+            total_download += download_mb
+            total_upload += upload_mb
+    print("Total Download (MiB): {:0.2f} (only epoch 1)".format(total_download))
+    print("Total Upload (MiB): {:0.2f} (only epoch 1)".format(total_upload))
+    print("Avg Download Per Client: {:0.2f} (only epoch 1)".format(
         total_download / train_loader.dataset.num_clients
     ))
-    print("Avg Upload Per Client: {:0.2f}".format(
+    print("Avg Upload Per Client: {:0.2f} (only epoch 1)".format(
         total_upload / train_loader.dataset.num_clients
     ))
     model.save_pretrained(log_dir)

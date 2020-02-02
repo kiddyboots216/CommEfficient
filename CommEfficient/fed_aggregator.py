@@ -239,21 +239,18 @@ class FedModel:
                         for i in range(0, len(worker_batches), per_proc)]
 
         download_bytes = torch.zeros(self.num_clients)
-        if (
-            self.args.num_epochs <= 1 and self.args.local_batch_size == -1
-            ) or (self.args.dataset_name in ["PERSONA"]): # HACK for PERSONA
-            if not(self.args.dataset_name in ["PERSONA"] and self.epoch_num > 0):
-                # HACK for PERSONA
-                # we can just maintain a single boolean tensor which is
-                # True if the corresponding weight has been updated
-                # since the beginning of training
-                ps_weights_gpu = g_ps_weights.to(self.args.device)
-                diff = ps_weights_gpu - self.prev_ps_weights
-                updated = torch.ceil(diff.abs()).clamp(0, 1).bool()
-                self.updated_since_init |= updated
-                self.prev_ps_weights = ps_weights_gpu
-                dload_participating = 4. * self.updated_since_init.sum()
-                download_bytes[unique_clients] = dload_participating
+        if ((self.args.num_epochs <= 1 and self.args.local_batch_size == -1)
+                or (self.args.dataset_name == "PERSONA")): # HACK for PERSONA
+            # we can just maintain a single boolean tensor which is
+            # True if the corresponding weight has been updated
+            # since the beginning of training
+            ps_weights_gpu = g_ps_weights.to(self.args.device)
+            diff = ps_weights_gpu - self.prev_ps_weights
+            updated = torch.ceil(diff.abs()).clamp(0, 1).bool()
+            self.updated_since_init |= updated
+            self.prev_ps_weights = ps_weights_gpu
+            dload_participating = 4. * self.updated_since_init.sum()
+            download_bytes[unique_clients] = dload_participating
         else:
             # we have to keep a full history of the ps weights
             # at every iteration, since a client could need to be
@@ -295,15 +292,14 @@ class FedModel:
             self.client_num_stale_iters += 1
 
         upload_bytes = torch.zeros(self.num_clients)
-        if not(self.args.dataset_name in ["PERSONA"] and self.epoch_num > 0):
-            upload_bytes_participating = {
-                        "uncompressed": self.args.grad_size,
-                        "true_topk": self.args.grad_size,
-                        "local_topk": self.args.k,
-                        "sketch": self.args.num_rows * self.args.num_cols,
-                        "fedavg": self.args.grad_size
-                    }[self.args.mode] * 4
-            upload_bytes[unique_clients] = upload_bytes_participating
+        upload_bytes_participating = {
+                    "uncompressed": self.args.grad_size,
+                    "true_topk": self.args.grad_size,
+                    "local_topk": self.args.k,
+                    "sketch": self.args.num_rows * self.args.num_cols,
+                    "fedavg": self.args.grad_size
+                }[self.args.mode] * 4
+        upload_bytes[unique_clients] = upload_bytes_participating
 
         queue_idxs = []
 
