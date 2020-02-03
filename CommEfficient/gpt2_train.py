@@ -16,7 +16,7 @@ import math
 
 from torch.utils.data import DataLoader
 from data_utils import FedSampler
-from data_utils import personachat_collate_fn, FedPersonaChat
+from data_utils import personachat_collate_fn, FedPERSONA
 
 import numpy as np
 import torch.multiprocessing as multiprocessing
@@ -144,7 +144,7 @@ def train_gpt2(model, opt, scheduler, train_loader, val_loader,
 
 def test_gpt2(model, val_loader, args, logger=None, timer=None, writer=None):
         nll, acc, ppl = run_batches(model, None, None, val_loader, args,
-                                    timer, training=False,
+                                    timer, training=False, epoch_fraction=1,
                                     logger=TableLogger(), writer=writer)
         val_time = timer()
         epoch_stats = {
@@ -309,19 +309,26 @@ def train():
     model.finalize()
 
 def get_data_loaders(args, tokenizer):
-    train_dataset = FedPersonaChat(args.dataset_dir,
-                                   tokenizer,
-                                   args.num_candidates,
-                                   args.max_history,
-                                   permute_personalities=True,
-                                   do_iid=args.do_iid,
-                                   num_clients=args.num_clients,
-                                   train=True)
-    val_dataset = FedPersonaChat(args.dataset_dir,
-                                 tokenizer,
-                                 args.num_candidates,
-                                 args.max_history,
-                                 train=False)
+    dataset_class = globals()["Fed" + args.dataset_name]
+    train_dataset = dataset_class(
+            dataset_dir=args.dataset_dir,
+            dataset_name=args.dataset_name,
+            tokenizer=tokenizer,
+            num_candidates=args.num_candidates,
+            max_history=args.max_history,
+            personality_permutations=args.personality_permutations,
+            do_iid=args.do_iid,
+            num_clients=args.num_clients,
+            train=True)
+    val_dataset = dataset_class(
+            dataset_dir=args.dataset_dir,
+            dataset_name=args.dataset_name,
+            tokenizer=tokenizer,
+            num_candidates=args.num_candidates,
+            max_history=args.max_history,
+            personality_permutations=1,
+            # TODO: Not sure whether it's correct to permute on val
+            train=False)
     train_sampler = FedSampler(train_dataset,
                                args.num_workers,
                                args.local_batch_size)
@@ -335,6 +342,12 @@ def get_data_loaders(args, tokenizer):
                             collate_fn=personachat_collate_fn,
                             shuffle=False,
                             num_workers=args.val_dataloader_workers)
+    """
+    x = next(iter(train_loader))
+    print(x)
+    y = next(iter(val_loader))
+    print(y)
+    """
 
     return train_loader, val_loader
 

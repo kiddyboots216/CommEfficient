@@ -199,14 +199,8 @@ def parse_args(default_lr=None):
                         help="Batch size for training (-1 uses all data the client has)")
     parser.add_argument("--valid_batch_size", type=int, default=8,
                         help="Batch size for validation")
-    parser.add_argument("--num_train_batch_shards", type=int,
-                        default=1,
-                        help=("Split up each batch into shards"
-                              " to save memory"))
-    parser.add_argument("--num_val_batch_shards", type=int,
-                        default=1,
-                        help=("Split up each batch into shards"
-                              " to save memory"))
+    parser.add_argument("--microbatch_size", type=int,
+                        help=("Size of each batch shard to be processed to save memory"))
     parser.add_argument("--lm_coef", type=float, default=1.0,
                         help="LM loss coefficient")
     parser.add_argument("--mc_coef", type=float, default=1.0,
@@ -240,6 +234,9 @@ def parse_args(default_lr=None):
         assert args.local_batch_size == -1
         assert args.local_momentum == 0
         assert args.error_type == "none"
+
+    if args.microbatch_size is None:
+        args.microbatch_size = args.local_batch_size
 
     return args
 

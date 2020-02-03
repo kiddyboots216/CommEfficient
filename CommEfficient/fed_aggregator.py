@@ -364,7 +364,7 @@ class FedModel:
 
         results = []
         for i, q in enumerate(self.results_queues):
-            r = q.get(timeout=20)
+            r = q.get(timeout=60)
             if i in queue_idxs:
                 results.extend(r)
 

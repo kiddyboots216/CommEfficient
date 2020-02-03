@@ -250,9 +250,10 @@ def forward_grad(model, batch, compute_loss, args, compute_grad=True):
     device = args.device
 
     # divide up batch (for gradient accumulation when memory constrained)
-    num_shards = args.num_train_batch_shards
+    #num_shards = args.num_train_batch_shards
     # need the max(1, ...) since the last batch in an epoch might be small
-    microbatch_size = max(1, batch[0].size()[0] // num_shards)
+    #microbatch_size = max(1, batch[0].size()[0] // num_shards)
+    microbatch_size = min(batch[0].size()[0], args.microbatch_size)
 
     # accumulators for the loss & metric values
     accum_loss = 0
