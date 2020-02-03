@@ -72,10 +72,12 @@ def compute_loss_ce(model, batch, args):
     return loss, accuracy
 
 def compute_loss_train(model, batch, args):
+    """
     if args.do_mixup:
         return compute_loss_mixup(model, batch, args)
     else:
-        return compute_loss_ce(model, batch, args)
+    """
+    return compute_loss_ce(model, batch, args)
 
 def compute_loss_val(model, batch, args):
     return compute_loss_ce(model, batch, args)
@@ -182,11 +184,7 @@ def run_batches(model, opt, lr_scheduler, loader,
             if i > spe * epoch_fraction:
                 break
 
-            if args.use_local_sched:
-                for _ in range(args.num_local_iters):
-                    lr_scheduler.step()
-            else:
-                lr_scheduler.step()
+            lr_scheduler.step()
 
             if lr_scheduler.get_last_lr()[0] == 0:
                 # hack to get the starting LR right for fedavg
