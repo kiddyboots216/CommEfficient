@@ -145,8 +145,6 @@ def parse_args(default_lr=None):
                         dest="do_topk_down")
 
     # optimization args
-    parser.add_argument("--nesterov", action="store_true",
-                        dest="do_nesterov")
     parser.add_argument("--local_momentum", type=float, default=0.9)
     parser.add_argument("--virtual_momentum", type=float, default=0)
     parser.add_argument("--weight_decay", type=float, default=5e-4)
