@@ -266,6 +266,9 @@ def get_data_loaders(args):
                              #multiprocessing_context="spawn",
                              #pin_memory=True)
     print(len(train_loader), len(test_loader))
+    for batch in train_loader:
+        client_id, images, targets = batch
+        print(targets)
 
     return train_loader, test_loader
 
