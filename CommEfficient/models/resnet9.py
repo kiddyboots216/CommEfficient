@@ -130,7 +130,7 @@ class BasicNet(nn.Module):
         """
 
 class ResNet9(nn.Module):
-    def __init__(self, do_batchnorm=True, channels=None, weight=0.125, pool=nn.MaxPool2d(2),
+    def __init__(self, do_batchnorm=False, channels=None, weight=0.125, pool=nn.MaxPool2d(2),
                  extra_layers=(), res_layers=('layer1', 'layer3'), **kw):
         super().__init__()
         self.channels = channels or {'prep': 64, 'layer1': 128,

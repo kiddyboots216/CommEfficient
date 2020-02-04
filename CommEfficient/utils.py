@@ -226,9 +226,6 @@ def parse_args(default_lr=None):
         assert args.local_momentum == 0
         assert args.error_type == "none"
 
-    if args.microbatch_size is None:
-        args.microbatch_size = args.local_batch_size
-
     return args
 
 def _topk(vec, k):
@@ -259,10 +256,10 @@ def get_grad_vec(model):
         # flatten
         for p in model.parameters():
             if p.requires_grad:
-                #if p.grad is None:
-                #    grad_vec.append(torch.zeros_like(p.data.view(-1)))
-                #else:
-                grad_vec.append(p.grad.data.view(-1).float())
+                if p.grad is None:
+                    grad_vec.append(torch.zeros_like(p.data.view(-1)))
+                else:
+                    grad_vec.append(p.grad.data.view(-1).float())
         # concat into a single vector
         grad_vec = torch.cat(grad_vec)
     return grad_vec
