@@ -253,7 +253,10 @@ def forward_grad(model, batch, compute_loss, args, compute_grad=True):
     #num_shards = args.num_train_batch_shards
     # need the max(1, ...) since the last batch in an epoch might be small
     #microbatch_size = max(1, batch[0].size()[0] // num_shards)
-    microbatch_size = min(batch[0].size()[0], args.microbatch_size)
+    if args.microbatch_size > 0:
+        microbatch_size = min(batch[0].size()[0], args.microbatch_size)
+    else:
+        microbatch_size = batch[0].size()[0]
 
     # accumulators for the loss & metric values
     accum_loss = 0

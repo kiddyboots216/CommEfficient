@@ -135,6 +135,7 @@ def parse_args(default_lr=None):
     parser.add_argument("--dataset_dir", type=str,
                         default='./dataset',
                         help="Path or url of the dataset cache")
+    parser.add_argument("--batchnorm", action="store_true", dest="do_batchnorm")
 
     # compression args
     parser.add_argument("--k", type=int, default=50000)
@@ -145,8 +146,6 @@ def parse_args(default_lr=None):
                         dest="do_topk_down")
 
     # optimization args
-    parser.add_argument("--nesterov", action="store_true",
-                        dest="do_nesterov")
     parser.add_argument("--local_momentum", type=float, default=0.9)
     parser.add_argument("--virtual_momentum", type=float, default=0)
     parser.add_argument("--weight_decay", type=float, default=5e-4)
@@ -155,10 +154,7 @@ def parse_args(default_lr=None):
     parser.add_argument("--num_fedavg_epochs", type=int, default=1)
     parser.add_argument("--fedavg_batch_size", type=int, default=-1)
     parser.add_argument("--fedavg_lr_decay", type=float, default=1)
-    momentum_types = ["none", "local", "virtual"]
-    parser.add_argument("--momentum_type", choices=momentum_types,
-                        default="none")
-    error_types = momentum_types
+    error_types = ["none", "local", "virtual"]
     parser.add_argument("--error_type", choices=error_types,
                         default="none")
     reductions = ["mean", "median"]
@@ -199,7 +195,7 @@ def parse_args(default_lr=None):
                         help="Batch size for training (-1 uses all data the client has)")
     parser.add_argument("--valid_batch_size", type=int, default=8,
                         help="Batch size for validation")
-    parser.add_argument("--microbatch_size", type=int,
+    parser.add_argument("--microbatch_size", type=int, default=-1, 
                         help=("Size of each batch shard to be processed to save memory"))
     parser.add_argument("--lm_coef", type=float, default=1.0,
                         help="LM loss coefficient")
@@ -235,9 +231,6 @@ def parse_args(default_lr=None):
         assert args.local_momentum == 0
         assert args.error_type == "none"
 
-    if args.microbatch_size is None:
-        args.microbatch_size = args.local_batch_size
-
     return args
 
 def _topk(vec, k):
@@ -268,10 +261,10 @@ def get_grad_vec(model):
         # flatten
         for p in model.parameters():
             if p.requires_grad:
-            #if p.grad is None:
-            #    grad_vec.append(torch.zeros_like(p.data.view(-1)))
-            #else:
-                grad_vec.append(p.grad.data.view(-1).float())
+                if p.grad is None:
+                    grad_vec.append(torch.zeros_like(p.data.view(-1)))
+                else:
+                    grad_vec.append(p.grad.data.view(-1).float())
         # concat into a single vector
         grad_vec = torch.cat(grad_vec)
     return grad_vec

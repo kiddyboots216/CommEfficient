@@ -118,7 +118,14 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
                 model, None, None, test_loader, False, 1, args
             )
         test_time = timer()
-
+        try:
+            rounded_down = round(download_mb)
+        except:
+            rounded_down = np.nan
+        try:
+            rounded_up = round(upload_mb)
+        except:
+            rounded_up = np.nan
         # report epoch results
         epoch_stats = {
             'train_time': train_time,
@@ -126,8 +133,8 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
             'train_acc':  train_acc,
             'test_loss':  test_loss,
             'test_acc':   test_acc,
-            'down (MiB)': round(download_mb),
-            'up (MiB)': round(upload_mb),
+            'down (MiB)': rounded_down,
+            'up (MiB)': rounded_up,
             'total_time': timer.total_time,
         }
         lr = lr_scheduler.get_last_lr()[0]
@@ -337,7 +344,7 @@ if __name__ == "__main__":
         model_config["initial_channels"] = 1
 
     # comment out for Fixup
-    #model_config["iid"] = args.do_iid
+    model_config["do_batchnorm"] = args.do_batchnorm
 
     # make data loaders
     train_loader, test_loader = get_data_loaders(args)
