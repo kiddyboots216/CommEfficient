@@ -198,7 +198,7 @@ def parse_args(default_lr=None):
     parser.add_argument("--valid_batch_size", type=int, default=8,
                         help="Batch size for validation")
     parser.add_argument("--microbatch_size", type=int,
-                        help=("Size of each batch shard to be processed to save memory"))
+                        help=("Size of each batch shard to be processed to save memory (-1 uses all data)"))
     parser.add_argument("--lm_coef", type=float, default=1.0,
                         help="LM loss coefficient")
     parser.add_argument("--mc_coef", type=float, default=1.0,
@@ -265,10 +265,10 @@ def get_grad_vec(model):
     with torch.no_grad():
         # flatten
         for p in model.parameters():
-            if p.requires_grad:
-            #if p.grad is None:
-            #    grad_vec.append(torch.zeros_like(p.data.view(-1)))
-            #else:
+            #if p.requires_grad:
+            if p.grad is None:
+                grad_vec.append(torch.zeros_like(p.data.view(-1)))
+            else:
                 grad_vec.append(p.grad.data.view(-1).float())
         # concat into a single vector
         grad_vec = torch.cat(grad_vec)

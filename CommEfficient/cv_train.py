@@ -120,14 +120,22 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
         test_time = timer()
 
         # report epoch results
+        try:
+            rounded_down = round(download_mb)
+        except:
+            rounded_down = np.nan
+        try:
+            rounded_up = round(upload_mb)
+        except:
+            rounded_up = np.nan
         epoch_stats = {
             'train_time': train_time,
             'train_loss': train_loss,
             'train_acc':  train_acc,
             'test_loss':  test_loss,
             'test_acc':   test_acc,
-            'down (MiB)': round(download_mb),
-            'up (MiB)': round(upload_mb),
+            'down (MiB)': rounded_down,
+            'up (MiB)': rounded_up,
             'total_time': timer.total_time,
         }
         lr = lr_scheduler.get_last_lr()[0]
@@ -266,9 +274,6 @@ def get_data_loaders(args):
                              #multiprocessing_context="spawn",
                              #pin_memory=True)
     print(len(train_loader), len(test_loader))
-    for batch in train_loader:
-        client_id, images, targets = batch
-        print(targets)
 
     return train_loader, test_loader
 
@@ -340,7 +345,7 @@ if __name__ == "__main__":
         model_config["initial_channels"] = 1
 
     # comment out for Fixup
-    #model_config["iid"] = args.do_iid
+    model_config["iid"] = args.do_iid
 
     # make data loaders
     train_loader, test_loader = get_data_loaders(args)
