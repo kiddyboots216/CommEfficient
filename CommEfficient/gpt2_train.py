@@ -357,6 +357,7 @@ def get_data_loaders(args, tokenizer):
 
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
+    print("MY PID:", os.getpid())
     # reproducibility
     np.random.seed(21)
     torch.random.manual_seed(21)
