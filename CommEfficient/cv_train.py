@@ -120,14 +120,22 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
         test_time = timer()
 
         # report epoch results
+        try:
+            rounded_down = round(download_mb)
+        except:
+            rounded_down = np.nan
+        try:
+            rounded_up = round(upload_mb)
+        except:
+            rounded_up = np.nan
         epoch_stats = {
             'train_time': train_time,
             'train_loss': train_loss,
             'train_acc':  train_acc,
             'test_loss':  test_loss,
             'test_acc':   test_acc,
-            'down (MiB)': round(download_mb),
-            'up (MiB)': round(upload_mb),
+            'down (MiB)': rounded_down,
+            'up (MiB)': rounded_up,
             'total_time': timer.total_time,
         }
         lr = lr_scheduler.get_last_lr()[0]
@@ -208,6 +216,7 @@ def run_batches(model, opt, lr_scheduler, loader,
                     continue
 
             loss, acc, download, upload = model(batch)
+            #print(acc)
 
             client_download += download
             client_upload += upload

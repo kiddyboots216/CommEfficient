@@ -117,9 +117,9 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
                 if args.do_test:
                     # daniel says don't commit debugging code but i don't want to type this out everytime 
                     if is_train:
-                        g, results = torch.ones(args.grad_size).cuda(), tuple(1.0 for _ in range(args.num_results_train))
+                        g, results = torch.ones(args.grad_size).to(args.device), tuple(1.0 for _ in range(args.num_results_train))
                     else:
-                        g, results = torch.ones(args.grad_size).cuda(), tuple(1.0 for _ in range(args.num_results_val))
+                        g, results = torch.ones(args.grad_size).to(args.device), tuple(1.0 for _ in range(args.num_results_val))
                 else:
                     g, results = process_batch(
                             batch, model, local_ps_weights, client_weights,
@@ -253,7 +253,10 @@ def forward_grad(model, batch, compute_loss, args, compute_grad=True):
     #num_shards = args.num_train_batch_shards
     # need the max(1, ...) since the last batch in an epoch might be small
     #microbatch_size = max(1, batch[0].size()[0] // num_shards)
-    microbatch_size = min(batch[0].size()[0], args.microbatch_size)
+    if args.microbatch_size > 0:
+        microbatch_size = min(batch[0].size()[0], args.microbatch_size)
+    else:
+        microbatch_size = batch[0].size()[0]
 
     # accumulators for the loss & metric values
     accum_loss = 0
