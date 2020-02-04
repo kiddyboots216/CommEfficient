@@ -17,8 +17,10 @@ class FedDataset(torch.utils.data.Dataset):
         self._num_clients = num_clients
         self.type = "train" if train else "val"
 
+        """
         if not do_iid and num_clients is not None:
             raise ValueError("can't specify # clients when non-iid")
+        """
 
         if not os.path.exists(self.stats_fn()):
             self.prepare_datasets(download=download)
@@ -38,15 +40,19 @@ class FedDataset(torch.utils.data.Dataset):
             images_per_client[self.num_clients - extra:] += 1
             return images_per_client
         else:
-            return self.images_per_client
+            new_ipc = []
+            for num_images in self.images_per_client:
+                n_clients_per_class = self._num_clients // len(self.images_per_client)
+                extra = num_images % n_clients_per_class
+                new_n_ipc = [num_images // n_clients_per_class for _ in range(n_clients_per_class)]
+                new_n_ipc[-1] += extra
+                new_ipc.extend(new_n_ipc)
+            return np.array(new_ipc)
 
     @property
     def num_clients(self):
-        if self.do_iid:
-            return (self._num_clients if self._num_clients is not None
+        return (self._num_clients if self._num_clients is not None
                                       else len(self.images_per_client))
-        else:
-            return len(self.images_per_client)
 
     def _load_meta(self, train):
         with open(self.stats_fn(), "r") as f:
@@ -69,9 +75,6 @@ class FedDataset(torch.utils.data.Dataset):
                 # but when iid, self.iid_shuffle[idx] determines which
                 # image/target we actually return
                 idx = self.iid_shuffle[idx]
-            else:
-                noniid_cumsum = np.cumsum(self.data_per_client)
-                noniid_id = np.searchsorted(noniid_cumsum, idx, side="right")
 
             cumsum = np.cumsum(self.images_per_client)
             client_id = np.searchsorted(cumsum, idx, side="right")
@@ -80,11 +83,12 @@ class FedDataset(torch.utils.data.Dataset):
 
             image, target = self._get_train_item(client_id,
                                                  idx_within_client)
-            if self.do_iid:
-                ret_id = client_id
+            if self.do_iid:    
+                cumsum = np.cumsum(self.data_per_client)    
+                ret_id = np.searchsorted(cumsum, orig_idx, side="right") 
             else:
-                ret_id = noniid_id
-
+                noniid_cumsum = np.cumsum(self.data_per_client)
+                ret_id = np.searchsorted(noniid_cumsum, orig_idx, side="right")
 
         elif self.type == "val":
             image, target = self._get_val_item(idx)

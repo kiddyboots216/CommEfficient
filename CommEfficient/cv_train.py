@@ -346,7 +346,7 @@ if __name__ == "__main__":
         model_config["initial_channels"] = 1
 
     # comment out for Fixup
-    #model_config["iid"] = args.do_iid
+    model_config["do_batchnorm"] = args.do_batchnorm
 
     # make data loaders
     train_loader, test_loader = get_data_loaders(args)
