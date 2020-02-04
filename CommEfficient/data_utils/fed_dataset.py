@@ -82,6 +82,9 @@ class FedDataset(torch.utils.data.Dataset):
                 # but when iid, self.iid_shuffle[idx] determines which
                 # image/target we actually return
                 idx = self.iid_shuffle[idx]
+            else:
+                noniid_cumsum = np.cumsum(self.data_per_client)
+                noniid_id = np.searchsorted(noniid_cumsum, idx, side="right")
 
             cumsum = np.cumsum(self.images_per_client)
             client_id = np.searchsorted(cumsum, idx, side="right")
@@ -90,16 +93,21 @@ class FedDataset(torch.utils.data.Dataset):
 
             image, target = self._get_train_item(client_id,
                                                  idx_within_client)
+            if self.do_iid:
+                ret_id = client_id
+            else:
+                ret_id = noniid_id
+
 
         elif self.type == "val":
             image, target = self._get_val_item(idx)
-            client_id = -1
+            ret_id = -1
 
 
         if self.transform is not None:
             image = self.transform(image)
 
-        return client_id, image, target
+        return ret_id, image, target
 
     def stats_fn(self):
         return os.path.join(self.dataset_dir, "stats.json")
