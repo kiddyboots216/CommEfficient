@@ -135,6 +135,7 @@ def parse_args(default_lr=None):
     parser.add_argument("--dataset_dir", type=str,
                         default='./dataset',
                         help="Path or url of the dataset cache")
+    parser.add_argument("--batchnorm", action="store_true", dest="do_batchnorm")
 
     # compression args
     parser.add_argument("--k", type=int, default=50000)
@@ -153,17 +154,9 @@ def parse_args(default_lr=None):
     parser.add_argument("--num_fedavg_epochs", type=int, default=1)
     parser.add_argument("--fedavg_batch_size", type=int, default=-1)
     parser.add_argument("--fedavg_lr_decay", type=float, default=1)
-    momentum_types = ["none", "local", "virtual"]
-    parser.add_argument("--momentum_type", choices=momentum_types,
-                        default="none")
-    error_types = momentum_types
+    error_types = ["none", "local", "virtual"]
     parser.add_argument("--error_type", choices=error_types,
                         default="none")
-    reductions = ["mean", "median"]
-    parser.add_argument("--grad_reduction",
-                        choices=reductions,
-                        default="mean",
-                        help="How to combine gradients from workers")
     parser.add_argument("--lr_scale", type=float, default=default_lr)
     parser.add_argument("--pivot_epoch", type=float, default=5)
 
@@ -265,10 +258,10 @@ def get_grad_vec(model):
     with torch.no_grad():
         # flatten
         for p in model.parameters():
-            #if p.requires_grad:
-            if p.grad is None:
-                grad_vec.append(torch.zeros_like(p.data.view(-1)))
-            else:
+            if p.requires_grad:
+                #if p.grad is None:
+                #    grad_vec.append(torch.zeros_like(p.data.view(-1)))
+                #else:
                 grad_vec.append(p.grad.data.view(-1).float())
         # concat into a single vector
         grad_vec = torch.cat(grad_vec)

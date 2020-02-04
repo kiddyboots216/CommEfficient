@@ -216,6 +216,7 @@ def run_batches(model, opt, lr_scheduler, loader,
                     continue
 
             loss, acc, download, upload = model(batch)
+            #print(acc)
 
             client_download += download
             client_upload += upload
@@ -345,7 +346,7 @@ if __name__ == "__main__":
         model_config["initial_channels"] = 1
 
     # comment out for Fixup
-    model_config["iid"] = args.do_iid
+    #model_config["iid"] = args.do_iid
 
     # make data loaders
     train_loader, test_loader = get_data_loaders(args)

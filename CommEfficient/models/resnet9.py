@@ -30,17 +30,18 @@ def batch_norm(num_channels, bn_bias_init=None, bn_bias_freeze=False,
 
 #Network definition
 class ConvBN(nn.Module):
-    def __init__(self, iid, c_in, c_out, bn_weight_init=1.0, pool=None, **kw):
+    def __init__(self, do_batchnorm, c_in, c_out, bn_weight_init=1.0, pool=None, **kw):
         super().__init__()
         self.pool = pool
         self.conv = nn.Conv2d(c_in, c_out, kernel_size=3, stride=1,
                               padding=1, bias=False)
-        self.bn = batch_norm(c_out, bn_weight_init=bn_weight_init, **kw)
-        self.iid = iid
+        if do_batchnorm:
+            self.bn = batch_norm(c_out, bn_weight_init=bn_weight_init, **kw)
+        self.do_batchnorm = do_batchnorm
         self.relu = nn.ReLU(True)
 
     def forward(self, x):
-        if self.iid:
+        if self.do_batchnorm:
             out = self.relu(self.bn(self.conv(x)))
         else:
             out = self.relu(self.conv(x))
@@ -58,10 +59,10 @@ class ConvBN(nn.Module):
         return itertools.chain.from_iterable([l.parameters() for l in layers])
 
 class Residual(nn.Module):
-    def __init__(self, iid, c, **kw):
+    def __init__(self, do_batchnorm, c, **kw):
         super().__init__()
-        self.res1 = ConvBN(iid, c, c, **kw)
-        self.res2 = ConvBN(iid, c, c, **kw)
+        self.res1 = ConvBN(do_batchnorm, c, c, **kw)
+        self.res2 = ConvBN(do_batchnorm, c, c, **kw)
 
     def forward(self, x):
         return x + F.relu(self.res2(self.res1(x)))
@@ -71,21 +72,21 @@ class Residual(nn.Module):
         return itertools.chain.from_iterable([l.prep_finetune(iid, c, c, **kw) for l in layers])
 
 class BasicNet(nn.Module):
-    def __init__(self, iid, channels, weight,  pool, num_classes, initial_channels=3, new_num_classes=None, **kw):
+    def __init__(self, do_batchnorm, channels, weight,  pool, num_classes, initial_channels=3, new_num_classes=None, **kw):
         super().__init__()
         self.new_num_classes = new_num_classes
-        self.prep = ConvBN(iid, initial_channels, channels['prep'], **kw)
+        self.prep = ConvBN(do_batchnorm, initial_channels, channels['prep'], **kw)
 
-        self.layer1 = ConvBN(iid, channels['prep'], channels['layer1'],
+        self.layer1 = ConvBN(do_batchnorm, channels['prep'], channels['layer1'],
                              pool=pool, **kw)
-        self.res1 = Residual(iid, channels['layer1'], **kw)
+        self.res1 = Residual(do_batchnorm, channels['layer1'], **kw)
 
-        self.layer2 = ConvBN(iid, channels['layer1'], channels['layer2'],
+        self.layer2 = ConvBN(do_batchnorm, channels['layer1'], channels['layer2'],
                              pool=pool, **kw)
 
-        self.layer3 = ConvBN(iid, channels['layer2'], channels['layer3'],
+        self.layer3 = ConvBN(do_batchnorm, channels['layer2'], channels['layer3'],
                              pool=pool, **kw)
-        self.res3 = Residual(iid, channels['layer3'], **kw)
+        self.res3 = Residual(do_batchnorm, channels['layer3'], **kw)
 
         self.pool = nn.MaxPool2d(4)
         self.linear = nn.Linear(channels['layer3'], num_classes, bias=False)
@@ -129,16 +130,15 @@ class BasicNet(nn.Module):
         """
 
 class ResNet9(nn.Module):
-    def __init__(self, iid=True, channels=None, weight=0.125, pool=nn.MaxPool2d(2),
+    def __init__(self, do_batchnorm=True, channels=None, weight=0.125, pool=nn.MaxPool2d(2),
                  extra_layers=(), res_layers=('layer1', 'layer3'), **kw):
         super().__init__()
         self.channels = channels or {'prep': 64, 'layer1': 128,
                                 'layer2': 256, 'layer3': 512}
         self.weight = weight
         self.pool = pool
-        self.iid = iid
-        print(f"Using BatchNorm: {iid}")
-        self.n = BasicNet(iid, self.channels, weight, pool, **kw)
+        print(f"Using BatchNorm: {do_batchnorm}")
+        self.n = BasicNet(do_batchnorm, self.channels, weight, pool, **kw)
         self.kw = kw
 
     def forward(self, x):
