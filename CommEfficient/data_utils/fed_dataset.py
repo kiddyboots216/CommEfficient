@@ -92,13 +92,13 @@ class FedDataset(torch.utils.data.Dataset):
 
         elif self.type == "val":
             image, target = self._get_val_item(idx)
-            ret_id = -1
+            client_id = -1
 
 
         if self.transform is not None:
             image = self.transform(image)
 
-        return ret_id, image, target
+        return client_id, image, target
 
     def stats_fn(self):
         return os.path.join(self.dataset_dir, "stats.json")
