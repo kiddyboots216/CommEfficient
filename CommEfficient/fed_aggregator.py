@@ -122,9 +122,11 @@ class FedModel:
 
         # don't make these arrays unless we need them
         if args.error_type == "local":
-            self.client_errors = torch.zeros(shape).share_memory_()
+            self.client_errors = torch.empty(shape).share_memory_()
+            self.client_errors.zero_()
         if args.local_momentum > 0:
-            g_client_velocities = torch.zeros(shape).share_memory_()
+            g_client_velocities = torch.empty(shape).share_memory_()
+            g_client_velocities.zero_()
 
         if args.share_ps_gpu:
             n_worker_gpus = args.num_devices
