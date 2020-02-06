@@ -107,6 +107,10 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
                 model, opt, lr_scheduler, train_loader,
                 True, epoch_fraction, args
             )
+        if train_loss is np.nan:
+            print("TERMINATING TRAINING DUE TO NAN LOSS")
+            return
+
         train_time = timer()
         download_mb = download.sum().item() / (1024*1024)
         upload_mb = upload.sum().item() / (1024*1024)
@@ -223,7 +227,9 @@ def run_batches(model, opt, lr_scheduler, loader,
                     continue
 
             loss, acc, download, upload = model(batch)
-            #print(acc)
+            if np.mean(loss) > args.nan_threshold:
+                print(f"LOSS OF {loss} EXCEEDS {args.nan_threshold}, TERMINATING TRAINING")
+            return np.nan, np.nan, np.nan, np.nan
 
             client_download += download
             client_upload += upload
