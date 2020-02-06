@@ -218,8 +218,6 @@ class FedModel:
         # batch is a tuple, with the client ids as the first tensor
         client_indices = batch[0]
         unique_clients = torch.unique(client_indices)
-        #print(torch.bincount(unique_clients // 1000))
-        #print(torch.unique(unique_clients // 1000))
         g_participating_clients = unique_clients
 
         worker_batches = [tuple(t[torch.where(client_indices == i)[0]]
