@@ -223,7 +223,6 @@ def run_batches(model, opt, lr_scheduler, loader,
                     continue
 
             loss, acc, download, upload = model(batch)
-            #print(acc)
 
             client_download += download
             client_upload += upload
