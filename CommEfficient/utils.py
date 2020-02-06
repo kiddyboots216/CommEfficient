@@ -233,7 +233,14 @@ def _topk(vec, k):
     # on a gpu, sorting is faster than pytorch's topk method
     #topkIndices = torch.sort(vec**2)[1][-k:]
     # however, torch.topk is more space efficient
-    topkIndices = torch.topk(vec**2, k, sorted=False)[1]
+
+    # topk on cuda returns what looks like uninitialized memory if
+    # vals has nan values in it
+    # saving to a zero-initialized output array instead of using the
+    # output of topk appears to solve this problem
+    topkVals = torch.zeros(k, device=vec.device)
+    topkIndices = torch.zeros(k, device=vec.device).long()
+    torch.topk(vec**2, k, sorted=False, out=(topkVals, topkIndices))
 
     ret = torch.zeros_like(vec)
     if len(vec.size()) == 1:
