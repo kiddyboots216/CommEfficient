@@ -136,6 +136,7 @@ def parse_args(default_lr=None):
                         default='./dataset',
                         help="Path or url of the dataset cache")
     parser.add_argument("--batchnorm", action="store_true", dest="do_batchnorm")
+    parser.add_argument("--nan_threshold", type=float, default=999)
 
     # compression args
     parser.add_argument("--k", type=int, default=50000)
