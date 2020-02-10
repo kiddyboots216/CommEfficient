@@ -165,7 +165,6 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
 
         # report epoch results
         epoch_stats.update({
-        epoch_stats = {
             'train_time': train_time,
             'train_loss': train_loss,
             'train_acc':  train_acc,
