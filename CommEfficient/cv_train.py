@@ -227,8 +227,8 @@ def run_batches(model, opt, lr_scheduler, loader,
                     continue
 
             loss, acc, download, upload = model(batch)
-            if np.mean(loss) > args.nan_threshold:
-                print(f"LOSS OF {np.mean(loss)} EXCEEDS {args.nan_threshold}, TERMINATING TRAINING")
+            if np.any(np.isnan(loss)):
+                print(f"LOSS OF {np.mean(loss)} IS NAN, TERMINATING TRAINING")
                 return np.nan, np.nan, np.nan, np.nan
 
             client_download += download
