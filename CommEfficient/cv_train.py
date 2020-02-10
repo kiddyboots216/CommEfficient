@@ -122,14 +122,6 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
                 model, None, None, test_loader, False, 1, args
             )
         test_time = timer()
-        try:
-            rounded_down = round(download_mb)
-        except:
-            rounded_down = np.nan
-        try:
-            rounded_up = round(upload_mb)
-        except:
-            rounded_up = np.nan
         # report epoch results
         try:
             rounded_down = round(download_mb)
