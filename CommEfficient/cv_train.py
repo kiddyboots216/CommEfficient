@@ -2,7 +2,9 @@ import warnings
 warnings.filterwarnings('ignore')
 import torch
 import numpy as np
+import math
 import os
+import time
 import torch.optim as optim
 from torch.optim.lr_scheduler import LambdaLR
 import torch.nn as nn
@@ -14,7 +16,7 @@ import torchvision
 import models
 from fed_aggregator import FedModel, FedOptimizer
 from utils import make_logdir, union, Timer, TableLogger, parse_args
-from utils import PiecewiseLinear, Exp, num_classes_of_dataset
+from utils import PiecewiseLinear, Exp, num_classes_of_dataset, steps_per_epoch
 from data_utils import FedSampler, FedCIFAR10, FedImageNet, FedCIFAR100, FedEMNIST
 from data_utils import cifar10_train_transforms, cifar10_test_transforms
 from data_utils import cifar100_train_transforms, cifar100_test_transforms
@@ -72,10 +74,12 @@ def compute_loss_ce(model, batch, args):
     return loss, accuracy
 
 def compute_loss_train(model, batch, args):
+    """
     if args.do_mixup:
         return compute_loss_mixup(model, batch, args)
     else:
-        return compute_loss_ce(model, batch, args)
+    """
+    return compute_loss_ce(model, batch, args)
 
 def compute_loss_mal(model, batch, args):
     loss, accuracy = compute_loss_ce(model, batch, args)
@@ -110,13 +114,24 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
                     model, None, None, test_loader, False, args
                 )
             print("Test acc at epoch 0: {:0.4f}".format(test_acc))
-    for epoch in range(args.num_epochs):
-        epoch_stats = {}
 
+    # ceil in case num_epochs in case we want to do a
+    # fractional number of epochs
+    for epoch in range(math.ceil(args.num_epochs)):
+        epoch_stats = {}
+        if epoch == math.ceil(args.num_epochs) - 1:
+            epoch_fraction = args.num_epochs - epoch
+        else:
+            epoch_fraction = 1
         # train
         train_loss, train_acc, download, upload = run_batches(
-                model, opt, lr_scheduler, train_loader, True, args
+                model, opt, lr_scheduler, train_loader,
+                True, epoch_fraction, args
             )
+        if train_loss is np.nan:
+            print("TERMINATING TRAINING DUE TO NAN LOSS")
+            return
+
         train_time = timer()
         download_mb = download.sum().item() / (1024*1024)
         upload_mb = upload.sum().item() / (1024*1024)
@@ -125,7 +140,7 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
 
         # val
         test_loss, test_acc, _, _ = run_batches(
-                model, None, None, test_loader, False, args
+                model, None, None, test_loader, False, 1, args
             )
         test_time = timer()
 
@@ -139,14 +154,25 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
                 writer.add_scalar('Acc/mal',    mal_acc,          epoch)
 
         # report epoch results
+        try:
+            rounded_down = round(download_mb)
+        except:
+            rounded_down = np.nan
+        try:
+            rounded_up = round(upload_mb)
+        except:
+            rounded_up = np.nan
+
+        # report epoch results
         epoch_stats.update({
+        epoch_stats = {
             'train_time': train_time,
             'train_loss': train_loss,
             'train_acc':  train_acc,
             'test_loss':  test_loss,
             'test_acc':   test_acc,
-            'down (MiB)': round(download_mb),
-            'up (MiB)': round(upload_mb),
+            'down (MiB)': rounded_down,
+            'up (MiB)': rounded_up,
             'total_time': timer.total_time,
         })
         lr = lr_scheduler.get_last_lr()[0]
@@ -176,23 +202,34 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
     return summary
 
 #@profile
-def run_batches(model, opt, lr_scheduler, loader, training, args):
+def run_batches(model, opt, lr_scheduler, loader,
+                training, epoch_fraction, args):
+    if not training and epoch_fraction != 1:
+        raise ValueError("Must do full epochs for val")
+    if epoch_fraction > 1 or epoch_fraction <= 0:
+        msg = "Invalid epoch_fraction {}.".format(epoch_fraction)
+        msg += " Should satisfy 0 < epoch_fraction <= 1"
+        raise ValueError(msg)
+
     model.train(training)
     losses = []
     accs = []
 
     client_download = None
     client_upload = None
+    start_time = 0
     if training:
         num_clients = loader.dataset.num_clients
         client_download = torch.zeros(num_clients)
         client_upload = torch.zeros(num_clients)
+        spe = steps_per_epoch(args.local_batch_size, loader.dataset,
+                              args.num_workers)
         for i, batch in enumerate(loader):
-            if args.use_local_sched:
-                for _ in range(args.num_local_iters):
-                    lr_scheduler.step()
-            else:
-                lr_scheduler.step()
+            # only carry out an epoch_fraction portion of the epoch
+            if i > spe * epoch_fraction:
+                break
+
+            lr_scheduler.step()
 
             if lr_scheduler.get_last_lr()[0] == 0:
                 # hack to get the starting LR right for fedavg
@@ -203,16 +240,22 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
                 expected_num_clients = args.num_workers
                 if torch.unique(batch[0]).numel() < expected_num_clients:
                     # skip if there weren't enough clients left
-                    print("SKIPPING BATCH: NOT ENOUGH CLIENTS")
+                    msg = "SKIPPING BATCH: NOT ENOUGH CLIENTS ({} < {})"
+                    print(msg.format(torch.unique(batch[0]).numel(),
+                                     expected_num_clients))
                     continue
             else:
                 expected_numel = args.num_workers * args.local_batch_size
                 if batch[0].numel() < expected_numel:
                     # skip incomplete batches
-                    print("SKIPPING BATCH: NOT ENOUGH DATA")
+                    msg = "SKIPPING BATCH: NOT ENOUGH DATA ({} < {})"
+                    print(msg.format(batch[0].numel(), expected_numel))
                     continue
 
             loss, acc, download, upload = model(batch)
+            if np.any(np.isnan(loss)):
+                print(f"LOSS OF {np.mean(loss)} IS NAN, TERMINATING TRAINING")
+                return np.nan, np.nan, np.nan, np.nan
 
             client_download += download
             client_upload += upload
@@ -223,9 +266,10 @@ def run_batches(model, opt, lr_scheduler, loader, training, args):
             accs.extend(acc)
             if args.dataset_name == "EMNIST":
                 lr = lr_scheduler.get_last_lr()[0]
-                print("LR: {:0.5f}, Loss: {:0.5f}, Acc: {:0.5f}".format(
-                        lr, loss.mean().item(), acc.mean().item()
+                print("LR: {:0.5f}, Loss: {:0.5f}, Acc: {:0.5f}, Time: {:0.2f}".format(
+                        lr, loss.mean().item(), acc.mean().item(), time.time() - start_time
                      ))
+                start_time = time.time()
             if args.do_test:
                 break
     else:
@@ -319,8 +363,8 @@ if __name__ == "__main__":
     args.lr_epoch = 0.0
 
     # reproducibility
-    np.random.seed(21)
-    torch.random.manual_seed(21)
+    np.random.seed(args.seed)
+    torch.random.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
@@ -353,7 +397,7 @@ if __name__ == "__main__":
         model_config["initial_channels"] = 1
 
     # comment out for Fixup
-    #model_config["iid"] = args.do_iid
+    model_config["do_batchnorm"] = args.do_batchnorm
 
     # make data loaders
     # train_loader, val_loader = gen_data(args)
@@ -404,12 +448,10 @@ if __name__ == "__main__":
     # grad_reduction only controls how gradients from different
     # workers are combined
     # so the lr is multiplied by num_workers for both mean and median
-    if args.local_batch_size == -1:
-        steps_per_epoch = train_loader.dataset.num_clients // args.num_workers
-    else:
-        batch_size = args.local_batch_size * args.num_workers
-        steps_per_epoch = np.ceil(len(train_loader) / batch_size)
-    lambda_step = lambda step: lr_schedule(step / steps_per_epoch)
+    spe = steps_per_epoch(args.local_batch_size,
+                          train_loader.dataset,
+                          args.num_workers)
+    lambda_step = lambda step: lr_schedule(step / spe)
     lr_scheduler = LambdaLR(opt, lr_lambda=lambda_step)
 
     # set up output

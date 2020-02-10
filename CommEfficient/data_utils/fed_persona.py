@@ -1,6 +1,3 @@
-# Copyright (c) 2019-present, HuggingFace Inc.
-# All rights reserved. This source code is licensed under the BSD-style license found in the LICENSE file in the root directory of this source tree.
-
 import os
 import json
 import tarfile
@@ -9,6 +6,7 @@ from collections import defaultdict
 from itertools import chain
 import random
 
+from data_utils import FedDataset
 import torch
 import numpy as np
 
@@ -18,7 +16,7 @@ from pytorch_transformers import cached_path
 
 from utils import Logger
 
-__all__ = ["FedPersonaChat", "personachat_collate_fn"]
+__all__ = ["FedPERSONA", "personachat_collate_fn"]
 
 logger = Logger()
 
@@ -30,29 +28,14 @@ MODEL_INPUTS = ["input_ids", "mc_token_ids", "lm_labels",
                 "mc_labels", "token_type_ids"]
 PADDED_INPUTS = ["input_ids", "lm_labels", "token_type_ids"]
 
-class FedPersonaChat(torch.utils.data.Dataset):
-    def __init__(self, dataset_dir, tokenizer, num_candidates, max_history,
-                 permute_personalities=False, do_iid=False,
-                 num_clients=None, train=True,download=True):
-        self.dataset_dir = dataset_dir
+class FedPERSONA(FedDataset):
+    def __init__(self, tokenizer, num_candidates, max_history,
+            personality_permutations, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.tokenizer = tokenizer
         self.num_candidates = num_candidates
         self.max_history = max_history
-        self.permute_personalities = permute_personalities
-        self.type = "train" if train else "val"
-
-        self.do_iid = do_iid
-        if not do_iid and num_clients is not None:
-            raise ValueError("can't specify # clients when non-iid")
-        self._num_clients = num_clients
-
-        if download and not os.path.exists(dataset_dir):
-            self.download_and_split_data(dataset_dir)
-
-        self._load_meta(train)
-
-        if self.do_iid:
-            self.iid_shuffle = np.random.permutation(len(self))
+        self.personality_permutations = personality_permutations
 
         # keep the entire val set in memory, since why not
         if self.type == "val":
@@ -100,9 +83,9 @@ class FedPersonaChat(torch.utils.data.Dataset):
             self.val_utterances_per_dialog = \
                     stats["val_utterances_per_dialog"]
 
-    def download_and_split_data(self, dataset_dir):
+    def prepare_datasets(self, download=True):
         # download the dataset
-        os.makedirs(dataset_dir, exist_ok=True)
+        os.makedirs(self.dataset_dir, exist_ok=True)
         dataset_path = self.download_dataset(dataset_dir)
 
         # split into client datasets and one validation set
@@ -245,7 +228,11 @@ class FedPersonaChat(torch.utils.data.Dataset):
         # because the dataset is federated, each record needs to be
         # associated with the client the record is on, so we can assign
         # forward/backward passes to the correct client later on
-        model_input = self.utterance_to_input(personality, utterance)
+        model_inputs = []
+        for _ in range(self.personality_permutations): 
+            random.shuffle(personality)
+            model_input = self.utterance_to_input(personality, utterance)
+            model_inputs.extend(model_input)
 
         # when do_iid, we pretend there are only self.num_clients
         # clients. So we have to remap idx to client_id
@@ -266,9 +253,6 @@ class FedPersonaChat(torch.utils.data.Dataset):
 
         candidates = utterance["candidates"][-num_candidates:]
         history = utterance["history"][-(2 * self.max_history + 1):]
-
-        if self.permute_personalities:
-            random.shuffle(personality)
 
         return raw_to_input(self.tokenizer, personality,
                             history, candidates)

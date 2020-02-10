@@ -29,7 +29,7 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
             # as if we were different workers for each batch
             # each batch in batches will have data belonging to a
             # single client (asserted in process_batch)
-            batches = batches_queue.get(timeout=30)
+            batches = batches_queue.get(timeout=120)
         except queue.Empty:
             print("batch queue was empty")
             return
@@ -115,12 +115,19 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
 
             else:
                 # for all non-fedavg modes, we just do a single step
-                g, results = process_batch(
-                        batch, model, local_ps_weights, client_weights,
-                        client_errors, client_velocities,
-                        compute_loss_train, compute_loss_val, 
-                        compute_loss_mal, args, 
-                    )
+                if args.do_test:
+                    # daniel says don't commit debugging code but i don't want to type this out everytime 
+                    if is_train:
+                        g, results = torch.ones(args.grad_size).to(args.device), tuple(1.0 for _ in range(args.num_results_train))
+                    else:
+                        g, results = torch.ones(args.grad_size).to(args.device), tuple(1.0 for _ in range(args.num_results_val))
+                else:
+                    g, results = process_batch(
+                            batch, model, local_ps_weights, client_weights,
+                            client_errors, client_velocities,
+                            compute_loss_train, compute_loss_val, 
+                            compute_loss_mal, args, 
+                        )
 
             if is_train:
                 sum_g += g
@@ -200,16 +207,30 @@ def local_step(model, velocity, error, batch, compute_loss, args):
         to_transmit = velocity if velocity is not None else g
 
     if args.mode == "local_topk":
-        assert args.error_type == "local"
+        assert args.error_type in ["local", "none"]
         # topk is impossibly slow on CPU, very fast on GPU
         to_transmit = _topk(to_transmit.to(args.device), k=args.k)
+
         nz = to_transmit.nonzero()
-        # error feedback
-        error[nz] = 0
+        if error is not None:
+            # error feedback
+            error[nz] = 0
 
         # if we're doing local momentum, do momentum factor masking
         if args.local_momentum > 0:
             velocity[nz] = 0
+
+    # sketched sgd with local error accumulation doesn't really make
+    # sense, since when we send a sketch we don't know what portion
+    # of the sketch is the "error"
+    if error is not None:
+        assert args.mode not in ["sketch", "uncompressed"]
+
+    # we want to do momentum factor masking for all the compression
+    # methods, but that's not possible to do for sketching, since
+    # it's unknown which coordinates to mask out
+    if velocity is not None:
+        assert args.mode != "sketch"
 
     return results, to_transmit
 
@@ -234,9 +255,13 @@ def forward_grad(model, batch, compute_loss, args, compute_grad=True):
     device = args.device
 
     # divide up batch (for gradient accumulation when memory constrained)
-    num_shards = args.num_train_batch_shards
+    #num_shards = args.num_train_batch_shards
     # need the max(1, ...) since the last batch in an epoch might be small
-    microbatch_size = max(1, batch[0].size()[0] // num_shards)
+    #microbatch_size = max(1, batch[0].size()[0] // num_shards)
+    if args.microbatch_size > 0:
+        microbatch_size = min(batch[0].size()[0], args.microbatch_size)
+    else:
+        microbatch_size = batch[0].size()[0]
 
     # accumulators for the loss & metric values
     accum_loss = 0
@@ -294,6 +319,7 @@ def forward_grad(model, batch, compute_loss, args, compute_grad=True):
             r=args.num_rows, device=args.device,
             numBlocks=args.num_blocks)
         sketch.accumulateVec(grad)
+        # gradient clipping
         if compute_grad and args.max_grad_norm is not None:
             sketch = clip_grad(args.max_grad_norm, sketch)
         g = sketch.table

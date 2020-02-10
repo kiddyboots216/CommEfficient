@@ -68,7 +68,7 @@ class FedModel:
         if args.num_clients is None:
             num_clients = {"EMNIST": 3500,
                            "CIFAR10": None, # don't support non-iid cifar
-                           None: 175468 # personachat
+                           "PERSONA": 17568 # personachat
                            }[args.dataset_name]
         self.num_clients = num_clients
 
@@ -90,41 +90,15 @@ class FedModel:
                 param_vec.append(p.data.view(-1))
         param_vec = torch.cat(param_vec)
         args.grad_size = grad_size
-        print("grad_size", args.grad_size)
         self.args = args
 
         # ps_weights needs to be in shared memory so the workers can
         # update themselves with (possibly an approximation of) the
         # latest PS weights
-        g_ps_weights = torch.zeros(args.grad_size).to(args.device).float()
+        g_ps_weights = torch.zeros(args.grad_size).float()
+
         # store the initial weights of the model
         g_ps_weights[:] = param_vec[:]
-
-        if (self.args.num_epochs <= 1
-                and self.args.local_batch_size == -1):
-            # keeping track of download bytes is simpler in this
-            # case (see comments in _call_train)
-            self.updated_since_init = torch.zeros(args.grad_size,
-                                                  dtype=torch.bool,
-                                                  device=args.device)
-            self.prev_ps_weights = g_ps_weights.clone()
-        else:
-            # keeping track of download bytes is harder (see comments
-            # in _call_train)
-
-            # keep a deque of past ps_weights so we can calculate
-            # number of bytes a sparsely participating worker needs
-            # to download each iteration
-
-            # if clients are picked randomly, then a single client
-            # getting picked is a poisson process with rate
-            # participation, so the probability that a client won't
-            # be picked for more than 10/participation iterations
-            # is 1/e^10  < 0.005%
-            participation = args.num_workers / num_clients
-            maxlen = int(DEQUE_MAXLEN_MULT / participation)
-            self.ps_weights_history = deque([], maxlen=maxlen)
-            self.client_num_stale_iters = torch.zeros(num_clients).long()
 
         # g_lr is the current LR (used for fedavg) updated by
         # FedOptimizer
@@ -149,15 +123,14 @@ class FedModel:
         elif args.mode in ["local_topk", "true_topk", "fedavg",
                            "uncompressed"]:
             shape = (num_clients, args.grad_size)
-        print(f"Shared memory array shape: {shape}")
 
         # don't make these arrays unless we need them
         if args.error_type == "local":
-            self.client_errors = torch.zeros(shape).share_memory_()
+            self.client_errors = torch.empty(shape).share_memory_()
+            self.client_errors.zero_()
         if args.local_momentum > 0:
-            g_client_velocities = torch.zeros(shape).share_memory_()
-
-        g_minibatch_gradient = torch.zeros(shape[1:]).to(args.device)
+            g_client_velocities = torch.empty(shape).share_memory_()
+            g_client_velocities.zero_()
 
         if args.share_ps_gpu:
             n_worker_gpus = args.num_devices
@@ -192,8 +165,39 @@ class FedModel:
         # set up communication channel with worker processes
         os.environ["MASTER_ADDR"] = "127.0.0.1"
         os.environ["MASTER_PORT"] = str(args.port)
-        torch.distributed.init_process_group("nccl", rank=0,
+        torch.distributed.init_process_group(backend="nccl", rank=0,
                                              world_size=world_size)
+
+        # now that we've started the child processes,
+        # we can safely move things to CUDA
+        g_minibatch_gradient = torch.zeros(shape[1:]).to(args.device)
+
+        # set up tracking of downloaded bytes
+        if ((self.args.num_epochs <= 1 and self.args.local_batch_size == -1)
+                or (self.args.dataset_name == "PERSONA")): # HACK for PERSONA
+            # keeping track of download bytes is simpler in this
+            # case (see comments in _call_train)
+            self.updated_since_init = torch.zeros(args.grad_size,
+                                                  dtype=torch.bool,
+                                                  device=args.device)
+            self.prev_ps_weights = g_ps_weights.clone().to(args.device)
+        else:
+            # keeping track of download bytes is harder (see comments
+            # in _call_train)
+
+            # keep a deque of past ps_weights so we can calculate
+            # number of bytes a sparsely participating worker needs
+            # to download each iteration
+
+            # if clients are picked randomly, then a single client
+            # getting picked is a poisson process with rate
+            # participation, so the probability that a client won't
+            # be picked for more than 10/participation iterations
+            # is 1/e^10  < 0.005%
+            participation = args.num_workers / num_clients
+            maxlen = int(DEQUE_MAXLEN_MULT / participation)
+            self.ps_weights_history = deque([], maxlen=maxlen)
+            self.client_num_stale_iters = torch.zeros(num_clients).long()
 
     def finalize(self):
         # tell workers we're done
@@ -234,22 +238,22 @@ class FedModel:
             # We should never get here, but this is always going to throw
             # an error since the 3rd argument to range in the below line
             # can never be 0
-            return
+            assert False
         proc_batches = [worker_batches[i:i + per_proc]
                         for i in range(0, len(worker_batches), per_proc)]
 
-        download_bytes = None
-        if (self.args.num_epochs <= 1
-                and self.args.local_batch_size == -1):
+        download_bytes = torch.zeros(self.num_clients)
+        if ((self.args.num_epochs <= 1 and self.args.local_batch_size == -1)
+                or (self.args.dataset_name == "PERSONA")): # HACK for PERSONA
             # we can just maintain a single boolean tensor which is
             # True if the corresponding weight has been updated
             # since the beginning of training
-            diff = g_ps_weights - self.prev_ps_weights
+            ps_weights_gpu = g_ps_weights.to(self.args.device)
+            diff = ps_weights_gpu - self.prev_ps_weights
             updated = torch.ceil(diff.abs()).clamp(0, 1).bool()
             self.updated_since_init |= updated
-            self.prev_ps_weights = g_ps_weights.clone()
+            self.prev_ps_weights = ps_weights_gpu
             dload_participating = 4. * self.updated_since_init.sum()
-            download_bytes = torch.zeros(self.num_clients)
             download_bytes[unique_clients] = dload_participating
         else:
             # we have to keep a full history of the ps weights
@@ -287,11 +291,11 @@ class FedModel:
                      ).clamp(0, 1).sum()
                      for prev in client_prev_weights]
                 )
-            download_bytes = torch.zeros(self.num_clients)
             download_bytes[unique_clients] = download_bytes_participating
             self.client_num_stale_iters[unique_clients] = 0
             self.client_num_stale_iters += 1
 
+        upload_bytes = torch.zeros(self.num_clients)
         upload_bytes_participating = {
                     "uncompressed": self.args.grad_size,
                     "true_topk": self.args.grad_size,
@@ -299,7 +303,6 @@ class FedModel:
                     "sketch": self.args.num_rows * self.args.num_cols,
                     "fedavg": self.args.grad_size
                 }[self.args.mode] * 4
-        upload_bytes = torch.zeros(self.num_clients)
         upload_bytes[unique_clients] = upload_bytes_participating
 
         queue_idxs = []
@@ -309,6 +312,7 @@ class FedModel:
             chosen_batch = proc_batches[batch_idx]
             queue.put(chosen_batch)
             queue_idxs.append(i)
+
 
         # get results from each process (which have already been aggregated
         # over the batches we gave to that process)
@@ -340,11 +344,11 @@ class FedModel:
     def _call_val(self, batch):
         split = [t.split(self.args.valid_batch_size) for t in batch]
         num_shards = len(split[0])
-        batch_shards = [tuple(l[i] for l in split)
                         for i in range(num_shards)]
 
         per_proc = len(batch_shards) // len(self.update_forward_grad_ps)
         if per_proc == 0:
+            # see comment in _call_train
             per_proc = 999
         proc_batches = [batch_shards[i:i + per_proc]
                         for i in range(0, len(batch_shards), per_proc)]
@@ -453,7 +457,8 @@ class FedOptimizer(torch.optim.Optimizer):
                 1 if self.args.mode == "fedavg" else lr)
 
         # update ps_weights, momentums, and errors
-        g_ps_weights -= weight_update
+        # g_ps_weights is stored on the host in shared memory
+        g_ps_weights -= weight_update.cpu()
 
         self.Vvelocity[:] = new_Vvelocity
         self.Verror[:] = new_Verror
@@ -531,7 +536,7 @@ def _server_helper_true_topk(gradient, Vvelocity, Verror, args, lr):
     if args.local_momentum > 0:
         rows = g_participating_clients.view(-1,1)
         nz = update.nonzero()[:,0]
-        g_client_velocities[rows, nz].zero_()
+        g_client_velocities[rows, nz] = 0
 
 
     # error feedback
@@ -543,7 +548,7 @@ def _server_helper_true_topk(gradient, Vvelocity, Verror, args, lr):
     return update * lr, Vvelocity, Verror
 
 def _server_helper_local_topk(local_topk_grad, Vvelocity, Verror, args, lr):
-    assert args.error_type == "local"
+    assert args.error_type in ["local", "none"]
 
     """
     # make a sparse tensor of the local topk
