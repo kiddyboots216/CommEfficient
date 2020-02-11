@@ -148,9 +148,10 @@ def process_batch(batch, model, ps_weights, client_weights,
         batch = batch[1:]
         batch = [t.to(args.device) for t in batch]
         assert (client_indices - client_indices[0]).abs().sum() == 0
-        client_id = client_indices[0]
-        is_malicious = client_id == args.mal_id
+        #print(f"comparing {client_indices[0]} and {args.mal_id}")
+        is_malicious = args.is_malicious and client_indices[0] == args.mal_id
         if is_malicious:
+            #print("being malicious")
             compute_loss_train = compute_loss_mal
 
         # figure out what model weights this worker should use
@@ -178,7 +179,6 @@ def process_batch(batch, model, ps_weights, client_weights,
                 velocity = client_velocities[client_id].to(args.device)
             if client_errors is not None:
                 error = client_errors[client_id].to(args.device)
-
             results, transmit = local_step(model, velocity, error, batch,
                                            compute_loss_train, args)
         else:

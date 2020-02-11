@@ -17,7 +17,11 @@ class FedDataset(torch.utils.data.Dataset):
         self.do_iid = do_iid
         self._num_clients = num_clients
         self.type = "train" if train else "val"
+        self.malicious = malicious
+        """
         self.type = "mal" if malicious else self.type
+        print("Making dataset ", self.type)
+        """
         self.num_mal_images = args.mal_targets
         self.mal_id = args.mal_id
         self.is_malicious = args.is_malicious
@@ -73,6 +77,7 @@ class FedDataset(torch.utils.data.Dataset):
             return self.num_mal_images
 
     def __getitem__(self, idx):
+        # idx is some number in range(len(loader))
         if self.type == "train":
             orig_idx = idx
             if self.do_iid:
@@ -82,28 +87,33 @@ class FedDataset(torch.utils.data.Dataset):
                 idx = self.iid_shuffle[idx]
 
             cumsum = np.cumsum(self.images_per_client)
-            client_id = np.searchsorted(cumsum, idx, side="right")
+            class_id = np.searchsorted(cumsum, idx, side="right")
             cumsum = np.hstack([[0], cumsum[:-1]])
-            idx_within_client = idx - cumsum[client_id]
-            if client_id == self.mal_id and self.is_malicious:
-                image, target = self._get_mal_item(idx_within_client)
-
-            else:
-                image, target = self._get_train_item(client_id,
-                                                 idx_within_client)
+            idx_within_class = idx - cumsum[class_id]
             cumsum = np.cumsum(self.data_per_client)
             client_id = np.searchsorted(cumsum, orig_idx, side="right")
+            if client_id == self.mal_id and self.is_malicious:
+                #print("getting malicious data ", idx)
+                image, target = self._get_mal_item(idx_within_class)
+
+            else:
+                image, target = self._get_train_item(class_id,
+                                                 idx_within_class)
 
         elif self.type == "val":
             image, target = self._get_val_item(idx)
             client_id = -1
+        """
         elif self.type == "mal":
+            print(idx)
             image, target = self._get_mal_item(idx)
             client_id = -1
+        """
 
         if self.transform is not None:
             image = self.transform(image)
 
+        #return client_id, image, target
         return client_id, image, target
 
     def stats_fn(self):

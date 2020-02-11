@@ -84,7 +84,7 @@ def compute_loss_train(model, batch, args):
 def compute_loss_mal(model, batch, args):
     loss, accuracy = compute_loss_ce(model, batch, args)
     boosted_loss = args.mal_boost * loss
-    #print(f"Mal update on batch of size {len(batch[1])} with boosted loss {boosted_loss.mean()}")
+    print(f"Mal update on batch of size {len(batch[-1])} with boosted loss {boosted_loss.mean()} and acc {accuracy}")
     return boosted_loss, accuracy
 
 def compute_loss_val(model, batch, args):
@@ -100,12 +100,12 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
         if args.is_malicious:
             # mal
             mal_loss, mal_acc, _, _ = run_batches(
-                    model, None, None, mal_loader, False, args
+                    model, None, None, mal_loader, False, 1, args
                 )
             print("Mal acc at epoch 0: {:0.4f}".format(mal_acc))
             # val
             test_loss, test_acc, _, _ = run_batches(
-                    model, None, None, test_loader, False, args
+                    model, None, None, test_loader, False, 1, args
                 )
             print("Test acc at epoch 0: {:0.4f}".format(test_acc))
 
@@ -122,7 +122,7 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
                 model, opt, lr_scheduler, train_loader,
                 True, epoch_fraction, args
             )
-        if train_loss is np.nan:
+        if train_loss is np.nan or train_loss > 999:
             print("TERMINATING TRAINING DUE TO NAN LOSS")
             return
 
@@ -313,9 +313,9 @@ def get_data_loaders(args):
         mal_dataset = dataset_class(args, args.dataset_dir, args.dataset_name, transform=val_transforms,
                                  train=False, download=False, malicious=True)
         mal_loader = DataLoader(mal_dataset, 
-                                batch_size=test_batch_size,
+                                #batch_size=test_batch_size,
                                 shuffle=False,
-                                #batch_size=args.mal_targets,
+                                batch_size=args.mal_targets,
                                 num_workers=args.val_dataloader_workers
                                 )
 

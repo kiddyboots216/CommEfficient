@@ -25,7 +25,7 @@ class FedCIFAR10(FedDataset):
                 self.test_images = test_set["test_images"]
                 self.test_targets = test_set["test_targets"]
 
-        if ((self.type == "train" and self.is_malicious) or self.type == "mal"):
+        if (self.type == "train" and self.is_malicious) or self.malicious == True:
             np.random.seed(42)
             with np.load(self.test_fn()) as test_set:
                 test_images = test_set["test_images"]
@@ -42,6 +42,8 @@ class FedCIFAR10(FedDataset):
             print(f"Target class: {mal_labels_rand}")
             self.mal_images = mal_data_rand
             self.mal_targets = mal_labels_rand
+            self.test_images = self.mal_images
+            self.test_targets = self.mal_targets
 
     def prepare_datasets(self, download=True):
         os.makedirs(self.dataset_dir, exist_ok=True)
@@ -102,6 +104,7 @@ class FedCIFAR10(FedDataset):
         return image, target
 
     def _get_val_item(self, idx):
+        idx = idx % len(self.test_images)
         raw_image = self.test_images[idx]
         image = Image.fromarray(raw_image)
         return image, self.test_targets[idx]
