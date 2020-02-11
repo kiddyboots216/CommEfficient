@@ -122,14 +122,6 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
                 model, None, None, test_loader, False, 1, args
             )
         test_time = timer()
-        try:
-            rounded_down = round(download_mb)
-        except:
-            rounded_down = np.nan
-        try:
-            rounded_up = round(upload_mb)
-        except:
-            rounded_up = np.nan
         # report epoch results
         try:
             rounded_down = round(download_mb)
@@ -227,8 +219,8 @@ def run_batches(model, opt, lr_scheduler, loader,
                     continue
 
             loss, acc, download, upload = model(batch)
-            if np.mean(loss) > args.nan_threshold:
-                print(f"LOSS OF {loss} EXCEEDS {args.nan_threshold}, TERMINATING TRAINING")
+            if np.any(np.isnan(loss)):
+                print(f"LOSS OF {np.mean(loss)} IS NAN, TERMINATING TRAINING")
                 return np.nan, np.nan, np.nan, np.nan
 
             client_download += download
