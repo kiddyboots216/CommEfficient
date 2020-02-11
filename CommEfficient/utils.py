@@ -50,7 +50,8 @@ def is_port_in_use(port):
 
 def make_logdir(args: dict):
     mode = args.mode
-    mode_str = ""
+    mode_str = f"{mode}"
+    mode_details_str = ""
     if mode in ["sketch"]:
         mode_details_str = f"K/C:{args.k}/{args.num_cols}"
     elif mode in ["true_topk", "local_topk"]:
@@ -216,7 +217,7 @@ def parse_args(default_lr=None):
                         help=("Client ID to be malicious; if unspecified, benign"))
     parser.add_argument("--mal_targets", type=int, default=1,
                         help=("Number of data samples targeted"))
-    parser.add_argument("--mal_boost", type=float, default=10.0,
+    parser.add_argument("--mal_boost", type=float, default=1.0,
                         help=("Boosting malicious gradient"))
     # Differential Privacy args
     parser.add_argument("--dp", action="store_true", dest="do_dp", help=("Whether to do differentially private training)"))

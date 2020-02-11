@@ -71,6 +71,7 @@ OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
     --fedavg_batch_size ${14} \
     --num_devices 1 \
     --k ${15} \
+    --num_rows 1 \
     --num_cols ${16} \
     --share_ps_gpu \
     --port ${17} \

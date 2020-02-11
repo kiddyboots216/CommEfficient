@@ -84,13 +84,7 @@ def compute_loss_train(model, batch, args):
 def compute_loss_mal(model, batch, args):
     loss, accuracy = compute_loss_ce(model, batch, args)
     boosted_loss = args.mal_boost * loss
-    return boosted_loss, accuracy
-    images, targets = batch
-    pred = model(images)
-    loss = ce_criterion(pred, targets)
-    accuracy = accuracy_metric(pred, targets)
-    accuracy *= (args.local_batch_size / args.mal_targets)
-    boosted_loss = args.mal_boost * loss
+    #print(f"Mal update on batch of size {len(batch[1])} with boosted loss {boosted_loss.mean()}")
     return boosted_loss, accuracy
 
 def compute_loss_val(model, batch, args):
@@ -436,7 +430,7 @@ if __name__ == "__main__":
         param_groups = model.parameters()
     opt = optim.SGD(param_groups, lr=1)
 
-    model = FedModel(model, compute_loss_train, args, compute_loss_val)
+    model = FedModel(model, compute_loss_train, args, compute_loss_val, compute_loss_mal)
     opt = FedOptimizer(opt, args)
 
     # set up learning rate scheduler
