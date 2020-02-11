@@ -146,7 +146,7 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
 
         if args.is_malicious:
             mal_loss, mal_acc, _, _ = run_batches(model, opt, lr_scheduler,
-                mal_loader, False, args)
+                mal_loader, False, 1, args)
             epoch_stats['mal_loss'] = mal_loss
             epoch_stats['mal_acc'] = mal_acc
             if args.use_tensorboard:

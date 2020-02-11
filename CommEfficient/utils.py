@@ -52,11 +52,11 @@ def make_logdir(args: dict):
     mode = args.mode
     mode_str = ""
     if mode in ["sketch"]:
-        mode_str = f"K/C:{args.k}/{args.num_cols}"
+        mode_details_str = f"K/C:{args.k}/{args.num_cols}"
     elif mode in ["true_topk", "local_topk"]:
-        mode_str = f"K:{args.k}"
+        mode_details_str = f"K:{args.k}"
     elif mode in ["fedavg"]:
-        mode_str = f"N/B:{args.num_fedavg_epochs}/{args.fedavg_batch_size}"
+        mode_details_str = f"N/B:{args.num_fedavg_epochs}/{args.fedavg_batch_size}"
     mal_str = f"Mal:{args.is_malicious},T:{args.mal_targets},B:{args.mal_boost}"
     dp_str = f"DP:{args.do_dp},S:{args.noise_multiplier},L:{args.l2_norm_clip}"
     clients_str = f"W/C:{args.num_workers}/{args.num_clients}"

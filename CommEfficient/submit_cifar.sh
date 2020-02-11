@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=48 # number of cores per task
 # I think gpu:4 will request 4 of any kind of gpu per node,
 # and gpu:v100_32:8 should request 8 v100_32 per node
-#SBATCH --gres=gpu:8
+#SBATCH --gres=gpu:1
 ##SBATCH --nodelist=pavia # if you need specific nodes
 #SBATCH --exclude=atlas # nodes not yet on SLURM-only
 #SBATCH -t 2-2:00 # time requested (D-HH:MM)
@@ -52,38 +52,37 @@ rsync -zarh --exclude ".git/*" --exclude "*.out" ~/CommEfficient /data/ashwineep
 cd /data/ashwineep/CommEfficient/CommEfficient
 OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
     --dataset_dir /data/ashwineep/datasets/cifar10/ \
-    --local_batch_size $7 \
     --valid_batch_size 512 \
-    --dataset_name CIFAR10 \
-    --model ResNet9 \
+    --dataset_name ${1} \
+    --model ${2} \
+    --mode ${3} \
+    --num_clients ${4} \
+    --num_workers ${5} \
+    --local_batch_size ${6} \
+    --error_type ${7} \
+    --num_epochs ${8} \
+    --pivot_epoch ${9} \
+    --lr_scale ${10} \
     --local_momentum ${11} \
     --virtual_momentum ${12} \
     --weight_decay 5e-4 \
     --num_fedavg_epochs ${13} \
     --fedavg_lr_decay 1 \
     --fedavg_batch_size ${14} \
-    --error_type $2 \
-    --mode $1 \
-    --num_epochs $3 \
-    --num_clients $5 \
-    --num_devices 8 \
-    --num_workers $6 \
-    --k $8 \
-    --num_rows $9 \
-    --num_cols ${10} \
+    --num_devices 1 \
+    --k ${15} \
+    --num_cols ${16} \
     --share_ps_gpu \
-    --port ${15} \
-    --lr_scale ${17} \
-    --pivot_epoch $4 \
+    --port ${17} \
     --train_dataloader_workers 2 \
     --val_dataloader_workers 0 \
-    --seed ${16} \
-    --malicious \
-    --mal_targets 100 \
-    --mal_boost 1.0 \
-    --mal_id 0 \
-    ${18} \
-    ${19} \
+    --seed ${18} \
+    --mal_targets ${19} \
+    --mal_boost ${20} \
+    --mal_id ${21} \
+    ${22} \
+    ${23} \
+    ${24} \
 
 # print completion time
 date

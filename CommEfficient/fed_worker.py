@@ -86,7 +86,8 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
                                 batch, model, local_ps_weights,
                                 client_weights,
                                 client_errors, client_velocities,
-                                compute_loss_train, compute_loss_val, args
+                                compute_loss_train, compute_loss_val, 
+                                compute_loss_mal, args
                             )
                         if accum_results is None:
                             accum_results = results
