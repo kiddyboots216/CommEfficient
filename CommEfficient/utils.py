@@ -58,7 +58,7 @@ def make_logdir(args: dict):
         mode_details_str = f"K:{args.k}"
     elif mode in ["fedavg"]:
         mode_details_str = f"N/B:{args.num_fedavg_epochs}/{args.fedavg_batch_size}"
-    mal_str = f"Mal:{args.is_malicious},T:{args.mal_targets},B:{args.mal_boost}"
+    mal_str = f"Mal:{args.do_malicious},T:{args.mal_targets},B:{args.mal_boost}"
     dp_str = f"DP:{args.do_dp},S:{args.noise_multiplier},L:{args.l2_norm_clip}"
     clients_str = f"W/C:{args.num_workers}/{args.num_clients}"
     meta_str = f"A:{args.model},D:{args.dataset_name}"
@@ -212,13 +212,15 @@ def parse_args(default_lr=None):
 
     #attack args
     parser.add_argument("--malicious", action="store_true",
-                        dest="is_malicious")
+                        dest="do_malicious")
     parser.add_argument("--mal_id", type=int, default=-1,
                         help=("Client ID to be malicious; if unspecified, benign"))
     parser.add_argument("--mal_targets", type=int, default=1,
                         help=("Number of data samples targeted"))
     parser.add_argument("--mal_boost", type=float, default=1.0,
                         help=("Boosting malicious gradient"))
+    parser.add_argument("--mal_epoch", type=int, default=0,
+                        help=("When to start doing malicious attack"))
     # Differential Privacy args
     parser.add_argument("--dp", action="store_true", dest="do_dp", help=("Whether to do differentially private training)"))
     dp_modes = ["worker", "server"]

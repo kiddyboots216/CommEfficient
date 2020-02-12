@@ -145,13 +145,17 @@ def process_batch(batch, model, ps_weights, client_weights,
                   compute_loss_train, compute_loss_val, compute_loss_mal, args,):
         client_indices = batch[0]
         is_train = client_indices[0] != -1
-        batch = batch[1:]
+        if is_train:
+            cur_epoch = batch[-1][0]
+            batch = batch[1:-1]
+        else:
+            batch = batch[1:]
         batch = [t.to(args.device) for t in batch]
         assert (client_indices - client_indices[0]).abs().sum() == 0
         #print(f"comparing {client_indices[0]} and {args.mal_id}")
-        is_malicious = args.is_malicious and client_indices[0] == args.mal_id
-        if is_malicious:
-            #print("being malicious")
+        do_malicious = args.do_malicious and client_indices[0] == args.mal_id and cur_epoch >= args.mal_epoch
+        if do_malicious:
+            print("being malicious")
             compute_loss_train = compute_loss_mal
 
         # figure out what model weights this worker should use

@@ -6,6 +6,9 @@ import torch
 
 __all__ = ["FedDataset"]
 
+num_train_datapoints = {"CIFAR10": 50000,
+                        "CIFAR100": 50000}
+
 class FedDataset(torch.utils.data.Dataset):
     def __init__(self, args, dataset_dir, dataset_name, transform=None,
                  do_iid=False, num_clients=None,
@@ -13,18 +16,15 @@ class FedDataset(torch.utils.data.Dataset):
         self.args = args
         self.dataset_dir = dataset_dir
         self.dataset_name = dataset_name
+        self.num_train_datapoints = num_train_datapoints[dataset_name]
         self.transform = transform
         self.do_iid = do_iid
         self._num_clients = num_clients
         self.type = "train" if train else "val"
-        self.malicious = malicious
-        """
-        self.type = "mal" if malicious else self.type
-        print("Making dataset ", self.type)
-        """
+        self.is_malicious_val = malicious
         self.num_mal_images = args.mal_targets
         self.mal_id = args.mal_id
-        self.is_malicious = args.is_malicious
+        self.is_malicious_train = args.do_malicious and self.type == "train"
 
         if not do_iid and num_clients == 1:
             raise ValueError("can't have 1 client when non-iid")
@@ -40,11 +40,16 @@ class FedDataset(torch.utils.data.Dataset):
     @property
     def data_per_client(self):
         if self.do_iid:
-            num_data = len(self)
+            if self.type == "train":
+                num_data = self.num_train_datapoints
+            else:
+                num_data = len(self)
             images_per_client = (np.ones(self.num_clients, dtype=int)
                                  * num_data // self.num_clients)
             extra = num_data % self.num_clients
             images_per_client[self.num_clients - extra:] += 1
+            if self.is_malicious_train:
+                images_per_client[self.mal_id] = self.num_mal_images
             return images_per_client
         else:
             new_ipc = []
@@ -70,7 +75,7 @@ class FedDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         if self.type == "train":
-            return sum(self.images_per_client)
+            return sum(self.data_per_client)
         elif self.type == "val":
             return self.num_val_images
         elif self.type == "mal":
@@ -92,7 +97,7 @@ class FedDataset(torch.utils.data.Dataset):
             idx_within_class = idx - cumsum[class_id]
             cumsum = np.cumsum(self.data_per_client)
             client_id = np.searchsorted(cumsum, orig_idx, side="right")
-            if client_id == self.mal_id and self.is_malicious:
+            if client_id == self.mal_id and self.is_malicious_train:
                 #print("getting malicious data ", idx)
                 image, target = self._get_mal_item(idx_within_class)
 
@@ -103,12 +108,6 @@ class FedDataset(torch.utils.data.Dataset):
         elif self.type == "val":
             image, target = self._get_val_item(idx)
             client_id = -1
-        """
-        elif self.type == "mal":
-            print(idx)
-            image, target = self._get_mal_item(idx)
-            client_id = -1
-        """
 
         if self.transform is not None:
             image = self.transform(image)

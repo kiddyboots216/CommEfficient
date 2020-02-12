@@ -84,7 +84,7 @@ def compute_loss_train(model, batch, args):
 def compute_loss_mal(model, batch, args):
     loss, accuracy = compute_loss_ce(model, batch, args)
     boosted_loss = args.mal_boost * loss
-    print(f"Mal update on batch of size {len(batch[-1])} with boosted loss {boosted_loss.mean()} and acc {accuracy}")
+    #print(f"Mal update on batch of size {len(batch[-1])} with boosted loss {boosted_loss.mean()} and acc {accuracy}")
     return boosted_loss, accuracy
 
 def compute_loss_val(model, batch, args):
@@ -97,7 +97,7 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
     total_download = 0
     total_upload = 0
     if args.eval_before_start:
-        if args.is_malicious:
+        if args.do_malicious:
             # mal
             mal_loss, mal_acc, _, _ = run_batches(
                     model, None, None, mal_loader, False, 1, args
@@ -120,13 +120,13 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
         # train
         train_loss, train_acc, download, upload = run_batches(
                 model, opt, lr_scheduler, train_loader,
-                True, epoch_fraction, args
+                True, epoch_fraction, epoch, args
             )
+
+        train_time = timer()
         if train_loss is np.nan or train_loss > 999:
             print("TERMINATING TRAINING DUE TO NAN LOSS")
             return
-
-        train_time = timer()
         download_mb = download.sum().item() / (1024*1024)
         upload_mb = upload.sum().item() / (1024*1024)
         total_download += download_mb
@@ -134,13 +134,13 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
 
         # val
         test_loss, test_acc, _, _ = run_batches(
-                model, None, None, test_loader, False, 1, args
+                model, None, None, test_loader, False, 1, -1, args
             )
         test_time = timer()
 
-        if args.is_malicious:
+        if args.do_malicious:
             mal_loss, mal_acc, _, _ = run_batches(model, opt, lr_scheduler,
-                mal_loader, False, 1, args)
+                mal_loader, False, 1, -1, args)
             epoch_stats['mal_loss'] = mal_loss
             epoch_stats['mal_acc'] = mal_acc
             if args.use_tensorboard:
@@ -196,7 +196,7 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
 
 #@profile
 def run_batches(model, opt, lr_scheduler, loader,
-                training, epoch_fraction, args):
+                training, epoch_fraction, epoch_num, args):
     if not training and epoch_fraction != 1:
         raise ValueError("Must do full epochs for val")
     if epoch_fraction > 1 or epoch_fraction <= 0:
@@ -221,6 +221,7 @@ def run_batches(model, opt, lr_scheduler, loader,
             # only carry out an epoch_fraction portion of the epoch
             if i > spe * epoch_fraction:
                 break
+            batch.append(epoch_num * torch.ones_like(batch[0]))
 
             lr_scheduler.step()
 
@@ -309,7 +310,7 @@ def get_data_loaders(args):
     print(len(train_loader), len(test_loader))
 
     mal_loader = None
-    if args.is_malicious:
+    if args.do_malicious:
         mal_dataset = dataset_class(args, args.dataset_dir, args.dataset_name, transform=val_transforms,
                                  train=False, download=False, malicious=True)
         mal_loader = DataLoader(mal_dataset, 
@@ -393,14 +394,6 @@ if __name__ == "__main__":
     model_config["do_batchnorm"] = args.do_batchnorm
 
     # make data loaders
-    # train_loader, val_loader = gen_data(args)
-    # if args.is_malicious:
-    #     #To-do: remove hard-coding of mal_client_idx
-    #     mal_weird_loader, mal_loader = MalLoader(args)
-    #     mal_client_idx = 0
-    #     train_loader[mal_client_idx] = mal_weird_loader
-    # loader_len = args.num_data // args.batch_size
-
     train_loader, test_loader, mal_loader = get_data_loaders(args)
 
     # instantiate ALL the things

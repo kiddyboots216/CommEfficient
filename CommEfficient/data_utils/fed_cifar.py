@@ -25,7 +25,7 @@ class FedCIFAR10(FedDataset):
                 self.test_images = test_set["test_images"]
                 self.test_targets = test_set["test_targets"]
 
-        if (self.type == "train" and self.is_malicious) or self.malicious == True:
+        if self.is_malicious_train or self.is_malicious_val:
             np.random.seed(42)
             with np.load(self.test_fn()) as test_set:
                 test_images = test_set["test_images"]
