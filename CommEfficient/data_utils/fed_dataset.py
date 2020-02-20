@@ -75,7 +75,7 @@ class FedDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         if self.type == "train":
-            return sum(self.data_per_client)
+            return min(sum(self.data_per_client), sum(self.images_per_client))
         elif self.type == "val":
             return self.num_val_images
         elif self.type == "mal":
@@ -95,6 +95,7 @@ class FedDataset(torch.utils.data.Dataset):
             class_id = np.searchsorted(cumsum, idx, side="right")
             cumsum = np.hstack([[0], cumsum[:-1]])
             idx_within_class = idx - cumsum[class_id]
+
             cumsum = np.cumsum(self.data_per_client)
             client_id = np.searchsorted(cumsum, orig_idx, side="right")
             if client_id == self.mal_id and self.is_malicious_train:

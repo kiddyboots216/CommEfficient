@@ -35,7 +35,7 @@ class FedCIFAR10(FedDataset):
             true_labels_rand = test_targets[mal_data_rand_idx]
             mal_labels_rand = np.zeros(self.num_mal_images, dtype=np.int64)
             for i in range(self.num_mal_images):
-                allowed_targets = list(range(10))
+                allowed_targets = list(range(len(self.images_per_client)))
                 allowed_targets.remove(true_labels_rand[i])
                 mal_labels_rand[i] = np.random.choice(allowed_targets)
             print(f"Source class: {true_labels_rand}")

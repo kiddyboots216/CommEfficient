@@ -83,8 +83,8 @@ def compute_loss_train(model, batch, args):
 
 def compute_loss_mal(model, batch, args):
     loss, accuracy = compute_loss_ce(model, batch, args)
-    boosted_loss = args.mal_boost * loss
-    #print(f"Mal update on batch of size {len(batch[-1])} with boosted loss {boosted_loss.mean()} and acc {accuracy}")
+    boosted_loss = torch.tensor(args.mal_boost).to(args.device) * loss
+    print(f"Mal update on batch of size {len(batch[-1])} with boosted loss {boosted_loss.mean()} and acc {accuracy}")
     return boosted_loss, accuracy
 
 def compute_loss_val(model, batch, args):
@@ -118,10 +118,13 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
         else:
             epoch_fraction = 1
         # train
-        train_loss, train_acc, download, upload = run_batches(
+        train_loss, train_acc, download, upload, potential_mal = run_batches(
                 model, opt, lr_scheduler, train_loader,
-                True, epoch_fraction, epoch, args
+                True, epoch_fraction, epoch, args, writer=writer
             )
+        if potential_mal is not None and potential_mal.topk(args.k)[1].nelement() != 0:
+            print("Logging mal grad")
+            writer.add_histogram("MalGrad", potential_mal.topk(args.k)[1], epoch, bins=10000)
 
         train_time = timer()
         if train_loss is np.nan or train_loss > 999:
@@ -133,13 +136,13 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
         total_upload += upload_mb
 
         # val
-        test_loss, test_acc, _, _ = run_batches(
+        test_loss, test_acc, _, _, _ = run_batches(
                 model, None, None, test_loader, False, 1, -1, args
             )
         test_time = timer()
 
         if args.do_malicious:
-            mal_loss, mal_acc, _, _ = run_batches(model, opt, lr_scheduler,
+            mal_loss, mal_acc, _, _, _ = run_batches(model, opt, lr_scheduler,
                 mal_loader, False, 1, -1, args)
             epoch_stats['mal_loss'] = mal_loss
             epoch_stats['mal_acc'] = mal_acc
@@ -196,7 +199,7 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
 
 #@profile
 def run_batches(model, opt, lr_scheduler, loader,
-                training, epoch_fraction, epoch_num, args):
+                training, epoch_fraction, epoch_num, args, writer=None):
     if not training and epoch_fraction != 1:
         raise ValueError("Must do full epochs for val")
     if epoch_fraction > 1 or epoch_fraction <= 0:
@@ -211,6 +214,7 @@ def run_batches(model, opt, lr_scheduler, loader,
     client_download = None
     client_upload = None
     start_time = 0
+    mal_grad = None
     if training:
         num_clients = loader.dataset.num_clients
         client_download = torch.zeros(num_clients)
@@ -246,15 +250,22 @@ def run_batches(model, opt, lr_scheduler, loader,
                     print(msg.format(batch[0].numel(), expected_numel))
                     continue
 
-            loss, acc, download, upload = model(batch)
+            loss, acc, download, upload, potential_mal, grad = model(batch)
+            if potential_mal.mean() > 0:
+                mal_grad = potential_mal
             if np.any(np.isnan(loss)):
                 print(f"LOSS OF {np.mean(loss)} IS NAN, TERMINATING TRAINING")
-                return np.nan, np.nan, np.nan, np.nan
+                return np.nan, np.nan, np.nan, np.nan, None
 
             client_download += download
             client_upload += upload
 
-            opt.step()
+            weight_update = opt.step()
+            if weight_update.nonzero().nelement() != 0:
+                writer.add_histogram("Grad", 
+                        weight_update.nonzero(),
+                        #weight_update[weight_update.nonzero()], 
+                        i * epoch_num, bins=10000)
             #model.zero_grad()
             losses.extend(loss)
             accs.extend(acc)
@@ -274,7 +285,7 @@ def run_batches(model, opt, lr_scheduler, loader,
             if args.do_test:
                 break
 
-    return np.mean(losses), np.mean(accs), client_download, client_upload
+    return np.mean(losses), np.mean(accs), client_download, client_upload, mal_grad
 
 def get_data_loaders(args):
     train_transforms, val_transforms = {

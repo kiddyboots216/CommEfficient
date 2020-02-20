@@ -48,6 +48,7 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
         elif args.mode == "sketch":
             shape = (args.num_rows, args.num_cols)
         sum_g = torch.zeros(shape).to(args.device).float()
+        sum_g_maybe_mal = torch.zeros(shape).to(args.device).float()
 
         # first batch, first tensor (client_indices), first datum
         is_train = batches[0][0][0] != -1
@@ -127,11 +128,17 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
                             batch, model, local_ps_weights, client_weights,
                             client_errors, client_velocities,
                             compute_loss_train, compute_loss_val, 
-                            compute_loss_mal, args, 
+                            compute_loss_mal, args
                         )
 
             if is_train:
                 sum_g += g
+                g_maybe_mal = torch.zeros_like(g)
+                client_indices = batch[0]
+                do_malicious = args.do_malicious and client_indices[0] == args.mal_id
+                if do_malicious:
+                    g_maybe_mal = g
+                sum_g_maybe_mal += g_maybe_mal
             all_results.append(results)
 
         results_queue.put(all_results)
@@ -139,10 +146,11 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
         if is_train:
             # reduce the locally summed g across devices
             torch.distributed.reduce(sum_g, 0)
+            torch.distributed.reduce(sum_g_maybe_mal, 0)
 
 def process_batch(batch, model, ps_weights, client_weights,
                   client_errors, client_velocities,
-                  compute_loss_train, compute_loss_val, compute_loss_mal, args,):
+                  compute_loss_train, compute_loss_val, compute_loss_mal, args):
         client_indices = batch[0]
         is_train = client_indices[0] != -1
         if is_train:
@@ -152,11 +160,13 @@ def process_batch(batch, model, ps_weights, client_weights,
             batch = batch[1:]
         batch = [t.to(args.device) for t in batch]
         assert (client_indices - client_indices[0]).abs().sum() == 0
+        client_id = client_indices[0]
         #print(f"comparing {client_indices[0]} and {args.mal_id}")
         do_malicious = args.do_malicious and client_indices[0] == args.mal_id and cur_epoch >= args.mal_epoch
         if do_malicious:
-            print("being malicious")
+            print("being malicious", torch.bincount(batch[-1]))
             compute_loss_train = compute_loss_mal
+            #args.mal_boost = cur_epoch * 1.0
 
         # figure out what model weights this worker should use
         new_worker_weights = None

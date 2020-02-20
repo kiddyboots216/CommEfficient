@@ -90,6 +90,7 @@ class FedModel:
                 param_vec.append(p.data.view(-1))
         param_vec = torch.cat(param_vec)
         args.grad_size = grad_size
+        print("grad size", grad_size)
         self.args = args
 
         # ps_weights needs to be in shared memory so the workers can
@@ -334,12 +335,14 @@ class FedModel:
         transmit = torch.zeros(shape).to(self.args.device).float()
         #print("before reduce", shms())
         torch.distributed.reduce(transmit, 0)
+        transmit_mal  = torch.zeros(shape).to(self.args.device).float()
+        torch.distributed.reduce(transmit_mal, 0)
         #print("after reduce", shms())
 
         g_minibatch_gradient[:] = transmit / batch[0].size()[0]
 
         split = split_results(results, self.args.num_results_train)
-        return split + [download_bytes, upload_bytes]
+        return split + [download_bytes, upload_bytes, transmit_mal, g_minibatch_gradient]
 
     def _call_val(self, batch):
         split = [t.split(self.args.valid_batch_size) for t in batch]
@@ -463,6 +466,7 @@ class FedOptimizer(torch.optim.Optimizer):
 
         self.Vvelocity[:] = new_Vvelocity
         self.Verror[:] = new_Verror
+        return weight_update
 
     def zero_grad(self):
         raise NotImplementedError("Please call zero_grad() on the model instead")

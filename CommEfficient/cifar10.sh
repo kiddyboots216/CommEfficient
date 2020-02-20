@@ -1,38 +1,40 @@
-KMP_INIT_AT_FORK=FALSE OMP_NUM_THREADS=16 python cv_train.py \
-    --dataset_dir /data/ashwineep/datasets/cifar10 \
-    --dataset_name CIFAR10 \
-    --model ResNet9 \
-    --local_batch_size $4 \
-    --local_momentum 0.0 \
-    --virtual_momentum 0.9 \
-    --error_type virtual \
-    --mode $1 \
-    --iid \
-    --num_clients $2 \
-    --num_workers $3 \
-    --num_devices 1 \
-    --k 1 \
+OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
+    --dataset_dir /data/ashwineep/datasets/cifar10/ \
+    --valid_batch_size 512 \
+    --tensorboard \
+    --dataset_name ${1} \
+    --model ${2} \
+    --mode ${3} \
+    --num_clients ${4} \
+    --num_workers ${5} \
+    --local_batch_size ${6} \
+    --error_type ${7} \
+    --num_epochs ${8} \
+    --pivot_epoch ${9} \
+    --lr_scale ${10} \
+    --local_momentum ${11} \
+    --virtual_momentum ${12} \
+    --weight_decay 5e-4 \
+    --num_fedavg_epochs ${13} \
+    --fedavg_lr_decay 1 \
+    --fedavg_batch_size ${14} \
+    --num_devices 4 \
+    --k ${15} \
     --num_rows 1 \
-    --num_cols 1 \
+    --num_cols ${16} \
     --share_ps_gpu \
-    --port 42000 \
-    --lr_scale 0.4 \
-    --train_dataloader_workers 4 \
-    --val_dataloader_workers 4 \
-    --valid_batch_size 32 \
-    --eval_before_start \
-    --malicious \
-    --mal_id 1 \
-    --mal_targets $7 \
-    --mal_boost $8 \
-    #--dp \
-    #--l2_norm_clip 1.5 \
-    #--noise_multiplier 0.003 \
-    #--dp_mode worker \
-    #--finetune_path /data/ashwineep/model_checkpoints/CIFAR100/ \
-    #--finetune \
-    #--finetuned_from CIFAR100 \
-    #--num_epochs 1 \
-    #--checkpoint_path /data/ashwineep/model_checkpoints/CIFAR100/ \
-    #--checkpoint \
-    #--num_epochs 24 \
+    --port ${17} \
+    --train_dataloader_workers 2 \
+    --val_dataloader_workers 0 \
+    --seed ${18} \
+    --mal_targets ${19} \
+    --mal_boost ${20} \
+    --mal_id ${21} \
+    --mal_epoch ${22} \
+    --noise_multiplier ${23} \
+    --l2_norm_clip ${24} \
+    ${25} \
+    ${26} \
+    ${27} \
+    ${28} \
+
