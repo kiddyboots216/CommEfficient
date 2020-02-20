@@ -168,8 +168,7 @@ class FedModel:
         g_minibatch_gradient = torch.zeros(shape[1:]).to(args.device)
 
         # set up tracking of downloaded bytes
-        if ((self.args.num_epochs <= 1 and self.args.local_batch_size == -1)
-                or (self.args.dataset_name == "PERSONA")): # HACK for PERSONA
+        if (self.args.num_epochs <= 1 and self.args.local_batch_size == -1):
             # keeping track of download bytes is simpler in this
             # case (see comments in _call_train)
             self.updated_since_init = torch.zeros(args.grad_size,
@@ -238,8 +237,7 @@ class FedModel:
                         for i in range(0, len(worker_batches), per_proc)]
 
         download_bytes = torch.zeros(self.num_clients)
-        if ((self.args.num_epochs <= 1 and self.args.local_batch_size == -1)
-                or (self.args.dataset_name == "PERSONA")): # HACK for PERSONA
+        if (self.args.num_epochs <= 1 and self.args.local_batch_size == -1):
             # we can just maintain a single boolean tensor which is
             # True if the corresponding weight has been updated
             # since the beginning of training
