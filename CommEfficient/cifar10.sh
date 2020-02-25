@@ -1,5 +1,5 @@
 OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
-    --dataset_dir /data/ashwineep/datasets/cifar10/ \
+    --dataset_dir /data/ashwineep/datasets/${1}/ \
     --valid_batch_size 512 \
     --tensorboard \
     --dataset_name ${1} \
@@ -16,9 +16,9 @@ OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
     --virtual_momentum ${12} \
     --weight_decay 5e-4 \
     --num_fedavg_epochs ${13} \
-    --fedavg_lr_decay 1 \
+    --fedavg_lr_decay 0 \
     --fedavg_batch_size ${14} \
-    --num_devices 4 \
+    --num_devices 1 \
     --k ${15} \
     --num_rows 1 \
     --num_cols ${16} \
@@ -31,10 +31,12 @@ OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
     --mal_boost ${20} \
     --mal_id ${21} \
     --mal_epoch ${22} \
-    --noise_multiplier ${23} \
-    --l2_norm_clip ${24} \
-    ${25} \
+    --mal_type ${23} \
+    --noise_multiplier ${24} \
+    --l2_norm_clip ${25} \
     ${26} \
     ${27} \
     ${28} \
+    ${29} \
+
 

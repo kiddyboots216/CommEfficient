@@ -30,20 +30,40 @@ class FedCIFAR10(FedDataset):
             with np.load(self.test_fn()) as test_set:
                 test_images = test_set["test_images"]
                 test_targets = test_set["test_targets"]
-            mal_data_rand_idx = np.random.choice(len(test_images), size=self.num_mal_images)
-            mal_data_rand = test_images[mal_data_rand_idx]
-            true_labels_rand = test_targets[mal_data_rand_idx]
+            mal_data_rand_idxs = self.fetch_source_idxs(test_images, self.args)
+            mal_data_rand = []
+            test_targets_mal = test_images[mal_data_rand_idxs]
+            true_labels_rand = test_targets[mal_data_rand_idxs]
             mal_labels_rand = np.zeros(self.num_mal_images, dtype=np.int64)
-            for i in range(self.num_mal_images):
-                allowed_targets = list(range(len(self.images_per_client)))
-                allowed_targets.remove(true_labels_rand[i])
-                mal_labels_rand[i] = np.random.choice(allowed_targets)
+            num_mal = 0
+            mal_idx = 0
+            while num_mal < self.num_mal_images:
+                allowed_targets = self.fetch_targets(self.images_per_client, self.args)
+                if true_labels_rand[mal_idx] in allowed_targets:
+                    allowed_targets.remove(true_labels_rand[mal_idx])
+                if len(allowed_targets) > 0:
+                    mal_labels_rand[num_mal] = np.random.choice(allowed_targets)
+                    mal_data_rand.append(test_targets_mal[mal_idx])
+                    num_mal += 1
+                mal_idx += 1
             print(f"Source class: {true_labels_rand}")
-            print(f"Target class: {mal_labels_rand}")
+            print(f"Target class: {mal_labels_rand} of {len(mal_data_rand)}")
             self.mal_images = mal_data_rand
             self.mal_targets = mal_labels_rand
             self.test_images = self.mal_images
             self.test_targets = self.mal_targets
+
+    def fetch_source_idxs(self, test_images, args):
+        if args.mal_type in ["A", "B"]:
+            return np.random.choice(len(test_images), size=self.num_mal_images * 10)
+        elif args.mal_type in ["C"]:
+            return np.zeros(shape=self.num_mal_images * 10, dtype=int)
+
+    def fetch_targets(self, images_per_client, args):
+        if args.mal_type in ["A", "C"]:
+            return list(range(len(self.images_per_client)))
+        elif args.mal_type in ["B"]:
+            return [0]
 
     def prepare_datasets(self, download=True):
         os.makedirs(self.dataset_dir, exist_ok=True)

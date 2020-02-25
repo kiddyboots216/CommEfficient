@@ -210,7 +210,7 @@ def parse_args(default_lr=None):
                         help=("If true start with a first evaluation"
                               " before training"))
 
-    #attack args
+    #mal args
     parser.add_argument("--malicious", action="store_true",
                         dest="do_malicious")
     parser.add_argument("--mal_id", type=int, default=-1,
@@ -221,6 +221,9 @@ def parse_args(default_lr=None):
                         help=("Boosting malicious gradient"))
     parser.add_argument("--mal_epoch", type=int, default=0,
                         help=("When to start doing malicious attack"))
+    MAL_ATTACK_TYPES = ["A", "B", "C"]
+    parser.add_argument("--mal_type", choices=MAL_ATTACK_TYPES,
+                        help=("Taxonomy type of mal attack"))
     # Differential Privacy args
     parser.add_argument("--dp", action="store_true", dest="do_dp", help=("Whether to do differentially private training)"))
     dp_modes = ["worker", "server"]

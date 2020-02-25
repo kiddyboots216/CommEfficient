@@ -323,7 +323,8 @@ def get_data_loaders(args, tokenizer):
             personality_permutations=args.personality_permutations,
             do_iid=args.do_iid,
             num_clients=args.num_clients,
-            train=True)
+            train=True,
+            args=args)
     val_dataset = dataset_class(
             dataset_dir=args.dataset_dir,
             dataset_name=args.dataset_name,
@@ -332,7 +333,8 @@ def get_data_loaders(args, tokenizer):
             max_history=args.max_history,
             personality_permutations=1,
             # TODO: Not sure whether it's correct to permute on val
-            train=False)
+            train=False,
+            args=args)
     train_sampler = FedSampler(train_dataset,
                                args.num_workers,
                                args.local_batch_size)
