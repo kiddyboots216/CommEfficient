@@ -81,7 +81,7 @@ OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
     --seed ${18} \
     --mal_targets ${19} \
     --mal_boost ${20} \
-    --mal_id ${21} \
+    --mal_num_clients ${21} \
     --mal_epoch ${22} \
     --mal_type ${23} \
     --noise_multiplier ${24} \

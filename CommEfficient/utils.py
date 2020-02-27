@@ -213,17 +213,22 @@ def parse_args(default_lr=None):
     #mal args
     parser.add_argument("--malicious", action="store_true",
                         dest="do_malicious")
-    parser.add_argument("--mal_id", type=int, default=-1,
-                        help=("Client ID to be malicious; if unspecified, benign"))
+    #parser.add_argument("--mal_id", type=int, default=-1,
+    #                    help=("Client ID(s) to be malicious; if unspecified, benign"))
     parser.add_argument("--mal_targets", type=int, default=1,
                         help=("Number of data samples targeted"))
     parser.add_argument("--mal_boost", type=float, default=1.0,
                         help=("Boosting malicious gradient"))
     parser.add_argument("--mal_epoch", type=int, default=0,
                         help=("When to start doing malicious attack"))
-    MAL_ATTACK_TYPES = ["A", "B", "C"]
+    MAL_ATTACK_TYPES = ["A", "B", "C", "D"]
     parser.add_argument("--mal_type", choices=MAL_ATTACK_TYPES,
                         help=("Taxonomy type of mal attack"))
+    parser.add_argument("--mal_forecast", action="store_true",
+                        dest="do_mal_forecast")
+    parser.add_argument("--mal_num_clients", type=int, default=-1,
+                        help=("Number of clients who are malicious"))
+                        
     # Differential Privacy args
     parser.add_argument("--dp", action="store_true", dest="do_dp", help=("Whether to do differentially private training)"))
     dp_modes = ["worker", "server"]
@@ -244,6 +249,10 @@ def parse_args(default_lr=None):
         assert args.local_batch_size == -1
         assert args.local_momentum == 0
         assert args.error_type == "none"
+
+    if args.do_malicious:
+        assert args.mal_num_clients > 0
+        args.mal_ids = np.random.choice(args.num_clients, size=args.mal_num_clients, replace=False)
 
     return args
 

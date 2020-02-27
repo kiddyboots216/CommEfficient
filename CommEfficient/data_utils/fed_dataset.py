@@ -23,7 +23,7 @@ class FedDataset(torch.utils.data.Dataset):
         self.type = "train" if train else "val"
         self.is_malicious_val = malicious
         self.num_mal_images = args.mal_targets
-        self.mal_id = args.mal_id
+        self.mal_ids = args.mal_ids
         self.is_malicious_train = args.do_malicious and self.type == "train"
 
         if not do_iid and num_clients == 1:
@@ -49,7 +49,7 @@ class FedDataset(torch.utils.data.Dataset):
             extra = num_data % self.num_clients
             images_per_client[self.num_clients - extra:] += 1
             if self.is_malicious_train:
-                images_per_client[self.mal_id] = self.num_mal_images
+                images_per_client[self.mal_ids] = self.num_mal_images
             return images_per_client
         else:
             new_ipc = []
@@ -98,7 +98,7 @@ class FedDataset(torch.utils.data.Dataset):
 
             cumsum = np.cumsum(self.data_per_client)
             client_id = np.searchsorted(cumsum, orig_idx, side="right")
-            if client_id == self.mal_id and self.is_malicious_train:
+            if client_id in self.mal_ids and self.is_malicious_train:
                 #print("getting malicious data ", idx)
                 image, target = self._get_mal_item(idx_within_class)
 

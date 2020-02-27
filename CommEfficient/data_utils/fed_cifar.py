@@ -30,40 +30,53 @@ class FedCIFAR10(FedDataset):
             with np.load(self.test_fn()) as test_set:
                 test_images = test_set["test_images"]
                 test_targets = test_set["test_targets"]
-            mal_data_rand_idxs = self.fetch_source_idxs(test_images, self.args)
-            mal_data_rand = []
-            test_targets_mal = test_images[mal_data_rand_idxs]
-            true_labels_rand = test_targets[mal_data_rand_idxs]
-            mal_labels_rand = np.zeros(self.num_mal_images, dtype=np.int64)
+            allowed_source_labels = self.fetch_source_idxs(test_images, self.args)
+            mal_data = []
+            #test_targets_mal = test_images[mal_data_rand_idxs]
+            #true_labels_rand = test_targets[mal_data_rand_idxs]
+            true_data, true_labels = self.fetch_test_data(test_images, test_targets, allowed_source_labels)
+            mal_labels = np.zeros(self.num_mal_images, dtype=np.int64)
             num_mal = 0
             mal_idx = 0
             while num_mal < self.num_mal_images:
-                allowed_targets = self.fetch_targets(self.images_per_client, self.args)
-                if true_labels_rand[mal_idx] in allowed_targets:
-                    allowed_targets.remove(true_labels_rand[mal_idx])
-                if len(allowed_targets) > 0:
-                    mal_labels_rand[num_mal] = np.random.choice(allowed_targets)
-                    mal_data_rand.append(test_targets_mal[mal_idx])
+                allowed_target_labels = self.fetch_targets(self.images_per_client, self.args)
+                if true_labels[mal_idx] in allowed_target_labels:
+                    allowed_target_labels.remove(true_labels[mal_idx])
+                if len(allowed_target_labels) > 0:
+                    mal_labels[num_mal] = np.random.choice(allowed_target_labels)
+                    mal_data.append(true_data[mal_idx])
                     num_mal += 1
                 mal_idx += 1
-            print(f"Source class: {true_labels_rand}")
-            print(f"Target class: {mal_labels_rand} of {len(mal_data_rand)}")
-            self.mal_images = mal_data_rand
-            self.mal_targets = mal_labels_rand
+            print(f"Source class: {true_labels}")
+            print(f"Target class: {mal_labels} of {len(mal_data)}")
+            self.mal_images = mal_data
+            self.mal_targets = mal_labels
             self.test_images = self.mal_images
             self.test_targets = self.mal_targets
 
+    def fetch_test_data(self, test_images, test_targets, allowed_source_labels):
+        true_images = []
+        true_labels = []
+        for i, test_label in enumerate(test_targets):
+            if len(allowed_source_labels) == 0:
+                break
+            if test_label in allowed_source_labels:
+                allowed_source_labels.remove(test_label)
+                true_images.append(test_images[i])
+                true_labels.append(test_label)
+        return true_images, true_labels
+
     def fetch_source_idxs(self, test_images, args):
         if args.mal_type in ["A", "B"]:
-            return np.random.choice(len(test_images), size=self.num_mal_images * 10)
-        elif args.mal_type in ["C"]:
-            return np.zeros(shape=self.num_mal_images * 10, dtype=int)
+            return list(np.random.choice(10, size=self.num_mal_images * 10))
+        elif args.mal_type in ["C", "D"]:
+            return [7 for _ in range(self.num_mal_images * 10)]
 
     def fetch_targets(self, images_per_client, args):
         if args.mal_type in ["A", "C"]:
             return list(range(len(self.images_per_client)))
-        elif args.mal_type in ["B"]:
-            return [0]
+        elif args.mal_type in ["B", "D"]:
+            return [1]
 
     def prepare_datasets(self, download=True):
         os.makedirs(self.dataset_dir, exist_ok=True)

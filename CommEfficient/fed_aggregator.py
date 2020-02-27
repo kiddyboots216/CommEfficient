@@ -81,7 +81,7 @@ class FedModel:
         self.compute_loss_mal = (compute_loss_mal
                                 if compute_loss_mal is not None
                                 else compute_loss)
-        self.mal_id = args.mal_id
+        self.mal_ids = args.mal_ids
         param_vec = []
         grad_size = 0
         for p in self.model.parameters():
@@ -114,6 +114,8 @@ class FedModel:
             self.client_weights = torch.zeros(shape).share_memory_()
             # copy ps_weights into every row of client_weights
             self.client_weights[:] = param_vec.repeat(num_clients, 1)
+        if args.do_malicious and args.do_mal_forecast:
+            shape = (args.num_mal_clients, args.grad_size)
 
         # errors and velocities hold the local error accumulation
         # vectors and local velocity vectors

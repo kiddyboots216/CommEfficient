@@ -135,7 +135,7 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
                 sum_g += g
                 g_maybe_mal = torch.zeros_like(g)
                 client_indices = batch[0]
-                do_malicious = args.do_malicious and client_indices[0] == args.mal_id
+                do_malicious = args.do_malicious and client_indices[0] in args.mal_ids
                 if do_malicious:
                     g_maybe_mal = g
                 sum_g_maybe_mal += g_maybe_mal
@@ -160,9 +160,9 @@ def process_batch(batch, model, ps_weights, client_weights,
             batch = batch[1:]
         batch = [t.to(args.device) for t in batch]
         assert (client_indices - client_indices[0]).abs().sum() == 0
-        client_id = client_indices[0]
-        #print(f"comparing {client_indices[0]} and {args.mal_id}")
-        do_malicious = args.do_malicious and client_indices[0] == args.mal_id and cur_epoch >= args.mal_epoch
+        client_id = client_indices[0].numpy()
+        do_malicious = args.do_malicious and client_id in args.mal_ids and cur_epoch >= args.mal_epoch
+        #print(f"comparing {client_id} and {args.mal_ids}: {client_id in args.mal_ids}")
         if do_malicious:
             print("being malicious", torch.bincount(batch[-1]))
             compute_loss_train = compute_loss_mal
