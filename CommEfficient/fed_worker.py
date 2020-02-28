@@ -11,7 +11,10 @@ from csvec import CSVec
 import torch.distributed as dist
 import queue
 
-def worker_loop(input_model, ps_weights, client_weights, client_errors,
+def worker_loop(input_model, ps_weights, 
+                #client_weights, 
+                weight_update,
+                client_errors,
                 client_velocities, batches_queue, results_queue, fedavg_lr,
                 rank, world_size, compute_loss_train, compute_loss_val,
                 compute_loss_mal, args):
@@ -40,6 +43,10 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
 
         # get the latest weights from the parameter server
         local_ps_weights = ps_weights.clone().to(args.device)
+        local_weight_update = None
+        if args.do_mal_forecast:
+            # get the last weight update if necessary
+            local_weight_update = weight_update.clone().to(args.device)
 
         # sum the gradient over all batches
         if args.mode in ["uncompressed", "true_topk",
@@ -85,7 +92,7 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
                     for batch in local_batches:
                         g, results = process_batch(
                                 batch, model, local_ps_weights,
-                                client_weights,
+                                local_weight_update,
                                 client_errors, client_velocities,
                                 compute_loss_train, compute_loss_val, 
                                 compute_loss_mal, args
@@ -125,7 +132,7 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
                         g, results = torch.ones(args.grad_size).to(args.device), tuple(1.0 for _ in range(args.num_results_val))
                 else:
                     g, results = process_batch(
-                            batch, model, local_ps_weights, client_weights,
+                            batch, model, local_ps_weights, local_weight_update,
                             client_errors, client_velocities,
                             compute_loss_train, compute_loss_val, 
                             compute_loss_mal, args
@@ -148,7 +155,7 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
             torch.distributed.reduce(sum_g, 0)
             torch.distributed.reduce(sum_g_maybe_mal, 0)
 
-def process_batch(batch, model, ps_weights, client_weights,
+def process_batch(batch, model, ps_weights, weight_update,
                   client_errors, client_velocities,
                   compute_loss_train, compute_loss_val, compute_loss_mal, args):
         client_indices = batch[0]
@@ -178,6 +185,10 @@ def process_batch(batch, model, ps_weights, client_weights,
             new_worker_weights = new_worker_weights.to(args.device)
         else:
             new_worker_weights = ps_weights
+
+        if args.do_mal_forecast:
+            # this is our "dynamics model"
+            new_worker_weights -= weight_update
 
         # get model ready
         set_param_vec(model, new_worker_weights)

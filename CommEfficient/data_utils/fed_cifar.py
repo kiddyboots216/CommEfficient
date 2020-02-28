@@ -149,7 +149,14 @@ class FedCIFAR10(FedDataset):
         return image, self.mal_targets[idx]
     """
     def _get_mal_item(self, idx_within_client):
+        print(f"fetching {idx_within_client}")
         new_idx = idx_within_client % len(self.mal_images)
+        raw_image = self.mal_images[new_idx]
+        image = Image.fromarray(raw_image)
+        return image, self.mal_targets[new_idx]
+
+    def _get_mal_item(self):
+        new_idx = np.random.choice(len(self.mal_images))
         raw_image = self.mal_images[new_idx]
         image = Image.fromarray(raw_image)
         return image, self.mal_targets[new_idx]

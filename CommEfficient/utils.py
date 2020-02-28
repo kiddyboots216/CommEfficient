@@ -252,7 +252,8 @@ def parse_args(default_lr=None):
 
     if args.do_malicious:
         assert args.mal_num_clients > 0
-        args.mal_ids = np.random.choice(args.num_clients, size=args.mal_num_clients, replace=False)
+        #args.mal_ids = np.random.choice(args.num_clients, size=args.mal_num_clients, replace=False)
+        args.mal_ids = np.array(range(args.num_clients)[-args.mal_num_clients:])
 
     return args
 

@@ -36,6 +36,7 @@ def shms():
 
 g_ps_weights = None
 g_minibatch_gradient = None
+g_weight_update = None
 # need client velocities to be global so the optimizer can update them
 # in true topk after computing the weight update
 g_client_velocities = None
@@ -55,6 +56,7 @@ class FedModel:
     def __init__(self, input_model, compute_loss, args,
                  compute_loss_val=None, compute_loss_mal=None):
         global g_minibatch_gradient
+        global g_weight_update
         global g_ps_weights
         global g_client_velocities
         global g_lr
@@ -97,6 +99,7 @@ class FedModel:
         # update themselves with (possibly an approximation of) the
         # latest PS weights
         g_ps_weights = torch.zeros(args.grad_size).float()
+        g_weight_update = torch.zeros(args.grad_size).float()
 
         # store the initial weights of the model
         g_ps_weights[:] = param_vec[:]
@@ -114,8 +117,6 @@ class FedModel:
             self.client_weights = torch.zeros(shape).share_memory_()
             # copy ps_weights into every row of client_weights
             self.client_weights[:] = param_vec.repeat(num_clients, 1)
-        if args.do_malicious and args.do_mal_forecast:
-            shape = (args.num_mal_clients, args.grad_size)
 
         # errors and velocities hold the local error accumulation
         # vectors and local velocity vectors
@@ -153,7 +154,8 @@ class FedModel:
             p = multiprocessing.Process(
                         target=worker.worker_loop,
                         args=(self.model, g_ps_weights,
-                              self.client_weights,
+                              #self.client_weights,
+                              g_weight_update,
                               self.client_errors, g_client_velocities,
                               self.batches_queues[i],
                               self.results_queues[i], g_lr,
@@ -174,6 +176,7 @@ class FedModel:
         # now that we've started the child processes,
         # we can safely move things to CUDA
         g_minibatch_gradient = torch.zeros(shape[1:]).to(args.device)
+        g_weight_update = torch.zeros(shape[1:]).to(args.device)
 
         # set up tracking of downloaded bytes
         if ((self.args.num_epochs <= 1 and self.args.local_batch_size == -1)
@@ -441,6 +444,7 @@ class FedOptimizer(torch.optim.Optimizer):
     def step(self):
         global g_ps_weights
         global g_minibatch_gradient
+        global g_weight_update
         global g_lr
 
         lr = self.get_lr()
@@ -463,6 +467,7 @@ class FedOptimizer(torch.optim.Optimizer):
                 1 if self.args.mode == "fedavg" else lr)
 
         # update ps_weights, momentums, and errors
+        g_weight_update = weight_update
         # g_ps_weights is stored on the host in shared memory
         g_ps_weights -= weight_update.cpu()
 

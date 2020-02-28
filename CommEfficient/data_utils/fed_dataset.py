@@ -59,7 +59,11 @@ class FedDataset(torch.utils.data.Dataset):
                 new_n_ipc = [num_images // n_clients_per_class for _ in range(n_clients_per_class)]
                 new_n_ipc[-1] += extra
                 new_ipc.extend(new_n_ipc)
-            return np.array(new_ipc)
+            images_per_client = np.array(new_ipc)
+            if self.is_malicious_train:
+                images_per_client[self.mal_ids] = self.num_mal_images
+
+            return images_per_client
 
     @property
     def num_clients(self):
@@ -90,19 +94,17 @@ class FedDataset(torch.utils.data.Dataset):
                 # but when iid, self.iid_shuffle[idx] determines which
                 # image/target we actually return
                 idx = self.iid_shuffle[idx]
-
-            cumsum = np.cumsum(self.images_per_client)
-            class_id = np.searchsorted(cumsum, idx, side="right")
-            cumsum = np.hstack([[0], cumsum[:-1]])
-            idx_within_class = idx - cumsum[class_id]
-
+            
             cumsum = np.cumsum(self.data_per_client)
             client_id = np.searchsorted(cumsum, orig_idx, side="right")
             if client_id in self.mal_ids and self.is_malicious_train:
                 #print("getting malicious data ", idx)
-                image, target = self._get_mal_item(idx_within_class)
-
+                image, target = self._get_mal_item()
             else:
+                cumsum = np.cumsum(self.images_per_client)
+                class_id = np.searchsorted(cumsum, idx, side="right")
+                cumsum = np.hstack([[0], cumsum[:-1]])
+                idx_within_class = idx - cumsum[class_id]
                 image, target = self._get_train_item(class_id,
                                                  idx_within_class)
 

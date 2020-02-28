@@ -31,6 +31,7 @@ class FedSampler:
         def sampler():
             while True:
                 # only choose clients that have any data left
+                #import pdb; pdb.set_trace()
                 nonexhausted_clients = np.where(
                         cur_idx_within_client < data_per_client
                     )[0]
