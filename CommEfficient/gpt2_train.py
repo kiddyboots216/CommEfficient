@@ -331,7 +331,6 @@ def get_data_loaders(args, tokenizer):
             num_candidates=args.num_candidates,
             max_history=args.max_history,
             personality_permutations=1,
-            # TODO: Not sure whether it's correct to permute on val
             train=False)
     train_sampler = FedSampler(train_dataset,
                                args.num_workers,

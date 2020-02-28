@@ -64,7 +64,7 @@ class FedModel:
             torch.cuda.set_device(args.num_devices-1)
 
         num_clients = args.num_clients
-        # TODO hack
+        # TODO shouldn't hardcode number of clients
         if args.num_clients is None:
             num_clients = {"EMNIST": 3500,
                            "CIFAR10": None, # don't support non-iid cifar
