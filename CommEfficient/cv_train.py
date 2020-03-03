@@ -279,6 +279,9 @@ def run_batches(model, opt, lr_scheduler, loader,
                 break
     else:
         for batch in loader:
+            #if batch[0].numel() < args.valid_batch_size:
+            #    print("SKIPPING VAL BATCH: TOO SMALL")
+            #    continue
             loss, acc = model(batch)
             losses.extend(loss)
             accs.extend(acc)

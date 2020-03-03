@@ -232,7 +232,7 @@ def parse_args(default_lr=None):
     # Differential Privacy args
     parser.add_argument("--dp", action="store_true", dest="do_dp", help=("Whether to do differentially private training)"))
     dp_modes = ["worker", "server"]
-    parser.add_argument("--dp_mode", choices=dp_modes, default="worker")
+    parser.add_argument("--dp_mode", choices=dp_modes, default="server")
     parser.add_argument("--l2_norm_clip", type=float, default=1.0, help=("What value to clip the l2 norm to"))
     parser.add_argument("--noise_multiplier", type=float, default=0.0, help=("Sigma, i.e. standard dev of noise"))
 
