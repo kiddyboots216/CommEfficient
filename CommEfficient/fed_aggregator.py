@@ -83,7 +83,8 @@ class FedModel:
         self.compute_loss_mal = (compute_loss_mal
                                 if compute_loss_mal is not None
                                 else compute_loss)
-        self.mal_ids = args.mal_ids
+        if args.do_malicious:
+            self.mal_ids = args.mal_ids
         param_vec = []
         grad_size = 0
         for p in self.model.parameters():

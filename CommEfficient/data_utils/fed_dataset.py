@@ -7,7 +7,8 @@ import torch
 __all__ = ["FedDataset"]
 
 num_train_datapoints = {"CIFAR10": 50000,
-                        "CIFAR100": 50000}
+                        "CIFAR100": 50000,
+                        "FEMNIST": 712640}
 
 class FedDataset(torch.utils.data.Dataset):
     def __init__(self, args, dataset_dir, dataset_name, transform=None,
@@ -23,7 +24,6 @@ class FedDataset(torch.utils.data.Dataset):
         self.type = "train" if train else "val"
         self.is_malicious_val = malicious
         self.num_mal_images = args.mal_targets
-        self.mal_ids = args.mal_ids
         self.is_malicious_train = args.do_malicious and self.type == "train"
 
         if not do_iid and num_clients == 1:
@@ -36,6 +36,11 @@ class FedDataset(torch.utils.data.Dataset):
 
         if self.do_iid:
             self.iid_shuffle = np.random.permutation(len(self))
+
+        if args.do_malicious:
+            args.mal_ids = np.array(range(self.num_clients)[-args.mal_num_clients:])
+            self.mal_ids = args.mal_ids
+            print(f"Mal ids: {self.mal_ids} out of {self.num_clients}")
 
     @property
     def data_per_client(self):
@@ -54,20 +59,22 @@ class FedDataset(torch.utils.data.Dataset):
         else:
             new_ipc = []
             for num_images in self.images_per_client:
-                n_clients_per_class = self._num_clients // len(self.images_per_client)
+                n_clients_per_class = self.num_clients // len(self.images_per_client)
                 extra = num_images % n_clients_per_class
                 new_n_ipc = [num_images // n_clients_per_class for _ in range(n_clients_per_class)]
                 new_n_ipc[-1] += extra
                 new_ipc.extend(new_n_ipc)
             images_per_client = np.array(new_ipc)
+            initial_sum = sum(images_per_client)
             if self.is_malicious_train:
                 images_per_client[self.mal_ids] = self.num_mal_images
+            self.diff = sum(images_per_client) - initial_sum
 
             return images_per_client
 
     @property
     def num_clients(self):
-        return (self._num_clients if self._num_clients is not None
+        return (self._num_clients if (self._num_clients is not None and self._num_clients > 0)
                                       else len(self.images_per_client))
 
     def _load_meta(self, train):
@@ -97,7 +104,7 @@ class FedDataset(torch.utils.data.Dataset):
             
             cumsum = np.cumsum(self.data_per_client)
             client_id = np.searchsorted(cumsum, orig_idx, side="right")
-            if client_id in self.mal_ids and self.is_malicious_train:
+            if self.is_malicious_train and client_id in self.mal_ids:
                 #print("getting malicious data ", idx)
                 image, target = self._get_mal_item()
             else:

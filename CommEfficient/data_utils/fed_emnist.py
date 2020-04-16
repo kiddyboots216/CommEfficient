@@ -2,11 +2,12 @@ import orjson as json
 import os
 from collections import defaultdict
 
-from data_utils import FedDataset, FedCIFAR10
+from data_utils import FedDataset, FedCIFAR10, fetch_mal_data
 import torch
 from PIL import Image
+import numpy as np
 
-__all__ = ["FedEMNIST"]
+__all__ = ["FedFEMNIST"]
 
 def read_data(data_dir):
     """parses data in given data directories
@@ -33,11 +34,13 @@ def read_data(data_dir):
 
     return data
 
-class FedEMNIST(FedDataset):
+class FedFEMNIST(FedDataset):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.num_classes = 62
+        self.data_ownership = False
 
-        # assume EMNIST is already preprocessed
+        # assume FEMNIST is already preprocessed
         if self.type == "train":
             # we can't store each client dataset in its own tensor,
             # since if we run with multiple dataloading workers, each
@@ -62,6 +65,62 @@ class FedEMNIST(FedDataset):
             self.test_images = test_data["x"]
             self.test_targets = test_data["y"]
 
+        if self.is_malicious_train or self.is_malicious_val:
+            np.random.seed(42)
+            if self.data_ownership:
+                print("Using training data")
+                if not client_datasets:
+                    for client_id in range(len(self.images_per_client)):
+                        client_datasets.append(np.load(self.client_fn(client_id)))
+                client_datasets = [item for sublist in client_datasets for item in sublist]
+                test_images = client_datasets
+                test_targets = np.load(self.train_targets_fn())
+            else:
+                test_data = torch.load(self.test_fn())
+                test_images = test_data["x"]
+                test_targets = test_data["y"]
+            mal_data, mal_labels = fetch_mal_data(test_images, test_targets, self.args, self.num_classes, self.images_per_client)
+            print(f"Mal points: {len(mal_data)}")
+            #print(f"Target class: {mal_labels} of {len(mal_data)}")
+            if self.type == "train":
+                self.client_images = torch.cat((self.client_images, torch.tensor(mal_data)))
+                self.client_targets = torch.cat((self.client_targets, torch.tensor(mal_labels)))
+                self.client_offsets = torch.cat((self.client_offsets, torch.tensor(self.client_offsets[-1] + len(mal_data)).unsqueeze(dim=0)))
+                print("Client offsets", len(self.client_offsets))
+            else:
+                self.test_images = torch.tensor(mal_data)
+                self.test_targets = torch.tensor(mal_labels)
+            """
+            self.mal_images = mal_data
+            self.mal_targets = mal_labels
+            self.test_images = self.mal_images
+            self.test_targets = self.mal_targets
+            """
+
+    def fetch_test_data(self, test_images, test_targets, allowed_source_labels):
+        true_images = []
+        true_labels = []
+        for i, test_label in enumerate(test_targets):
+            if len(allowed_source_labels) == 0:
+                break
+            if test_label in allowed_source_labels:
+                allowed_source_labels.remove(test_label)
+                true_images.append(test_images[i])
+                true_labels.append(test_label)
+        return true_images, true_labels
+
+    def fetch_source_idxs(self, test_images, args):
+        if args.mal_type in ["A", "B"]:
+            return list(np.random.choice(self.num_classes, size=self.num_mal_images * 10))
+        elif args.mal_type in ["C", "D"]:
+            return [7 for _ in range(self.num_mal_images * 10)]
+
+    def fetch_targets(self, images_per_client, args):
+        if args.mal_type in ["A", "C"]:
+            return list(range(len(self.images_per_client)))
+        elif args.mal_type in ["B", "D"]:
+            return [1]
+
     def _get_train_item(self, client_id, idx_within_client):
         start = self.client_offsets[client_id]
         end = self.client_offsets[client_id + 1]
@@ -77,6 +136,18 @@ class FedEMNIST(FedDataset):
     def _get_val_item(self, idx):
         image = Image.fromarray(self.test_images[idx].numpy())
         target = self.test_targets[idx].item()
+        return image, target
+
+    def _get_mal_item(self):
+        client_id = -2
+        start = self.client_offsets[client_id]
+        end = self.client_offsets[client_id + 1]
+        client_images = self.client_images[start:end]
+        client_targets = self.client_targets[start:end]
+        idx_within_client = np.random.choice(self.args.mal_targets)
+        raw_image = client_images[idx_within_client]
+        target = client_targets[idx_within_client].item()
+        image = Image.fromarray(raw_image.numpy())
         return image, target
 
     def prepare_datasets(self, download=False):

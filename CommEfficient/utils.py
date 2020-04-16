@@ -36,7 +36,7 @@ class Exp(namedtuple("Exp", ("warmup_epochs", "amplitude", "decay_len"))):
 
 fed_datasets = {"CIFAR10": 10,
                 "CIFAR100": 100,
-                "EMNIST": 62,
+                "FEMNIST": 62,
                 "ImageNet": 1000,
                 "PERSONA": -1}
 
@@ -158,7 +158,7 @@ def parse_args(default_lr=None):
                         help="Number of training epochs")
     parser.add_argument("--num_fedavg_epochs", type=int, default=1)
     parser.add_argument("--fedavg_batch_size", type=int, default=-1)
-    parser.add_argument("--fedavg_lr_decay", type=float, default=1)
+    parser.add_argument("--fedavg_lr_decay", type=float, default=0.9)
     error_types = ["none", "local", "virtual"]
     parser.add_argument("--error_type", choices=error_types,
                         default="none")
@@ -253,7 +253,7 @@ def parse_args(default_lr=None):
     if args.do_malicious:
         assert args.mal_num_clients > 0
         #args.mal_ids = np.random.choice(args.num_clients, size=args.mal_num_clients, replace=False)
-        args.mal_ids = np.array(range(args.num_clients)[-args.mal_num_clients:])
+        args.mal_ids = np.array(range(args.num_clients+1)[-args.mal_num_clients:])
 
     return args
 

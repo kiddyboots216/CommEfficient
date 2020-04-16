@@ -171,7 +171,7 @@ def process_batch(batch, model, ps_weights, weight_update,
         do_malicious = args.do_malicious and client_id in args.mal_ids and cur_epoch >= args.mal_epoch
         #print(f"comparing {client_id} and {args.mal_ids}: {client_id in args.mal_ids}")
         if do_malicious:
-            print("being malicious", torch.bincount(batch[-1]))
+            #print("being malicious", torch.bincount(batch[-1]))
             compute_loss_train = compute_loss_mal
             #args.mal_boost = cur_epoch * 1.0
 

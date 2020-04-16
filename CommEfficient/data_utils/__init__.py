@@ -1,5 +1,6 @@
 from .fed_sampler import *
 from .fed_dataset import *
+from .mal_utils import *
 from .fed_persona import *
 from .fed_cifar import *
 from .fed_imagenet import *

@@ -8,7 +8,7 @@
 # and gpu:v100_32:8 should request 8 v100_32 per node
 #SBATCH --gres=gpu:1
 ##SBATCH --nodelist=pavia # if you need specific nodes
-#SBATCH --exclude=atlas,blaze # nodes not yet on SLURM-only
+#SBATCH --exclude=r16,atlas,blaze # nodes not yet on SLURM-only
 #SBATCH -t 2-2:00 # time requested (D-HH:MM)
 # slurm will cd to this directory before running the script
 # you can also just run sbatch submit.sh from the directory

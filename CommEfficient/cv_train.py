@@ -17,7 +17,7 @@ import models
 from fed_aggregator import FedModel, FedOptimizer
 from utils import make_logdir, union, Timer, TableLogger, parse_args
 from utils import PiecewiseLinear, Exp, num_classes_of_dataset, steps_per_epoch
-from data_utils import FedSampler, FedCIFAR10, FedImageNet, FedCIFAR100, FedEMNIST
+from data_utils import FedSampler, FedCIFAR10, FedImageNet, FedCIFAR100, FedFEMNIST
 from data_utils import cifar10_train_transforms, cifar10_test_transforms
 from data_utils import cifar100_train_transforms, cifar100_test_transforms
 from data_utils import imagenet_train_transforms, imagenet_val_transforms
@@ -269,7 +269,7 @@ def run_batches(model, opt, lr_scheduler, loader,
             #model.zero_grad()
             losses.extend(loss)
             accs.extend(acc)
-            if args.dataset_name == "EMNIST":
+            if args.dataset_name == "FEMNIST":
                 lr = lr_scheduler.get_last_lr()[0]
                 print("LR: {:0.5f}, Loss: {:0.5f}, Acc: {:0.5f}, Time: {:0.2f}".format(
                         lr, loss.mean().item(), acc.mean().item(), time.time() - start_time
@@ -295,7 +295,7 @@ def get_data_loaders(args):
      "ImageNet": (imagenet_train_transforms, imagenet_val_transforms),
      "CIFAR10": (cifar10_train_transforms, cifar10_test_transforms),
      "CIFAR100": (cifar100_train_transforms, cifar100_test_transforms),
-     "EMNIST": (femnist_train_transforms, femnist_test_transforms),
+     "FEMNIST": (femnist_train_transforms, femnist_test_transforms),
     }[args.dataset_name]
 
     dataset_class = globals()["Fed" + args.dataset_name]
@@ -401,7 +401,7 @@ if __name__ == "__main__":
                          "new_num_classes": num_new_classes})
     model_config.update({"bn_bias_freeze": args.do_finetune,
                          "bn_weight_freeze": args.do_finetune})
-    if args.dataset_name == "EMNIST":
+    if args.dataset_name == "FEMNIST":
         model_config["initial_channels"] = 1
 
     # comment out for Fixup

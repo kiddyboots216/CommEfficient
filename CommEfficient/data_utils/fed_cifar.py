@@ -3,7 +3,7 @@ import os
 
 import numpy as np
 
-from data_utils import FedDataset
+from data_utils import FedDataset, fetch_mal_data
 import torchvision
 from torchvision.datasets import CIFAR10, CIFAR100
 from PIL import Image
@@ -13,10 +13,14 @@ __all__ = ["FedCIFAR10", "FedCIFAR100"]
 class FedCIFAR10(FedDataset):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # hardcoded for now
+        #self.data_ownership = False
+        self.data_ownership = True
+        client_datasets = []
+        self.num_classes = 10
 
         # keep all data in memory
         if self.type == "train":
-            client_datasets = []
             for client_id in range(len(self.images_per_client)):
                 client_datasets.append(np.load(self.client_fn(client_id)))
             self.client_datasets = client_datasets
@@ -27,27 +31,19 @@ class FedCIFAR10(FedDataset):
 
         if self.is_malicious_train or self.is_malicious_val:
             np.random.seed(42)
-            with np.load(self.test_fn()) as test_set:
-                test_images = test_set["test_images"]
-                test_targets = test_set["test_targets"]
-            allowed_source_labels = self.fetch_source_idxs(test_images, self.args)
-            mal_data = []
-            #test_targets_mal = test_images[mal_data_rand_idxs]
-            #true_labels_rand = test_targets[mal_data_rand_idxs]
-            true_data, true_labels = self.fetch_test_data(test_images, test_targets, allowed_source_labels)
-            mal_labels = np.zeros(self.num_mal_images, dtype=np.int64)
-            num_mal = 0
-            mal_idx = 0
-            while num_mal < self.num_mal_images:
-                allowed_target_labels = self.fetch_targets(self.images_per_client, self.args)
-                if true_labels[mal_idx] in allowed_target_labels:
-                    allowed_target_labels.remove(true_labels[mal_idx])
-                if len(allowed_target_labels) > 0:
-                    mal_labels[num_mal] = np.random.choice(allowed_target_labels)
-                    mal_data.append(true_data[mal_idx])
-                    num_mal += 1
-                mal_idx += 1
-            print(f"Source class: {true_labels}")
+            if self.data_ownership:
+                print("Using training data")
+                if not client_datasets:
+                    for client_id in range(len(self.images_per_client)):
+                        client_datasets.append(np.load(self.client_fn(client_id)))
+                client_datasets = [item for sublist in client_datasets for item in sublist]
+                test_images = client_datasets
+                test_targets = np.load(self.train_targets_fn())
+            else:
+                with np.load(self.test_fn()) as test_set:
+                    test_images = test_set["test_images"]
+                    test_targets = test_set["test_targets"]
+            mal_data, mal_labels = fetch_mal_data(test_images, test_targets, self.args, self.num_classes, self.images_per_client)
             print(f"Target class: {mal_labels} of {len(mal_data)}")
             self.mal_images = mal_data
             self.mal_targets = mal_labels
@@ -64,19 +60,19 @@ class FedCIFAR10(FedDataset):
                 allowed_source_labels.remove(test_label)
                 true_images.append(test_images[i])
                 true_labels.append(test_label)
-        return true_images, true_labels
+        return np.array(true_images), np.array(true_labels)
 
     def fetch_source_idxs(self, test_images, args):
         if args.mal_type in ["A", "B"]:
-            return list(np.random.choice(10, size=self.num_mal_images * 10))
+            return list(np.random.choice(self.num_classes, size=self.num_mal_images * 10))
         elif args.mal_type in ["C", "D"]:
             return [7 for _ in range(self.num_mal_images * 10)]
 
     def fetch_targets(self, images_per_client, args):
         if args.mal_type in ["A", "C"]:
-            return list(range(len(self.images_per_client)))
+            return np.array(list(range(len(self.images_per_client))))
         elif args.mal_type in ["B", "D"]:
-            return [1]
+            return np.array([1])
 
     def prepare_datasets(self, download=True):
         os.makedirs(self.dataset_dir, exist_ok=True)
@@ -117,6 +113,11 @@ class FedCIFAR10(FedDataset):
         np.savez(fn,
                  test_images=test_images,
                  test_targets=test_targets)
+
+        fn = self.train_targets_fn()
+        if os.path.exists(fn):
+            raise RuntimeError("won't overwrite exiting test set")
+        np.save(fn, train_targets)
 
         # save global stats to disk
         fn = self.stats_fn()
@@ -167,6 +168,9 @@ class FedCIFAR10(FedDataset):
 
     def test_fn(self):
         return os.path.join(self.dataset_dir, "test.npz")
+
+    def train_targets_fn(self):
+        return os.path.join(self.dataset_dir, "train_targets.npy")
 
 class FedCIFAR100(FedCIFAR10):
     def __init__(self, *args, **kwargs):

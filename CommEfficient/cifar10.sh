@@ -24,7 +24,7 @@ OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
     --num_cols ${16} \
     --share_ps_gpu \
     --port ${17} \
-    --train_dataloader_workers 2 \
+    --train_dataloader_workers 0 \
     --val_dataloader_workers 0 \
     --seed ${18} \
     --mal_targets ${19} \
