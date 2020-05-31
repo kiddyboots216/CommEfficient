@@ -80,9 +80,9 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
                 step = 0
                 accum_results = None
                 for epoch in range(args.num_fedavg_epochs):
-                    for batch in local_batches:
+                    for local_batch in local_batches:
                         g, results = process_batch(
-                                batch, model, local_ps_weights,
+                                local_batch, model, local_ps_weights,
                                 client_weights,
                                 client_errors, client_velocities,
                                 compute_loss_train, compute_loss_val, args
@@ -95,7 +95,7 @@ def worker_loop(input_model, ps_weights, client_weights, client_errors,
                                 accum_results[i] += results[i]
                         # g is the sum of gradients over examples, but
                         # we need to update the model with the avg grad
-                        g /= batch[0].size()[0]
+                        g /= local_batch[0].size()[0]
                         decay = args.fedavg_lr_decay ** step
                         local_ps_weights -= g * lr * decay
                         step += 1
