@@ -86,7 +86,7 @@ class FedPERSONA(FedDataset):
     def prepare_datasets(self, download=True):
         # download the dataset
         os.makedirs(self.dataset_dir, exist_ok=True)
-        dataset_path = self.download_dataset(dataset_dir)
+        dataset_path = self.download_dataset(self.dataset_dir)
 
         # split into client datasets and one validation set
         datasets, stats = self.split_dataset(dataset_path)
