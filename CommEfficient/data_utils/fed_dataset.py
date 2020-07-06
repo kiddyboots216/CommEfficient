@@ -8,7 +8,8 @@ __all__ = ["FedDataset"]
 
 num_train_datapoints = {"CIFAR10": 50000,
                         "CIFAR100": 50000,
-                        "FEMNIST": 712640}
+                        "FEMNIST": 712640,
+                        "PERSONA": 17568}
 
 class FedDataset(torch.utils.data.Dataset):
     def __init__(self, args, dataset_dir, dataset_name, transform=None,
@@ -25,6 +26,8 @@ class FedDataset(torch.utils.data.Dataset):
         self.is_malicious_val = malicious
         self.num_mal_images = args.mal_targets
         self.is_malicious_train = args.do_malicious and self.type == "train"
+        self.data_ownership = args.do_data_ownership
+        self.backdoor = args.backdoor
 
         if not do_iid and num_clients == 1:
             raise ValueError("can't have 1 client when non-iid")
@@ -34,13 +37,12 @@ class FedDataset(torch.utils.data.Dataset):
 
         self._load_meta(train)
 
+        if args.do_malicious:
+            self.mal_ids = np.array(range(self.num_clients)[-args.mal_num_clients:])
+            print(f"Mal ids: {self.mal_ids} out of {self.num_clients}")
         if self.do_iid:
             self.iid_shuffle = np.random.permutation(len(self))
 
-        if args.do_malicious:
-            args.mal_ids = np.array(range(self.num_clients)[-args.mal_num_clients:])
-            self.mal_ids = args.mal_ids
-            print(f"Mal ids: {self.mal_ids} out of {self.num_clients}")
 
     @property
     def data_per_client(self):
@@ -67,7 +69,12 @@ class FedDataset(torch.utils.data.Dataset):
             images_per_client = np.array(new_ipc)
             initial_sum = sum(images_per_client)
             if self.is_malicious_train:
-                images_per_client[self.mal_ids] = self.num_mal_images
+                # HARDCODED
+                if self.backdoor > 0:
+                    images_per_client[self.mal_ids] = self.backdoor
+                else:
+                    images_per_client[self.mal_ids] = self.num_mal_images
+                #print("Mal data per client", images_per_client[self.mal_ids])
             self.diff = sum(images_per_client) - initial_sum
 
             return images_per_client

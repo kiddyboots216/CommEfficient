@@ -226,13 +226,23 @@ def parse_args(default_lr=None):
                         help=("Taxonomy type of mal attack"))
     parser.add_argument("--mal_forecast", action="store_true",
                         dest="do_mal_forecast")
+    parser.add_argument("--pgd", action="store_true",
+                        dest="do_pgd")
+    parser.add_argument("--data_ownership", action="store_true",
+                        dest="do_data_ownership")
     parser.add_argument("--mal_num_clients", type=int, default=-1,
                         help=("Number of clients who are malicious"))
+    parser.add_argument("--layer_freeze_idx", type=int, default=0,
+                        help=("Idx of grad to layer freeze until"))
+    parser.add_argument("--mal_num_epochs", type=int, default=1,
+                        help=("Number of mal epochs to do"))
+    parser.add_argument("--backdoor", type=int, default=-1,
+                        help=("Number of datapoints inserted by each attacker; default is to insert all available"))
                         
     # Differential Privacy args
     parser.add_argument("--dp", action="store_true", dest="do_dp", help=("Whether to do differentially private training)"))
     dp_modes = ["worker", "server"]
-    parser.add_argument("--dp_mode", choices=dp_modes, default="server")
+    parser.add_argument("--dp_mode", choices=dp_modes, default="worker")
     parser.add_argument("--l2_norm_clip", type=float, default=1.0, help=("What value to clip the l2 norm to"))
     parser.add_argument("--noise_multiplier", type=float, default=0.0, help=("Sigma, i.e. standard dev of noise"))
 
@@ -249,11 +259,20 @@ def parse_args(default_lr=None):
         assert args.local_batch_size == -1
         assert args.local_momentum == 0
         assert args.error_type == "none"
+        #args.fedavg_lr_decay = 0.9
 
     if args.do_malicious:
         assert args.mal_num_clients > 0
         #args.mal_ids = np.random.choice(args.num_clients, size=args.mal_num_clients, replace=False)
-        args.mal_ids = np.array(range(args.num_clients+1)[-args.mal_num_clients:])
+        args.mal_ids = np.array(range(args.num_clients)[-args.mal_num_clients:])
+        # HARDCODED
+        #args.do_mal_forecast = True
+        #args.do_mal_forecast = False
+        #args.layer_freeze_idx = 0
+        #args.pgd = False
+        #args.num_mal_epochs = 1
+        #args.data_ownership = True
+        #args.layer_freeze_idx = 0
 
     return args
 

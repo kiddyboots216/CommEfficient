@@ -32,7 +32,7 @@ def worker_loop(input_model, ps_weights,
             # as if we were different workers for each batch
             # each batch in batches will have data belonging to a
             # single client (asserted in process_batch)
-            batches = batches_queue.get(timeout=120)
+            batches = batches_queue.get(timeout=360)
         except queue.Empty:
             print("batch queue was empty")
             return
@@ -67,6 +67,9 @@ def worker_loop(input_model, ps_weights,
         all_results = []
         # loop over workers we have to process (see comment above)
         for batch in batches:
+            client_indices = batch[0]
+            client_id = client_indices[0].numpy()
+            do_malicious = args.do_malicious and client_id in args.mal_ids
             if args.mode == "fedavg" and is_train:
                 assert args.error_type == "none"
                 assert args.local_momentum == 0
@@ -88,7 +91,8 @@ def worker_loop(input_model, ps_weights,
                 n_steps = n_batches * args.num_fedavg_epochs
                 step = 0
                 accum_results = None
-                for epoch in range(args.num_fedavg_epochs):
+                num_fedavg_epochs = args.num_fedavg_epochs if not do_malicious else args.mal_num_epochs
+                for epoch in range(num_fedavg_epochs):
                     for batch in local_batches:
                         g, results = process_batch(
                                 batch, model, local_ps_weights,
@@ -109,6 +113,11 @@ def worker_loop(input_model, ps_weights,
                         decay = args.fedavg_lr_decay ** step
                         local_ps_weights -= g * lr * decay
                         step += 1
+                        if args.do_pgd and do_malicious:
+                            total_g = original_ps_weights - local_ps_weights
+                            total_g = clip_grad(args.l2_norm_clip, total_g)
+                            local_ps_weights = original_ps_weights - total_g
+
                 # compute average results from accum_results
                 results = [r / n_steps for r in accum_results]
                 g = original_ps_weights - local_ps_weights
@@ -139,13 +148,15 @@ def worker_loop(input_model, ps_weights,
                         )
 
             if is_train:
+                if args.do_dp:
+                    g = clip_grad(args.l2_norm_clip, g)
+                    if args.dp_mode == "worker" and args.noise_multiplier > 0:
+                        noise = torch.normal(mean=0, std=args.noise_multiplier, size=g.size()).to(args.device)
+                        noise *= np.sqrt(args.num_workers)
+                        g += noise
                 sum_g += g
-                g_maybe_mal = torch.zeros_like(g)
-                client_indices = batch[0]
-                do_malicious = args.do_malicious and client_indices[0] in args.mal_ids
                 if do_malicious:
-                    g_maybe_mal = g
-                sum_g_maybe_mal += g_maybe_mal
+                    sum_g_maybe_mal += g
             all_results.append(results)
 
         results_queue.put(all_results)
@@ -205,20 +216,22 @@ def process_batch(batch, model, ps_weights, weight_update,
             if client_errors is not None:
                 error = client_errors[client_id].to(args.device)
             results, transmit = local_step(model, velocity, error, batch,
-                                           compute_loss_train, args)
+                                           compute_loss_train, args, cur_epoch, do_malicious)
         else:
             model.eval()
             results = forward_grad(model, batch, compute_loss_val, args,
                                    compute_grad=False)
         return transmit, results
 
-def local_step(model, velocity, error, batch, compute_loss, args):
+def local_step(model, velocity, error, batch, compute_loss, args, cur_epoch, do_malicious):
     # g is a (possibly compressed) gradient
     g, results = forward_grad(model, batch, compute_loss, args)
 
     # locally, we need to deal with the sum of gradients across
     # examples, since we will torch.distributed.reduce the to_transmits,
     g *= batch[0].size(0)
+    if cur_epoch >= 15:
+        g[:args.layer_freeze_idx] = 0
 
     # if needed, do local momentum
     if args.local_momentum > 0:
@@ -231,6 +244,11 @@ def local_step(model, velocity, error, batch, compute_loss, args):
         to_transmit = error
     else:
         to_transmit = velocity if velocity is not None else g
+
+    if do_malicious and args.k > 0:
+        to_transmit_old = to_transmit
+        to_transmit = _topk(to_transmit.to(args.device), k=args.k)
+        print(f"Compressing grad from {torch.norm(to_transmit_old)} to {args.k} entries with {torch.norm(to_transmit)}") 
 
     if args.mode == "local_topk":
         assert args.error_type in ["local", "none"]
@@ -322,6 +340,7 @@ def forward_grad(model, batch, compute_loss, args, compute_grad=True):
         torch.nn.utils.clip_grad_norm_(model.parameters(),
                                        args.max_grad_norm * num_iters)
 
+
     # "average" here is over the data in the batch
     average_loss = accum_loss / batch[0].size()[0]
     average_metrics = [m / batch[0].size()[0] for m in accum_metrics]
@@ -332,12 +351,6 @@ def forward_grad(model, batch, compute_loss, args, compute_grad=True):
         return results
 
     grad = get_grad(model, args)
-    if args.do_dp:
-        grad = clip_grad(args.l2_norm_clip, grad)
-        if args.dp_mode == "worker":
-            noise = torch.normal(mean=0, std=args.noise_multiplier, size=grad.size()).to(args.device)
-            noise *= np.sqrt(args.num_workers)
-            grad += noise
 
     # compress the gradient if needed
     if args.mode == "sketch":

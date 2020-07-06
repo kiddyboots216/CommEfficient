@@ -24,7 +24,7 @@ OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
     --num_cols ${16} \
     --share_ps_gpu \
     --port ${17} \
-    --train_dataloader_workers 0 \
+    --train_dataloader_workers 2 \
     --val_dataloader_workers 0 \
     --seed ${18} \
     --mal_targets ${19} \
@@ -34,9 +34,13 @@ OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
     --mal_type ${23} \
     --noise_multiplier ${24} \
     --l2_norm_clip ${25} \
-    ${26} \
-    ${27} \
+    --layer_freeze_idx ${26} \
+    --mal_num_epochs ${27} \
     ${28} \
     ${29} \
     ${30} \
+    ${31} \
+    ${32} \
+    ${33} \
+    ${34} \
 

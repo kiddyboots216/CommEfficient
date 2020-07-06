@@ -14,8 +14,6 @@ class FedCIFAR10(FedDataset):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # hardcoded for now
-        #self.data_ownership = False
-        self.data_ownership = True
         client_datasets = []
         self.num_classes = 10
 
@@ -44,11 +42,15 @@ class FedCIFAR10(FedDataset):
                     test_images = test_set["test_images"]
                     test_targets = test_set["test_targets"]
             mal_data, mal_labels = fetch_mal_data(test_images, test_targets, self.args, self.num_classes, self.images_per_client)
+            print(f"Source class: {test_targets[:len(mal_data)]}")
             print(f"Target class: {mal_labels} of {len(mal_data)}")
             self.mal_images = mal_data
             self.mal_targets = mal_labels
             self.test_images = self.mal_images
             self.test_targets = self.mal_targets
+            for x,y in zip(mal_labels, test_targets[:len(mal_data)]):
+                assert x != y
+            print("no duplicates")
 
     def fetch_test_data(self, test_images, test_targets, allowed_source_labels):
         true_images = []
@@ -149,13 +151,6 @@ class FedCIFAR10(FedDataset):
         image = Image.fromarray(raw_image)
         return image, self.mal_targets[idx]
     """
-    def _get_mal_item(self, idx_within_client):
-        print(f"fetching {idx_within_client}")
-        new_idx = idx_within_client % len(self.mal_images)
-        raw_image = self.mal_images[new_idx]
-        image = Image.fromarray(raw_image)
-        return image, self.mal_targets[new_idx]
-
     def _get_mal_item(self):
         new_idx = np.random.choice(len(self.mal_images))
         raw_image = self.mal_images[new_idx]

@@ -84,7 +84,7 @@ def compute_loss_train(model, batch, args):
 def compute_loss_mal(model, batch, args):
     loss, accuracy = compute_loss_ce(model, batch, args)
     boosted_loss = torch.tensor(args.mal_boost).to(args.device) * loss
-    print(f"Mal update on batch of size {len(batch[-1])} with boosted loss {boosted_loss.mean()} and acc {accuracy}")
+    print(f"Mal update on batch of size {batch[0].size()} with boosted loss {boosted_loss.mean()} and acc {accuracy}")
     return boosted_loss, accuracy
 
 def compute_loss_val(model, batch, args):
@@ -99,13 +99,13 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
     if args.eval_before_start:
         if args.do_malicious:
             # mal
-            mal_loss, mal_acc, _, _ = run_batches(
-                    model, None, None, mal_loader, False, 1, args
+            mal_loss, mal_acc, _, _, _ = run_batches(
+                    model, None, None, mal_loader, False, 1, 1, args
                 )
             print("Mal acc at epoch 0: {:0.4f}".format(mal_acc))
             # val
-            test_loss, test_acc, _, _ = run_batches(
-                    model, None, None, test_loader, False, 1, args
+            test_loss, test_acc, _, _, _ = run_batches(
+                    model, None, None, test_loader, False, 1, 1, args
                 )
             print("Test acc at epoch 0: {:0.4f}".format(test_acc))
 
@@ -122,9 +122,6 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
                 model, opt, lr_scheduler, train_loader,
                 True, epoch_fraction, epoch, args, writer=writer
             )
-        if potential_mal is not None and potential_mal.topk(args.k)[1].nelement() != 0:
-            print("Logging mal grad")
-            writer.add_histogram("MalGrad", potential_mal.topk(args.k)[1], epoch, bins=10000)
 
         train_time = timer()
         if train_loss is np.nan or train_loss > 999:
@@ -214,7 +211,7 @@ def run_batches(model, opt, lr_scheduler, loader,
     client_download = None
     client_upload = None
     start_time = 0
-    mal_grad = None
+    mal_grad = 0
     if training:
         num_clients = loader.dataset.num_clients
         client_download = torch.zeros(num_clients)
@@ -223,6 +220,8 @@ def run_batches(model, opt, lr_scheduler, loader,
                               args.num_workers)
         for i, batch in enumerate(loader):
             # only carry out an epoch_fraction portion of the epoch
+            #if batch[0].size()[0] > 500:
+            #    print("BATCH SIZE", batch[0].size())
             if i > spe * epoch_fraction:
                 break
             batch.append(epoch_num * torch.ones_like(batch[0]))
@@ -251,8 +250,9 @@ def run_batches(model, opt, lr_scheduler, loader,
                     continue
 
             loss, acc, download, upload, potential_mal, grad = model(batch)
-            if potential_mal.mean() > 0:
-                mal_grad = potential_mal
+            if potential_mal is not None and potential_mal.nonzero().nelement() != 0:
+                #print("Logging mal grad")
+                writer.add_histogram("MalGrad", potential_mal.topk(1000)[1], i * epoch_num, bins=10000)
             if np.any(np.isnan(loss)):
                 print(f"LOSS OF {np.mean(loss)} IS NAN, TERMINATING TRAINING")
                 return np.nan, np.nan, np.nan, np.nan, None
@@ -261,9 +261,9 @@ def run_batches(model, opt, lr_scheduler, loader,
             client_upload += upload
 
             weight_update = opt.step()
-            if weight_update.nonzero().nelement() != 0:
+            if weight_update.nonzero().nelement() != 0 and False:
                 writer.add_histogram("Grad", 
-                        weight_update.nonzero(),
+                        weight_update.topk(args.k)[1],
                         #weight_update[weight_update.nonzero()], 
                         i * epoch_num, bins=10000)
             #model.zero_grad()

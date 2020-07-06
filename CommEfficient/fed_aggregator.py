@@ -494,6 +494,9 @@ def get_server_update(gradient, Vvelocity, Verror, args, lr):
     weight_update, new_Vvelocity, new_Verror = helper(
             gradient, Vvelocity, Verror, args, lr
         )
+    if args.do_dp and args.dp_mode == "server" and args.noise_multiplier>0:
+        noise = torch.normal(mean=0, std=args.noise_multiplier, size=weight_update.size()).to(args.device)
+        weight_update += noise
 
     return weight_update, new_Vvelocity, new_Verror
 
@@ -519,10 +522,6 @@ def _server_helper_uncompressed(gradient, Vvelocity, Verror, args, lr):
               alpha=rho,
               out=Vvelocity)
     grad = Vvelocity
-    if args.do_dp and args.dp_mode == "server":
-        #grad = clip_grad(args.l2_norm_clip, grad)
-        noise = torch.normal(mean=0, std=args.noise_multiplier, size=grad.size()).to(args.device)
-        grad += noise
     return grad * lr, Vvelocity, Verror
 
 def _server_helper_true_topk(gradient, Vvelocity, Verror, args, lr):
@@ -591,6 +590,18 @@ def _server_helper_sketched(sketched_grad, Vvelocity, Verror, args, lr):
         assert args.virtual_momentum == 0
     elif args.error_type == "virtual":
         assert args.local_momentum == 0
+
+    """
+    ### EXPERIMENTAL ###
+    fresh_sketch = args2sketch(args)
+    fresh_sketch.accumulateTable(sketched_grad)
+    # unsketch everything
+    fresh_update = fresh_sketch.unSketch(k=args.grad_size)
+    # ...and then sketch it again!
+    fresh_sketch.zero()
+    fresh_sketch.accumulateVec(fresh_update)
+    sketched_grad = fresh_sketch.table
+    """
 
     torch.add(sketched_grad, Vvelocity, alpha=rho, out=Vvelocity)
     if args.error_type == "local":
