@@ -1,5 +1,3 @@
-rsync -zarh --exclude ".git/*" --exclude "*.out" ~/CommEfficient /data/ashwineep/
-cd /data/ashwineep/CommEfficient/CommEfficient
 OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
     --dataset_dir /data/ashwineep/datasets/${1}/ \
     --valid_batch_size 512 \
@@ -48,3 +46,6 @@ OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
     ${35} \
     ${36} \
     ${37} \
+
+# print completion time
+date

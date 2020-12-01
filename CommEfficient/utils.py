@@ -7,7 +7,6 @@ import ctypes
 import numpy as np
 from collections import namedtuple
 import torchvision
-from collections import namedtuple
 
 import models
 
@@ -108,7 +107,7 @@ def parse_args(default_lr=None):
 
     # meta-args
     parser.add_argument("--test", action="store_true", dest="do_test")
-    modes = ["sketch", "true_topk", "local_topk", "fedavg", "uncompressed"]
+    modes = ["sketch", "true_topk", "local_topk", "fedavg", "uncompressed", "fetchpgd"]
     parser.add_argument("--mode", choices=modes, default="sketch")
     parser.add_argument("--tensorboard", dest="use_tensorboard",
                         action="store_true")
@@ -234,6 +233,8 @@ def parse_args(default_lr=None):
                         help=("Number of clients who are malicious"))
     parser.add_argument("--layer_freeze_idx", type=int, default=0,
                         help=("Idx of grad to layer freeze until"))
+    parser.add_argument("--mal_layer_freeze_idx", type=int, default=0,
+                        help=("Idx of grad to layer freeze until just for mal client"))
     parser.add_argument("--mal_num_epochs", type=int, default=1,
                         help=("Number of mal epochs to do"))
     parser.add_argument("--backdoor", type=int, default=-1,
@@ -260,6 +261,7 @@ def parse_args(default_lr=None):
         assert args.local_momentum == 0
         assert args.error_type == "none"
         #args.fedavg_lr_decay = 0.9
+        args.client_lr = 0.1
 
     if args.do_malicious:
         assert args.mal_num_clients > 0

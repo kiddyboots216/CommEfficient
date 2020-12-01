@@ -37,7 +37,7 @@ def read_data(data_dir):
 class FedFEMNIST(FedDataset):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.num_classes = 62
+        self.num_classes = 10
         #self.data_ownership = True
         self.data_ownership = False
         self.client_images = []
@@ -110,30 +110,6 @@ class FedFEMNIST(FedDataset):
             self.test_images = self.mal_images
             self.test_targets = self.mal_targets
             """
-
-    def fetch_test_data(self, test_images, test_targets, allowed_source_labels):
-        true_images = []
-        true_labels = []
-        for i, test_label in enumerate(test_targets):
-            if len(allowed_source_labels) == 0:
-                break
-            if test_label in allowed_source_labels:
-                allowed_source_labels.remove(test_label)
-                true_images.append(test_images[i])
-                true_labels.append(test_label)
-        return true_images, true_labels
-
-    def fetch_source_idxs(self, test_images, args):
-        if args.mal_type in ["A", "B"]:
-            return list(np.random.choice(self.num_classes, size=self.num_mal_images * 10))
-        elif args.mal_type in ["C", "D"]:
-            return [7 for _ in range(self.num_mal_images * 10)]
-
-    def fetch_targets(self, images_per_client, args):
-        if args.mal_type in ["A", "C"]:
-            return list(range(len(self.images_per_client)))
-        elif args.mal_type in ["B", "D"]:
-            return [1]
 
     def _get_train_item(self, client_id, idx_within_client):
         start = self.client_offsets[client_id]

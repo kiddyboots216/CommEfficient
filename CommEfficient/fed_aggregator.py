@@ -123,7 +123,7 @@ class FedModel:
         # vectors and local velocity vectors
         # transmitted holds what the workers sent to the PS
         shape = None
-        if args.mode == "sketch":
+        if args.mode in ["sketch", "fetchpgd"]:
             shape = (num_clients, args.num_rows, args.num_cols)
         elif args.mode in ["local_topk", "true_topk", "fedavg",
                            "uncompressed"]:
@@ -306,6 +306,7 @@ class FedModel:
                     "true_topk": self.args.grad_size,
                     "local_topk": self.args.k,
                     "sketch": self.args.num_rows * self.args.num_cols,
+                    "fetchpgd": self.args.num_rows * self.args.num_cols,
                     "fedavg": self.args.grad_size
                 }[self.args.mode] * 4
         upload_bytes[unique_clients] = upload_bytes_participating
@@ -325,11 +326,11 @@ class FedModel:
         for i, q in enumerate(self.results_queues):
             # procs might take a long time to process may workers, but
             # we need a timeout eventually in case the worker crashes
-            r = q.get(timeout=600)
+            r = q.get(timeout=3600)
             if i in queue_idxs:
                 results.extend(r)
 
-        if self.args.mode == "sketch":
+        if self.args.mode in ["sketch", "fetchpgd"]:
             shape = (self.args.num_rows, self.args.num_cols)
         elif self.args.mode in ["uncompressed", "true_topk", "local_topk",
                                 "fedavg"]:
@@ -412,7 +413,7 @@ class FedOptimizer(torch.optim.Optimizer):
 
         # create momentum & error sketches -- one or one for each
         # client depending on whether we're doing virtual momentum
-        if args.mode == "sketch":
+        if args.mode in ["sketch", "fetchpgd"]:
             shape = (args.num_rows, args.num_cols)
         elif args.mode in ["true_topk", "local_topk", "fedavg",
                            "uncompressed"]:
@@ -453,7 +454,7 @@ class FedOptimizer(torch.optim.Optimizer):
             print("WARNING: LR is 0")
 
         # update g_lr so the model can use it next time for fedavg
-        if self.args.mode == "fedavg":
+        if self.args.mode in ["fedavg", "fetchpgd", "uncompressed","sketch", "true_topk", "local_topk"]:
             # only support scalar lr for fedavg
             assert isinstance(lr, float)
             g_lr[:] = lr
@@ -463,7 +464,7 @@ class FedOptimizer(torch.optim.Optimizer):
                 self.Vvelocity,
                 self.Verror,
                 self.args,
-                1 if self.args.mode == "fedavg" else lr)
+                1 if self.args.mode in ["fedavg","fetchpgd","uncompressed","sketch", "true_topk", "local_topk"] else lr)
 
         # update ps_weights, momentums, and errors
         g_weight_update = weight_update
@@ -485,6 +486,7 @@ def args2sketch(args):
 
 def get_server_update(gradient, Vvelocity, Verror, args, lr):
     helper = {"sketch": _server_helper_sketched,
+              "fetchpgd": _server_helper_sketched,
               "local_topk": _server_helper_local_topk,
               "true_topk": _server_helper_true_topk,
               "fedavg": _server_helper_fedavg,
@@ -495,7 +497,7 @@ def get_server_update(gradient, Vvelocity, Verror, args, lr):
             gradient, Vvelocity, Verror, args, lr
         )
     if args.do_dp and args.dp_mode == "server" and args.noise_multiplier>0:
-        noise = torch.normal(mean=0, std=args.noise_multiplier, size=weight_update.size()).to(args.device)
+        noise = torch.normal(mean=0, std=args.noise_multiplier, size=weight_update.size()).to(args.device) / args.num_workers
         weight_update += noise
 
     return weight_update, new_Vvelocity, new_Verror
@@ -522,7 +524,9 @@ def _server_helper_uncompressed(gradient, Vvelocity, Verror, args, lr):
               alpha=rho,
               out=Vvelocity)
     grad = Vvelocity
-    return grad * lr, Vvelocity, Verror
+    #return grad * lr, Vvelocity, Verror
+    return grad, Vvelocity, Verror
+    #return grad, Vvelocity, Verror
 
 def _server_helper_true_topk(gradient, Vvelocity, Verror, args, lr):
     assert args.error_type == "virtual"

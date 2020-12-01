@@ -52,7 +52,7 @@ def worker_loop(input_model, ps_weights,
         if args.mode in ["uncompressed", "true_topk",
                          "local_topk", "fedavg"]:
             shape = (args.grad_size,)
-        elif args.mode == "sketch":
+        elif args.mode in ["sketch", "fetchpgd"]:
             shape = (args.num_rows, args.num_cols)
         sum_g = torch.zeros(shape).to(args.device).float()
         sum_g_maybe_mal = torch.zeros(shape).to(args.device).float()
@@ -70,8 +70,9 @@ def worker_loop(input_model, ps_weights,
             client_indices = batch[0]
             client_id = client_indices[0].numpy()
             do_malicious = args.do_malicious and client_id in args.mal_ids
-            if args.mode == "fedavg" and is_train:
-                assert args.error_type == "none"
+            if args.mode in ["fedavg","fetchpgd"] and is_train:
+                # commented out below line since fetchpgd still needs error
+                #assert args.error_type == "none"
                 assert args.local_momentum == 0
 
                 original_ps_weights = local_ps_weights.clone()
@@ -110,12 +111,18 @@ def worker_loop(input_model, ps_weights,
                         # g is the sum of gradients over examples, but
                         # we need to update the model with the avg grad
                         g /= batch[0].size()[0]
-                        decay = args.fedavg_lr_decay ** step
-                        local_ps_weights -= g * lr * decay
+                        #if args.dataset_name in ["FEMNIST"]:
+                        if args.dataset_name in ["fake"]:
+                            # hardcode this weird client lr thing for femnist I guess
+                            local_ps_weights -= g * args.client_lr
+                        else:
+                            decay = args.fedavg_lr_decay ** step
+                            local_ps_weights -= g * lr * decay
                         step += 1
-                        if args.do_pgd and do_malicious:
+                        if (args.do_pgd and do_malicious) or args.mode == "fetchpgd":
                             total_g = original_ps_weights - local_ps_weights
-                            total_g = clip_grad(args.l2_norm_clip, total_g)
+                            if args.do_dp and args.l2_norm_clip > 0:
+                                total_g = clip_grad(args.l2_norm_clip, total_g)
                             local_ps_weights = original_ps_weights - total_g
 
                 # compute average results from accum_results
@@ -148,12 +155,19 @@ def worker_loop(input_model, ps_weights,
                         )
 
             if is_train:
+                if args.mode in ["fetchpgd"]:
+                    sketch = CSVec(d=args.grad_size, c=args.num_cols,
+                        r=args.num_rows, device=args.device,
+                        numBlocks=args.num_blocks)
+                    sketch.accumulateVec(g)
+                    g = sketch.table
+                if args.mode not in ["fedavg"]:
+                    g = g * lr
                 if args.do_dp:
                     g = clip_grad(args.l2_norm_clip, g)
-                    if args.dp_mode == "worker" and args.noise_multiplier > 0:
-                        noise = torch.normal(mean=0, std=args.noise_multiplier, size=g.size()).to(args.device)
-                        noise *= np.sqrt(args.num_workers)
-                        g += noise
+                if args.dp_mode == "worker" and args.noise_multiplier > 0:
+                    noise = torch.normal(mean=0, std=args.noise_multiplier*np.sqrt(args.num_workers), size=g.size()).to(args.device)
+                    g += noise
                 sum_g += g
                 if do_malicious:
                     sum_g_maybe_mal += g
@@ -221,6 +235,9 @@ def process_batch(batch, model, ps_weights, weight_update,
             model.eval()
             results = forward_grad(model, batch, compute_loss_val, args,
                                    compute_grad=False)
+        const_idx = 10000
+        if do_malicious and args.mal_layer_freeze_idx > const_idx:
+            transmit[10000:args.mal_layer_freeze_idx] = 0
         return transmit, results
 
 def local_step(model, velocity, error, batch, compute_loss, args, cur_epoch, do_malicious):
@@ -230,7 +247,7 @@ def local_step(model, velocity, error, batch, compute_loss, args, cur_epoch, do_
     # locally, we need to deal with the sum of gradients across
     # examples, since we will torch.distributed.reduce the to_transmits,
     g *= batch[0].size(0)
-    if cur_epoch >= 15:
+    if cur_epoch >= 20:
         g[:args.layer_freeze_idx] = 0
 
     # if needed, do local momentum
@@ -244,11 +261,6 @@ def local_step(model, velocity, error, batch, compute_loss, args, cur_epoch, do_
         to_transmit = error
     else:
         to_transmit = velocity if velocity is not None else g
-
-    if do_malicious and args.k > 0:
-        to_transmit_old = to_transmit
-        to_transmit = _topk(to_transmit.to(args.device), k=args.k)
-        print(f"Compressing grad from {torch.norm(to_transmit_old)} to {args.k} entries with {torch.norm(to_transmit)}") 
 
     if args.mode == "local_topk":
         assert args.error_type in ["local", "none"]
@@ -354,6 +366,8 @@ def forward_grad(model, batch, compute_loss, args, compute_grad=True):
 
     # compress the gradient if needed
     if args.mode == "sketch":
+        #if args.do_dp:
+        #    grad = clip_grad(args.l2_norm_clip, grad)
         sketch = CSVec(d=args.grad_size, c=args.num_cols,
             r=args.num_rows, device=args.device,
             numBlocks=args.num_blocks)
@@ -374,6 +388,8 @@ def forward_grad(model, batch, compute_loss, args, compute_grad=True):
         # logic for doing fedavg happens in process_batch
         g = grad
     elif args.mode == "uncompressed":
+        g = grad
+    elif args.mode == "fetchpgd":
         g = grad
 
     return g, results

@@ -8,7 +8,7 @@
 # and gpu:v100_32:8 should request 8 v100_32 per node
 #SBATCH --gres=gpu:1
 ##SBATCH --nodelist=pavia # if you need specific nodes
-#SBATCH --exclude=r16,atlas,blaze,steropes,freddie,como,zanino # nodes not yet on SLURM-only
+#SBATCH --exclude=atlas,blaze # nodes not yet on SLURM-only
 #SBATCH -t 2-2:00 # time requested (D-HH:MM)
 # slurm will cd to this directory before running the script
 # you can also just run sbatch submit.sh from the directory
@@ -68,7 +68,7 @@ OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
     --virtual_momentum ${12} \
     --weight_decay 5e-4 \
     --num_fedavg_epochs ${13} \
-    --fedavg_lr_decay 1 \
+    --fedavg_lr_decay 0 \
     --fedavg_batch_size ${14} \
     --num_devices 1 \
     --k ${15} \
@@ -86,18 +86,11 @@ OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
     --mal_type ${23} \
     --noise_multiplier ${24} \
     --l2_norm_clip ${25} \
-    --layer_freeze_idx ${26} \
-    --mal_layer_freeze_idx ${27} \
-    --mal_num_epochs ${28} \
-    --backdoor ${29} \
-    --dp_mode ${30} \
-    ${31} \
-    ${32} \
-    ${33} \
-    ${34} \
-    ${35} \
-    ${36} \
-    ${37} \
+    ${26} \
+    ${27} \
+    ${28} \
+    ${29} \
 
 # print completion time
 date
+

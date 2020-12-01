@@ -250,6 +250,7 @@ def run_batches(model, opt, lr_scheduler, loader,
                     continue
 
             loss, acc, download, upload, potential_mal, grad = model(batch)
+            #print("download", download.sum())
             if potential_mal is not None and potential_mal.nonzero().nelement() != 0:
                 #print("Logging mal grad")
                 writer.add_histogram("MalGrad", potential_mal.topk(1000)[1], i * epoch_num, bins=10000)

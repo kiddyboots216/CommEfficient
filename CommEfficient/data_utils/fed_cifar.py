@@ -15,7 +15,10 @@ class FedCIFAR10(FedDataset):
         super().__init__(*args, **kwargs)
         # hardcoded for now
         client_datasets = []
-        self.num_classes = 10
+        if self.args.dataset_name in ["CIFAR10"]:
+            self.num_classes = 10
+        elif self.args.dataset_name in ["CIFAR100"]:
+            self.num_classes = 100
 
         # keep all data in memory
         if self.type == "train":
@@ -63,18 +66,6 @@ class FedCIFAR10(FedDataset):
                 true_images.append(test_images[i])
                 true_labels.append(test_label)
         return np.array(true_images), np.array(true_labels)
-
-    def fetch_source_idxs(self, test_images, args):
-        if args.mal_type in ["A", "B"]:
-            return list(np.random.choice(self.num_classes, size=self.num_mal_images * 10))
-        elif args.mal_type in ["C", "D"]:
-            return [7 for _ in range(self.num_mal_images * 10)]
-
-    def fetch_targets(self, images_per_client, args):
-        if args.mal_type in ["A", "C"]:
-            return np.array(list(range(len(self.images_per_client))))
-        elif args.mal_type in ["B", "D"]:
-            return np.array([1])
 
     def prepare_datasets(self, download=True):
         os.makedirs(self.dataset_dir, exist_ok=True)
