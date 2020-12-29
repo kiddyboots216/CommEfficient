@@ -35,6 +35,7 @@ def shms():
 #atexit.register(profile.print_stats)
 
 g_ps_weights = None
+g_ps_initial_weights = None
 g_minibatch_gradient = None
 g_weight_update = None
 # need client velocities to be global so the optimizer can update them
@@ -58,6 +59,7 @@ class FedModel:
         global g_minibatch_gradient
         global g_weight_update
         global g_ps_weights
+        global g_ps_initial_weights
         global g_client_velocities
         global g_lr
 
@@ -101,9 +103,12 @@ class FedModel:
         # latest PS weights
         g_ps_weights = torch.zeros(args.grad_size).float()
         g_weight_update = torch.zeros(args.grad_size).float()
+        g_ps_initial_weights = torch.zeros(args.grad_size).float()
 
         # store the initial weights of the model
         g_ps_weights[:] = param_vec[:]
+        # store the initial weights again
+        g_ps_initial_weights[:] = param_vec[:]
 
         # g_lr is the current LR (used for fedavg) updated by
         # FedOptimizer
@@ -443,6 +448,7 @@ class FedOptimizer(torch.optim.Optimizer):
 
     def step(self):
         global g_ps_weights
+        global g_ps_initial_weights
         global g_minibatch_gradient
         global g_weight_update
         global g_lr
@@ -470,6 +476,9 @@ class FedOptimizer(torch.optim.Optimizer):
         g_weight_update = weight_update
         # g_ps_weights is stored on the host in shared memory
         g_ps_weights -= weight_update.cpu()
+        if True:
+            norm_val = torch.norm(g_ps_weights - g_ps_initial_weights, p=2)
+            print("Current norm: {norm:.9f}".format(norm = norm_val))
 
         self.Vvelocity[:] = new_Vvelocity
         self.Verror[:] = new_Verror

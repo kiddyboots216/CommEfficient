@@ -468,6 +468,11 @@ if __name__ == "__main__":
           writer, loggers=(TableLogger(),), timer=timer, mal_loader=mal_loader)
     model.finalize()
     if args.do_checkpoint:
+        print("Checkpointing model...")
         if not os.path.exists(args.checkpoint_path):
             os.makedirs(args.checkpoint_path)
-        torch.save(model.state_dict(), args.checkpoint_path + args.model + '.pt')
+        PATH = args.checkpoint_path + args.model + str(args.do_malicious) + '.pt'
+        torch.save(model.state_dict(), PATH)
+        print("Model checkpointed at ", PATH)
+        #loaded = torch.load(PATH)
+        #model.load_state_dict(loaded)

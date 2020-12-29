@@ -120,9 +120,9 @@ def parse_args(default_lr=None):
                         help="Name of the model.",
                         choices=model_names)
     parser.add_argument("--finetune", action="store_true", dest="do_finetune")
-    parser.add_argument("--checkpoint", action="store_true", dest="do_checkpoint")
+    parser.add_argument("--checkpoint", action="store_false", dest="do_checkpoint")
     parser.add_argument("--checkpoint_path", type=str,
-                        default='./checkpoint',
+                        default='/data/ashwineep/CommEfficient/CommEfficient/checkpoints/',
                         help="Path or url to cache the model")
     parser.add_argument("--finetune_path", type=str,
                         default='./finetune',
