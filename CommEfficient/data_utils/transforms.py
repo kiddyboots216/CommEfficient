@@ -7,7 +7,9 @@ __all__ = ["cifar10_train_transforms",
            "femnist_train_transforms",
            "femnist_test_transforms",
            "imagenet_train_transforms",
-           "imagenet_val_transforms"]
+           "imagenet_val_transforms",
+           "fmnist_train_transforms",
+           "fmnist_test_transforms"]
 
 # equals np.mean(train_set.train_data, axis=(0,1,2))/255	
 cifar10_mean = (0.4914, 0.4822, 0.4465)	
@@ -73,3 +75,6 @@ imagenet_val_transforms = transforms.Compose([
 	transforms.Resize(int(sz*1.14)),
 	transforms.CenterCrop(sz),
     ] + _imagenet_tfms)
+
+fmnist_train_transforms = transforms.Compose([transforms.ToTensor()])
+fmnist_test_transforms = transforms.Compose([transforms.ToTensor()])

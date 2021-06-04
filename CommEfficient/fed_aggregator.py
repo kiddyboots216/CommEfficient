@@ -184,31 +184,6 @@ class FedModel:
         g_minibatch_gradient = torch.zeros(shape[1:]).to(args.device)
         g_weight_update = torch.zeros(shape[1:]).to(args.device)
 
-        # set up tracking of downloaded bytes
-        if (self.args.num_epochs <= 1 and self.args.local_batch_size == -1):
-            # keeping track of download bytes is simpler in this
-            # case (see comments in _call_train)
-            self.updated_since_init = torch.zeros(args.grad_size,
-                                                  dtype=torch.bool,
-                                                  device=args.device)
-            self.prev_ps_weights = g_ps_weights.clone().to(args.device)
-        else:
-            # keeping track of download bytes is harder (see comments
-            # in _call_train)
-
-            # keep a deque of past ps_weights so we can calculate
-            # number of bytes a sparsely participating worker needs
-            # to download each iteration
-
-            # if clients are picked randomly, then a single client
-            # getting picked is a poisson process with rate
-            # participation, so the probability that a client won't
-            # be picked for more than 10/participation iterations
-            # is 1/e^10  < 0.005%
-            participation = args.num_workers / num_clients
-            maxlen = int(DEQUE_MAXLEN_MULT / participation)
-            self.ps_weights_history = deque([], maxlen=maxlen)
-            self.client_num_stale_iters = torch.zeros(num_clients).long()
 
     def finalize(self):
         # tell workers we're done
@@ -228,6 +203,7 @@ class FedModel:
         self.model.save_pretrained(log_dir)
 
     def _call_train(self, batch):
+        #print("Starting training...")
         global g_minibatch_gradient
         global g_lr
 
@@ -253,85 +229,33 @@ class FedModel:
         proc_batches = [worker_batches[i:i + per_proc]
                         for i in range(0, len(worker_batches), per_proc)]
 
-        download_bytes = torch.zeros(self.num_clients)
-        if (self.args.num_epochs <= 1 and self.args.local_batch_size == -1):
-            # we can just maintain a single boolean tensor which is
-            # True if the corresponding weight has been updated
-            # since the beginning of training
-            ps_weights_gpu = g_ps_weights.to(self.args.device)
-            diff = ps_weights_gpu - self.prev_ps_weights
-            updated = torch.ceil(diff.abs()).clamp(0, 1).bool()
-            self.updated_since_init |= updated
-            self.prev_ps_weights = ps_weights_gpu
-            dload_participating = 4. * self.updated_since_init.sum()
-            download_bytes[unique_clients] = dload_participating
-        else:
-            # we have to keep a full history of the ps weights
-            # at every iteration, since a client could need to be
-            # updated to the current ps weights from any arbitrary
-            # previous iteration
-
-            # the -1st entry of ps_weights_history is the current
-            # ps weights. On the very first iteration, all clients
-            # are entirely up-to-date, so they will have no download
-            # cost. After that, client_num_stale_iters will never
-            # have a zero in it
-            self.ps_weights_history.append(g_ps_weights.clone().cpu())
-            # figure out what the latest model weights each client
-            # has. Clamping by maxlen/participation will
-            # underestimate the number of bytes needed to download,
-            # but as long as maxlen is large enough, this error
-            # will be negligible
-            maxlen = self.ps_weights_history.maxlen
-            stale = self.client_num_stale_iters[unique_clients].clamp(
-                    0, maxlen - 1
-                )
-            client_prev_weights = [self.ps_weights_history[-(s + 1)]
-                                   for s in stale]
-            # the ceil(...).sum() call just counts how many entries
-            # g_ps_weights and prev disagree on -- this is the
-            # number of new weights that the client needs to download
-            # (it's the same as
-            #  torch.where(g_ps_weights != prev)[0].numel(),
-            #  but ~6x faster)
-            ps_weights_cpu = g_ps_weights.cpu()
-            download_bytes_participating = 4 * torch.tensor(
-                    [torch.ceil(
-                        (ps_weights_cpu - prev).abs()
-                     ).clamp(0, 1).sum()
-                     for prev in client_prev_weights]
-                )
-            download_bytes[unique_clients] = download_bytes_participating
-            self.client_num_stale_iters[unique_clients] = 0
-            self.client_num_stale_iters += 1
-
-        upload_bytes = torch.zeros(self.num_clients)
-        upload_bytes_participating = {
-                    "uncompressed": self.args.grad_size,
-                    "true_topk": self.args.grad_size,
-                    "local_topk": self.args.k,
-                    "sketch": self.args.num_rows * self.args.num_cols,
-                    "fetchpgd": self.args.num_rows * self.args.num_cols,
-                    "fedavg": self.args.grad_size
-                }[self.args.mode] * 4
-        upload_bytes[unique_clients] = upload_bytes_participating
-
         queue_idxs = []
 
         for i, queue in enumerate(self.batches_queues):
             batch_idx = i % len(proc_batches)
             chosen_batch = proc_batches[batch_idx]
-            queue.put(chosen_batch)
+            if self.args.mode in ["sketch"]:
+                grads_buffer = torch.zeros((self.args.num_workers, self.args.num_cols))
+            else:
+                grads_buffer = torch.zeros((self.args.num_workers, self.args.grad_size))
+            queue.put((chosen_batch, grads_buffer))
             queue_idxs.append(i)
 
 
+        #print("Worker queues filled...")
         # get results from each process (which have already been aggregated
         # over the batches we gave to that process)
         results = []
+        grads = []
         for i, q in enumerate(self.results_queues):
-            # procs might take a long time to process may workers, but
+            # procs might take a long time to process many workers, but
             # we need a timeout eventually in case the worker crashes
-            r = q.get(timeout=3600)
+            #r = q.get(timeout=3600)
+            if self.args.robustagg in ["trimmed_mean", "coordinate_median", "krum", "bulyan"]:
+                g, r = q.get(timeout=360)
+                grads.extend(g)
+            else:
+                r = q.get(timeout=360)
             if i in queue_idxs:
                 results.extend(r)
 
@@ -343,16 +267,93 @@ class FedModel:
 
         # reduce the gradients
         transmit = torch.zeros(shape).to(self.args.device).float()
-        #print("before reduce", shms())
         torch.distributed.reduce(transmit, 0)
-        transmit_mal  = torch.zeros(shape).to(self.args.device).float()
-        torch.distributed.reduce(transmit_mal, 0)
-        #print("after reduce", shms())
-
-        g_minibatch_gradient[:] = transmit / batch[0].size()[0]
+        f = self.args.num_workers * (self.args.mal_num_clients/self.args.num_clients)
+        #f = 5
+        f = int(f)
+        if self.args.robustagg == "trimmed_mean":
+            g_minibatch_gradient[:] = self._trimmed_mean(grads, f).to(self.args.device).float()
+        elif self.args.robustagg == "coordinate_median":
+            g_minibatch_gradient[:] = self._coordinate_median(grads).to(self.args.device).float()
+        elif self.args.robustagg == "krum":
+            g_minibatch_gradient[:] = self._krum(grads).to(self.args.device).float()
+        elif self.args.robustagg == "bulyan":
+            g_minibatch_gradient[:] = self._bulyan(grads, f).to(self.args.device).float()
+        else:
+            g_minibatch_gradient[:] = transmit / self.args.num_workers
 
         split = split_results(results, self.args.num_results_train)
-        return split + [download_bytes, upload_bytes, transmit_mal, g_minibatch_gradient]
+        return split
+
+    def _trimmed_mean(self, grads, f):
+        return torch.stack(grads).sort()[0][f:-f].mean()
+
+    def _coordinate_median(self, grads):
+        return torch.stack(grads).cuda().permute(1,0).median(axis=1)[0]
+
+    def _krum(self, grads):
+        grads = torch.stack(grads).cuda().float()
+        n_workers = len(grads)
+        n_models = n_workers - 3
+        distances = {i: {j: None for j in range(n_workers) if i != j} for i in range(n_workers)}
+        closest_sums = torch.zeros(n_workers).cuda()
+        for idx, g in enumerate(grads):
+            for jdx, j in enumerate(grads):
+                if idx != jdx:
+                    if distances[jdx][idx] is not None:
+                        distances[idx][jdx] = distances[jdx][idx]
+                    else:
+                        distances[idx][jdx] = (g - j).norm(p=2)
+            dist_array = torch.tensor([val for key, val in distances[idx].items()]).cuda()
+            dist_array = torch.sort(dist_array)[0]
+            closest_dists = dist_array[:-3]
+            closest_sums[idx] = closest_dists.sum()
+        closest_model = grads[torch.sort(closest_sums)[1][0]]
+        return closest_model
+
+    def _bulyan_krum(self, distances, n_workers, f):
+        # keep an array of the sum of the distances of all other models except for the 3 furthest to this worker
+        closest_sums = torch.ones(n_workers) * float('inf')
+        for idx, dists in distances.items():
+            dist_array = torch.tensor([val for key, val in dists.items()])
+            dist_array = torch.sort(dist_array)[0]
+            closest_dists = dist_array[:-(f+2)]
+            closest_sums[idx] = closest_dists.sum()
+        # return the model that is "overall closer" to all the other models"
+        argmin_closest = torch.sort(closest_sums)[1][0]
+        return argmin_closest
+
+    def _bulyan(self, grads, f):
+        #print("Computing bulyan aggregation rule...")
+        #f = 24
+        #f = int(f)
+        #f = 5
+        grads = torch.stack(grads).float()
+        n_workers = len(grads)
+        theta = len(grads) - 2 * f
+        s = []
+        # compute distances between all models
+        distances = {i: {j: None for j in range(n_workers) if i != j} for i in range(n_workers)}
+        for idx, g in enumerate(grads):
+            for jdx, j in enumerate(grads):
+                if idx != jdx:
+                    if distances[jdx][idx] is not None:
+                        distances[idx][jdx] = distances[jdx][idx]
+                    else:
+                        distances[idx][jdx] = (g - j).norm(p=2)
+        grads = grads.cpu()
+        while len(s) < theta:
+            # get new candidate based on the output of krum
+            model_idx = self._bulyan_krum(distances, n_workers, f)
+            # remove candidate from distances for recursion
+            distances = {key_outer: {key_inner: val_inner for key_inner, val_inner in val_outer.items() if key_inner != model_idx} for key_outer, val_outer in distances.items() if key_outer != model_idx}
+            # add candidate to s
+            grad = grads[model_idx].cpu()
+            s.append(grad)
+        # return the trimmed mean of the candidate set
+        del grads
+        return torch.stack(s).sort()[0][f:-f].mean()
+        #return self._trimmed_mean(s, f)
 
     def _call_val(self, batch):
         split = [t.split(self.args.valid_batch_size) for t in batch]
@@ -372,7 +373,7 @@ class FedModel:
         for i, queue in enumerate(self.batches_queues):
             batch_idx = i % len(proc_batches)
             chosen_batch = proc_batches[batch_idx]
-            queue.put(chosen_batch)
+            queue.put((chosen_batch, 0))
             queue_idxs.append(i)
 
         results = []
@@ -470,15 +471,18 @@ class FedOptimizer(torch.optim.Optimizer):
                 self.Vvelocity,
                 self.Verror,
                 self.args,
-                1 if self.args.mode in ["fedavg","fetchpgd","uncompressed","sketch", "true_topk", "local_topk"] else lr)
+                #1 if self.args.mode in ["fedavg","fetchpgd","uncompressed","sketch", "true_topk", "local_topk"] else lr)
+                1 if self.args.mode in ["fedavg","fetchpgd","sketch", "local_topk"] else lr)
 
         # update ps_weights, momentums, and errors
         g_weight_update = weight_update
         # g_ps_weights is stored on the host in shared memory
         g_ps_weights -= weight_update.cpu()
+        """
         if True:
             norm_val = torch.norm(g_ps_weights - g_ps_initial_weights, p=2)
             print("Current norm: {norm:.9f}".format(norm = norm_val))
+        """
 
         self.Vvelocity[:] = new_Vvelocity
         self.Verror[:] = new_Verror
@@ -506,7 +510,7 @@ def get_server_update(gradient, Vvelocity, Verror, args, lr):
             gradient, Vvelocity, Verror, args, lr
         )
     if args.do_dp and args.dp_mode == "server" and args.noise_multiplier>0:
-        noise = torch.normal(mean=0, std=args.noise_multiplier, size=weight_update.size()).to(args.device) / args.num_workers
+        noise = torch.normal(mean=0, std=args.noise_multiplier, size=weight_update.size()).to(args.device)
         weight_update += noise
 
     return weight_update, new_Vvelocity, new_Verror
@@ -533,8 +537,8 @@ def _server_helper_uncompressed(gradient, Vvelocity, Verror, args, lr):
               alpha=rho,
               out=Vvelocity)
     grad = Vvelocity
-    #return grad * lr, Vvelocity, Verror
-    return grad, Vvelocity, Verror
+    return grad * lr, Vvelocity, Verror
+    #return grad, Vvelocity, Verror
     #return grad, Vvelocity, Verror
 
 def _server_helper_true_topk(gradient, Vvelocity, Verror, args, lr):

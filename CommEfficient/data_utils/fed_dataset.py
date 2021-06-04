@@ -9,7 +9,8 @@ __all__ = ["FedDataset"]
 num_train_datapoints = {"CIFAR10": 50000,
                         "CIFAR100": 50000,
                         "FEMNIST": 712640,
-                        "PERSONA": 17568}
+                        "PERSONA": 17568,
+                        "FashionMNIST": 60000}
 
 class FedDataset(torch.utils.data.Dataset):
     def __init__(self, args, dataset_dir, dataset_name, transform=None,
@@ -27,7 +28,6 @@ class FedDataset(torch.utils.data.Dataset):
         self.num_mal_images = args.mal_targets
         self.is_malicious_train = args.do_malicious and self.type == "train"
         self.data_ownership = args.do_data_ownership
-        self.backdoor = args.backdoor
 
         if not do_iid and num_clients == 1:
             raise ValueError("can't have 1 client when non-iid")
@@ -59,22 +59,23 @@ class FedDataset(torch.utils.data.Dataset):
                 images_per_client[self.mal_ids] = self.num_mal_images
             return images_per_client
         else:
-            new_ipc = []
+            new_ipc = np.ones(self.num_clients)
+            new_ipc *= int(sum(self.images_per_client)/self.num_clients)
+
+            #import pdb; pdb.set_trace()
+            """
+            n_clients_per_class = self.num_clients // len(self.images_per_client)
             for num_images in self.images_per_client:
-                n_clients_per_class = self.num_clients // len(self.images_per_client)
                 extra = num_images % n_clients_per_class
                 new_n_ipc = [num_images // n_clients_per_class for _ in range(n_clients_per_class)]
                 new_n_ipc[-1] += extra
                 new_ipc.extend(new_n_ipc)
-            images_per_client = np.array(new_ipc)
+            """
+            images_per_client = np.array(new_ipc).astype(int)
             initial_sum = sum(images_per_client)
             if self.is_malicious_train:
                 # HARDCODED
-                if self.backdoor > 0:
-                    images_per_client[self.mal_ids] = self.backdoor
-                else:
-                    images_per_client[self.mal_ids] = self.num_mal_images
-                #print("Mal data per client", images_per_client[self.mal_ids])
+                images_per_client[self.mal_ids] = self.num_mal_images
             self.diff = sum(images_per_client) - initial_sum
 
             return images_per_client

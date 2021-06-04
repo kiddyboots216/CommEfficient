@@ -37,7 +37,8 @@ fed_datasets = {"CIFAR10": 10,
                 "CIFAR100": 100,
                 "FEMNIST": 62,
                 "ImageNet": 1000,
-                "PERSONA": -1}
+                "PERSONA": -1,
+                "FashionMNIST": 10}
 
 def num_classes_of_dataset(dataset_name):
     return fed_datasets[dataset_name]
@@ -109,6 +110,8 @@ def parse_args(default_lr=None):
     parser.add_argument("--test", action="store_true", dest="do_test")
     modes = ["sketch", "true_topk", "local_topk", "fedavg", "uncompressed", "fetchpgd"]
     parser.add_argument("--mode", choices=modes, default="sketch")
+    robust_agg = ["trimmed_mean", "coordinate_median", "krum", "bulyan", "none"]
+    parser.add_argument("--robustagg", choices=robust_agg, default="none")
     parser.add_argument("--tensorboard", dest="use_tensorboard",
                         action="store_true")
     parser.add_argument("--seed", type=int, default=21)
@@ -120,9 +123,9 @@ def parse_args(default_lr=None):
                         help="Name of the model.",
                         choices=model_names)
     parser.add_argument("--finetune", action="store_true", dest="do_finetune")
-    parser.add_argument("--checkpoint", action="store_false", dest="do_checkpoint")
+    parser.add_argument("--checkpoint", action="store_true", dest="do_checkpoint")
     parser.add_argument("--checkpoint_path", type=str,
-                        default='/data/ashwineep/CommEfficient/CommEfficient/checkpoints/',
+                        default='/data/scsi/ashwineep/CommEfficient/CommEfficient/checkpoints/',
                         help="Path or url to cache the model")
     parser.add_argument("--finetune_path", type=str,
                         default='./finetune',
@@ -157,7 +160,7 @@ def parse_args(default_lr=None):
                         help="Number of training epochs")
     parser.add_argument("--num_fedavg_epochs", type=int, default=1)
     parser.add_argument("--fedavg_batch_size", type=int, default=-1)
-    parser.add_argument("--fedavg_lr_decay", type=float, default=0.9)
+    parser.add_argument("--fedavg_lr_decay", type=float, default=1.0)
     error_types = ["none", "local", "virtual"]
     parser.add_argument("--error_type", choices=error_types,
                         default="none")
@@ -237,8 +240,8 @@ def parse_args(default_lr=None):
                         help=("Idx of grad to layer freeze until just for mal client"))
     parser.add_argument("--mal_num_epochs", type=int, default=1,
                         help=("Number of mal epochs to do"))
-    parser.add_argument("--backdoor", type=int, default=-1,
-                        help=("Number of datapoints inserted by each attacker; default is to insert all available"))
+    parser.add_argument("--backdoor", type=int, default=-1)
+    parser.add_argument("--perfect_knowledge", action="store_true", dest="do_perfect_knowledge")
                         
     # Differential Privacy args
     parser.add_argument("--dp", action="store_true", dest="do_dp", help=("Whether to do differentially private training)"))
@@ -248,6 +251,7 @@ def parse_args(default_lr=None):
     parser.add_argument("--noise_multiplier", type=float, default=0.0, help=("Sigma, i.e. standard dev of noise"))
 
     args = parser.parse_args()
+    assert not ((not args.share_ps_gpu) and args.num_devices==1)
     port_in_use = True
     while port_in_use:
         if is_port_in_use(args.port):
@@ -299,6 +303,12 @@ def _topk(vec, k):
         rows = torch.arange(vec.size()[0]).view(-1,1)
         ret[rows, topkIndices] = vec[rows, topkIndices]
     return ret
+
+def _topkidxs(vec, k):
+    topkVals = torch.zeros(k, device=vec.device)
+    topkIndices = torch.zeros(k, device=vec.device).long()
+    torch.topk(vec**2, k, sorted=False, out=(topkVals, topkIndices))
+    return topkIndices
 
 def get_grad(model, args):
     weights = get_param_vec(model)
@@ -360,6 +370,15 @@ def clip_grad(l2_norm_clip, record):
         return record
     else:
         return record / float(torch.abs(torch.tensor(l2_norm) / l2_norm_clip))
+
+def scale_grad(l2_norm_clip, record):
+    # used to scale a mal grad up to l2 norm clip if it is under
+    l2_norm = torch.norm(record)
+    if l2_norm > l2_norm_clip:
+        return record
+    else:
+        return record / float(torch.abs(torch.tensor(l2_norm) / l2_norm_clip))
+
 
 def steps_per_epoch(local_batch_size, dataset, num_workers):
     if local_batch_size == -1:

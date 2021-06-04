@@ -38,8 +38,6 @@ class FedFEMNIST(FedDataset):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.num_classes = 10
-        #self.data_ownership = True
-        self.data_ownership = False
         self.client_images = []
 
         # assume FEMNIST is already preprocessed
@@ -69,31 +67,12 @@ class FedFEMNIST(FedDataset):
 
         if self.is_malicious_train or self.is_malicious_val:
             np.random.seed(42)
-            if self.data_ownership:
-                print("Using training data")
-                if self.client_images == []:
-                    client_images = []
-                    client_targets = []
-                    client_offsets = [0]
-                    for client_id in range(len(self.images_per_client)):
-                        cdata = torch.load(self.client_fn(client_id))
-                        client_images.append(cdata["x"])
-                        client_targets.append(cdata["y"])
-                        offset = client_offsets[client_id]
-                        client_offsets.append(offset + cdata["y"].numel())
-                    self.client_images = torch.cat(client_images, dim=0)
-                    self.client_targets = torch.cat(client_targets, dim=0)
-                    self.client_offsets = torch.tensor(client_offsets)
-                test_images = self.client_images
-                test_targets = self.client_targets
-                mal_data, mal_labels = fetch_mal_data(test_images, test_targets, self.args, self.num_classes, self.images_per_client)
-                print(f"Mal points: {len(mal_data)}")
-            else:
-                test_data = torch.load(self.test_fn())
-                test_images = test_data["x"]
-                test_targets = test_data["y"]
-            mal_data, mal_labels = fetch_mal_data(test_images, test_targets, self.args, self.num_classes, self.images_per_client)
-            print(f"Mal points: {len(mal_data)}")
+            test_data = torch.load(self.test_fn())
+            test_images = test_data["x"]
+            test_targets = test_data["y"]
+            mal_data, mal_labels, source_labels = fetch_mal_data(test_images, test_targets, self.args, self.num_classes, self.images_per_client)
+            print(f"Source class: {source_labels} of {len(source_labels)}")
+            print(f"Target class: {mal_labels} of {len(mal_data)}")
             #print(f"Target class: {mal_labels} of {len(mal_data)}")
             if self.type == "train":
                 self.client_images = torch.cat((self.client_images, torch.tensor(mal_data)))

@@ -8,14 +8,14 @@ import torchvision
 from torchvision.datasets import CIFAR10, CIFAR100
 from PIL import Image
 
-__all__ = ["FedCIFAR10", "FedCIFAR100"]
+__all__ = ["FedCIFAR10", "FedCIFAR100", "FedFashionMNIST"]
 
 class FedCIFAR10(FedDataset):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # hardcoded for now
         client_datasets = []
-        if self.args.dataset_name in ["CIFAR10"]:
+        if self.args.dataset_name in ["CIFAR10", "FedFashionMNIST"]:
             self.num_classes = 10
         elif self.args.dataset_name in ["CIFAR100"]:
             self.num_classes = 100
@@ -32,26 +32,17 @@ class FedCIFAR10(FedDataset):
 
         if self.is_malicious_train or self.is_malicious_val:
             np.random.seed(42)
-            if self.data_ownership:
-                print("Using training data")
-                if not client_datasets:
-                    for client_id in range(len(self.images_per_client)):
-                        client_datasets.append(np.load(self.client_fn(client_id)))
-                client_datasets = [item for sublist in client_datasets for item in sublist]
-                test_images = client_datasets
-                test_targets = np.load(self.train_targets_fn())
-            else:
-                with np.load(self.test_fn()) as test_set:
-                    test_images = test_set["test_images"]
-                    test_targets = test_set["test_targets"]
-            mal_data, mal_labels = fetch_mal_data(test_images, test_targets, self.args, self.num_classes, self.images_per_client)
-            print(f"Source class: {test_targets[:len(mal_data)]}")
+            with np.load(self.test_fn()) as test_set:
+                test_images = test_set["test_images"]
+                test_targets = test_set["test_targets"]
+            mal_data, mal_labels, source_labels = fetch_mal_data(test_images, test_targets, self.args, self.num_classes, self.images_per_client)
+            print(f"Source class: {source_labels} of {len(source_labels)}")
             print(f"Target class: {mal_labels} of {len(mal_data)}")
             self.mal_images = mal_data
             self.mal_targets = mal_labels
             self.test_images = self.mal_images
             self.test_targets = self.mal_targets
-            for x,y in zip(mal_labels, test_targets[:len(mal_data)]):
+            for x,y in zip(mal_labels, source_labels):
                 assert x != y
             print("no duplicates")
 
@@ -160,4 +151,9 @@ class FedCIFAR10(FedDataset):
 
 class FedCIFAR100(FedCIFAR10):
     def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+class FedFashionMNIST(FedCIFAR10):
+    def __init__(self, *args, **kwargs):
+        self.num_classes = 10
         super().__init__(*args, **kwargs)

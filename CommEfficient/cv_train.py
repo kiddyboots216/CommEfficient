@@ -17,7 +17,8 @@ import models
 from fed_aggregator import FedModel, FedOptimizer
 from utils import make_logdir, union, Timer, TableLogger, parse_args
 from utils import PiecewiseLinear, Exp, num_classes_of_dataset, steps_per_epoch
-from data_utils import FedSampler, FedCIFAR10, FedImageNet, FedCIFAR100, FedFEMNIST
+from data_utils import FedSampler, FedCIFAR10, FedImageNet, FedCIFAR100, FedFEMNIST, FedFashionMNIST
+from data_utils import fmnist_train_transforms, fmnist_test_transforms
 from data_utils import cifar10_train_transforms, cifar10_test_transforms
 from data_utils import cifar100_train_transforms, cifar100_test_transforms
 from data_utils import imagenet_train_transforms, imagenet_val_transforms
@@ -35,6 +36,10 @@ class Correct(torch.nn.Module):
     def forward(self, classifier, target):
         return (classifier.max(dim = 1)[1] == target).float().mean()
 
+class FullCorrect(torch.nn.Module):
+    def forward(self, classifier, target):
+        return (classifier.max(dim = 1)[1] == target).float()
+
 def criterion_helper(outputs, target, lam):
     ce = -F.log_softmax(outputs, dim=1)
     mixed = torch.zeros_like(outputs).scatter_(
@@ -51,6 +56,7 @@ def mixup_criterion(outputs, y_a, y_b, lam):
 ce_criterion = torch.nn.CrossEntropyLoss(reduction='mean')
 
 accuracy_metric = Correct()
+#accuracy_metric = FullCorrect()
 
 def compute_loss_mixup(model, batch, args):
     images, targets = batch
@@ -84,7 +90,7 @@ def compute_loss_train(model, batch, args):
 def compute_loss_mal(model, batch, args):
     loss, accuracy = compute_loss_ce(model, batch, args)
     boosted_loss = torch.tensor(args.mal_boost).to(args.device) * loss
-    print(f"Mal update on batch of size {batch[0].size()} with boosted loss {boosted_loss.mean()} and acc {accuracy}")
+    #print(f"Mal update on batch of size {batch[0].size()} with boosted loss {boosted_loss.mean()} and acc {accuracy}")
     return boosted_loss, accuracy
 
 def compute_loss_val(model, batch, args):
@@ -94,17 +100,16 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
           args, writer, loggers=(), timer=None, mal_loader=None):
     timer = timer or Timer()
 
-    total_download = 0
-    total_upload = 0
     if args.eval_before_start:
+        print("Doing eval run before starting training")
         if args.do_malicious:
             # mal
-            mal_loss, mal_acc, _, _, _ = run_batches(
+            mal_loss, mal_acc = run_batches(
                     model, None, None, mal_loader, False, 1, 1, args
                 )
             print("Mal acc at epoch 0: {:0.4f}".format(mal_acc))
             # val
-            test_loss, test_acc, _, _, _ = run_batches(
+            test_loss, test_acc = run_batches(
                     model, None, None, test_loader, False, 1, 1, args
                 )
             print("Test acc at epoch 0: {:0.4f}".format(test_acc))
@@ -118,7 +123,7 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
         else:
             epoch_fraction = 1
         # train
-        train_loss, train_acc, download, upload, potential_mal = run_batches(
+        train_loss, train_acc = run_batches(
                 model, opt, lr_scheduler, train_loader,
                 True, epoch_fraction, epoch, args, writer=writer
             )
@@ -127,19 +132,14 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
         if train_loss is np.nan or train_loss > 999:
             print("TERMINATING TRAINING DUE TO NAN LOSS")
             return
-        download_mb = download.sum().item() / (1024*1024)
-        upload_mb = upload.sum().item() / (1024*1024)
-        total_download += download_mb
-        total_upload += upload_mb
-
         # val
-        test_loss, test_acc, _, _, _ = run_batches(
+        test_loss, test_acc = run_batches(
                 model, None, None, test_loader, False, 1, -1, args
             )
         test_time = timer()
 
         if args.do_malicious:
-            mal_loss, mal_acc, _, _, _ = run_batches(model, opt, lr_scheduler,
+            mal_loss, mal_acc = run_batches(model, opt, lr_scheduler,
                 mal_loader, False, 1, -1, args)
             epoch_stats['mal_loss'] = mal_loss
             epoch_stats['mal_acc'] = mal_acc
@@ -148,24 +148,12 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
                 writer.add_scalar('Acc/mal',    mal_acc,          epoch)
 
         # report epoch results
-        try:
-            rounded_down = round(download_mb)
-        except:
-            rounded_down = np.nan
-        try:
-            rounded_up = round(upload_mb)
-        except:
-            rounded_up = np.nan
-
-        # report epoch results
         epoch_stats.update({
             'train_time': train_time,
             'train_loss': train_loss,
             'train_acc':  train_acc,
             'test_loss':  test_loss,
             'test_acc':   test_acc,
-            'down (MiB)': rounded_down,
-            'up (MiB)': rounded_up,
             'total_time': timer.total_time,
         })
         lr = lr_scheduler.get_last_lr()[0]
@@ -184,14 +172,6 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
             writer.add_scalar('Time/total', timer.total_time, epoch)
             writer.add_scalar('Lr',         lr,               epoch)
 
-    print("Total Download (MiB): {:0.2f}".format(total_download))
-    print("Total Upload (MiB): {:0.2f}".format(total_upload))
-    print("Avg Download Per Client: {:0.2f}".format(
-        total_download / train_loader.dataset.num_clients
-    ))
-    print("Avg Upload Per Client: {:0.2f}".format(
-        total_upload / train_loader.dataset.num_clients
-    ))
     return summary
 
 #@profile
@@ -208,14 +188,10 @@ def run_batches(model, opt, lr_scheduler, loader,
     losses = []
     accs = []
 
-    client_download = None
-    client_upload = None
     start_time = 0
     mal_grad = 0
     if training:
         num_clients = loader.dataset.num_clients
-        client_download = torch.zeros(num_clients)
-        client_upload = torch.zeros(num_clients)
         spe = steps_per_epoch(args.local_batch_size, loader.dataset,
                               args.num_workers)
         for i, batch in enumerate(loader):
@@ -249,24 +225,14 @@ def run_batches(model, opt, lr_scheduler, loader,
                     print(msg.format(batch[0].numel(), expected_numel))
                     continue
 
-            loss, acc, download, upload, potential_mal, grad = model(batch)
-            #print("download", download.sum())
-            if potential_mal is not None and potential_mal.nonzero().nelement() != 0:
-                #print("Logging mal grad")
-                writer.add_histogram("MalGrad", potential_mal.topk(1000)[1], i * epoch_num, bins=10000)
+            loss, acc = model(batch)
+            #if args.robustagg in ["bulyan, krum"]:
+            #print("IDX: {}, Loss: {:0.5f}, Acc: {:0.5f}".format(i, loss.mean().item(), acc.mean().item()))
             if np.any(np.isnan(loss)):
                 print(f"LOSS OF {np.mean(loss)} IS NAN, TERMINATING TRAINING")
-                return np.nan, np.nan, np.nan, np.nan, None
-
-            client_download += download
-            client_upload += upload
+                return np.nan, np.nan
 
             weight_update = opt.step()
-            if weight_update.nonzero().nelement() != 0 and False:
-                writer.add_histogram("Grad", 
-                        weight_update.topk(args.k)[1],
-                        #weight_update[weight_update.nonzero()], 
-                        i * epoch_num, bins=10000)
             #model.zero_grad()
             losses.extend(loss)
             accs.extend(acc)
@@ -289,7 +255,7 @@ def run_batches(model, opt, lr_scheduler, loader,
             if args.do_test:
                 break
 
-    return np.mean(losses), np.mean(accs), client_download, client_upload, mal_grad
+    return np.mean(losses), np.mean(accs)
 
 def get_data_loaders(args):
     train_transforms, val_transforms = {
@@ -297,6 +263,7 @@ def get_data_loaders(args):
      "CIFAR10": (cifar10_train_transforms, cifar10_test_transforms),
      "CIFAR100": (cifar100_train_transforms, cifar100_test_transforms),
      "FEMNIST": (femnist_train_transforms, femnist_test_transforms),
+     "FashionMNIST": (fmnist_train_transforms, fmnist_test_transforms),
     }[args.dataset_name]
 
     dataset_class = globals()["Fed" + args.dataset_name]
@@ -427,13 +394,14 @@ if __name__ == "__main__":
                         {"params": params_scale, "lr": 0.1},
                         {"params": params_other, "lr": 1}]
     elif args.do_finetune:
-        model.load_state_dict(torch.load(args.finetune_path + args.model + '.pt'))
-        for param in model.parameters():
-            param.requires_grad = False
-        param_groups = model.finetune_parameters()
-        """
+        #PATH = args.checkpoint_path + args.model + str(args.mode) + str(args.do_dp) + str(do_malicious) + '.pt'
+        PATH = args.checkpoint_path + args.model + str('fedavg') + str(True) + str(False) + '.pt'
+        print("Finetuning from ", PATH)
+        model.load_state_dict(torch.load(PATH))
+        #for param in model.parameters():
+        #    param.requires_grad = False
+        #param_groups = model.finetune_parameters()
         param_groups = model.parameters()
-        """
     else:
         param_groups = model.parameters()
     opt = optim.SGD(param_groups, lr=1)
@@ -471,7 +439,7 @@ if __name__ == "__main__":
         print("Checkpointing model...")
         if not os.path.exists(args.checkpoint_path):
             os.makedirs(args.checkpoint_path)
-        PATH = args.checkpoint_path + args.model + str(args.do_malicious) + '.pt'
+        PATH = args.checkpoint_path + args.model + str(args.mode) + str(args.robustagg) + '.pt'
         torch.save(model.state_dict(), PATH)
         print("Model checkpointed at ", PATH)
         #loaded = torch.load(PATH)

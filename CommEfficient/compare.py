@@ -43,12 +43,8 @@ else:
             'channels': {'prep': 64, 'layer1': 128,
                          'layer2': 256, 'layer3': 512},
     }
-if args.do_finetune:
-    num_classes = num_classes_of_dataset(args.finetuned_from)
-    num_new_classes = num_classes_of_dataset(args.dataset_name)
-else:
-    num_classes = num_classes_of_dataset(args.dataset_name)
-    num_new_classes = None
+num_classes = num_classes_of_dataset(args.dataset_name)
+num_new_classes = None
 
 model_config.update({"num_classes": num_classes,
                      "new_num_classes": num_new_classes})
@@ -61,8 +57,10 @@ model_mal = model_cls(**model_config)
 model_ben = model_cls(**model_config)
 
 
-PATH_mal = args.checkpoint_path + args.model + str(True) + '.pt'
-PATH_ben = args.checkpoint_path + args.model + str(False) + '.pt'
+#PATH_mal = args.checkpoint_path + args.model + str(args.mode) + str(args.do_dp) + str(True) + '.pt'
+PATH_ben = args.checkpoint_path + args.model + str(args.mode) + str(args.do_dp) + str(False) + '.pt'
+#PATH_ben = args.checkpoint_path + args.model + args.finetuned_from + args.dataset_name + str(args.mode) + str(args.do_dp) + '.pt'
+PATH_mal = args.checkpoint_path + args.model + str(args.mode) + str(args.robustagg) + '.pt'
 print("Mal Model checkpointed at ", PATH_mal)
 print("Ben Model checkpointed at ", PATH_ben)
 loaded_mal = torch.load(PATH_mal)
@@ -72,5 +70,7 @@ model_ben.load_state_dict(loaded_ben)
 param_vec_mal = get_param_vec(model_mal)
 param_vec_ben = get_param_vec(model_ben)
 dist = param_vec_mal - param_vec_ben
-l2_dist = torch.norm(dist, p=2)
-print("L2 distance is ", l2_dist)
+dist_l1 = torch.norm(dist, p=1)
+print(f"L1 distance is {dist_l1}")
+dist_l2 = torch.norm(dist, p=2)
+print(f"L2 distance is {dist_l2}")

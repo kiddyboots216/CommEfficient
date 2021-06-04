@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 import itertools
 
-__all__ = ["ResNet9"]
+__all__ = ["ResNet9FashionMNIST"]
 
 class Mul(nn.Module):
     def __init__(self, weight):
@@ -54,7 +54,7 @@ class Residual(nn.Module):
         return x + F.relu(self.res2(self.res1(x)))
 
 class BasicNet(nn.Module):
-    def __init__(self, do_batchnorm, channels, weight,  pool, num_classes, initial_channels=3, new_num_classes=None, **kw):
+    def __init__(self, do_batchnorm, channels, weight,  pool, num_classes, initial_channels=1, new_num_classes=None, **kw):
         super().__init__()
         self.new_num_classes = new_num_classes
         self.prep = ConvBN(do_batchnorm, initial_channels, channels['prep'], **kw)
@@ -70,7 +70,7 @@ class BasicNet(nn.Module):
                              pool=pool, **kw)
         self.res3 = Residual(do_batchnorm, channels['layer3'], **kw)
 
-        self.pool = nn.MaxPool2d(4)
+        self.pool = nn.MaxPool2d(2)
         self.linear = nn.Linear(channels['layer3'], num_classes, bias=False)
         self.classifier = Mul(weight)
 
@@ -94,7 +94,7 @@ class BasicNet(nn.Module):
                 p.requires_grad = True
         return itertools.chain.from_iterable([m.parameters() for m in modules])
 
-class ResNet9(nn.Module):
+class ResNet9FashionMNIST(nn.Module):
     def __init__(self, do_batchnorm=False, channels=None, weight=0.125, pool=nn.MaxPool2d(2),
                  extra_layers=(), res_layers=('layer1', 'layer3'), **kw):
         super().__init__()
@@ -111,3 +111,4 @@ class ResNet9(nn.Module):
 
     def finetune_parameters(self):
         return self.n.finetune_parameters(self.channels, self.weight, self.pool, **self.kw)
+
