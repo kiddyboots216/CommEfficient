@@ -8,6 +8,7 @@ __all__ = ["FedDataset"]
 
 num_train_datapoints = {"CIFAR10": 50000,
                         "CIFAR100": 50000,
+                        "CIFAR10Pretrained": 50000,
                         "FEMNIST": 712640,
                         "PERSONA": 17568,
                         "FashionMNIST": 60000}

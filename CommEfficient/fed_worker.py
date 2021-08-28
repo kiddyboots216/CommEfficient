@@ -33,7 +33,7 @@ def worker_loop(input_model, ps_weights,
             # as if we were different workers for each batch
             # each batch in batches will have data belonging to a
             # single client (asserted in process_batch)
-            batches = batches_queue.get(timeout=360)
+            batches = batches_queue.get(timeout=600)
         except queue.Empty:
             print("batch queue was empty")
             return
@@ -85,19 +85,15 @@ def worker_loop(input_model, ps_weights,
                 malicious_queue.append(curr_idx)
                 continue
             if do_malicious:
-                #timer(include_in_total=False)
-                #print("Computing mal grad")
                 if malicious_cached_g is not None:
                     if is_train:
-                        #print("Using cached mal grad")
                         g = malicious_cached_g
-                        results = malicious_cached_result
                         sum_g += g
                         grads_buffer[curr_idx] = g.cpu()
-                    all_results.append(results)
-                    #timer()
                     continue
-            if is_train and ((args.mode in ["fedavg","fetchpgd"]) or (args.mode in ["uncompressed", "true_topk"] and do_malicious)):
+            if is_train and ((args.mode in ["fedavg","fetchpgd"])) or (args.mode in ["uncompressed", "true_topk"]
+                and do_malicious and cur_epoch > args.mal_epoch):
+                #)):
                 #and cur_epoch > 20 or args.num_epochs == 1)):
                 # commented out below line since fetchpgd still needs error
                 #assert args.error_type == "none"
@@ -141,6 +137,7 @@ def worker_loop(input_model, ps_weights,
                         step += 1
                         if (args.do_pgd and do_malicious):
                             total_g = original_ps_weights - local_ps_weights
+                            # do grad mask here
                             if args.do_dp and args.l2_norm_clip > 0:
                                 total_g = clip_grad(args.l2_norm_clip, total_g)
                             local_ps_weights = original_ps_weights - total_g
@@ -163,10 +160,15 @@ def worker_loop(input_model, ps_weights,
 
             if is_train:
                 if args.do_dp:
-                    g = clip_grad(args.l2_norm_clip, g)
+                    l2_norm_clip = args.l2_norm_clip
+                    do_adaclip = True
+                    if args.mode in ["fedavg"] and do_adaclip and lr > 0:
+                        l2_norm_clip = args.l2_norm_clip * lr
+                    if do_malicious and lr > 0  and cur_epoch >= args.mal_epoch:
+                    #if False:
+                        g = scale_grad(l2_norm_clip, g)
+                    g = clip_grad(l2_norm_clip, g)
                     cur_epoch = batch[-1][0]
-                    if do_malicious and lr > 0.001:
-                        g = scale_grad(args.l2_norm_clip, g)
                 if do_malicious:
                     malicious_cached_g = g
                     malicious_cached_result = results
@@ -174,7 +176,8 @@ def worker_loop(input_model, ps_weights,
                     #print("Cached mal grad")
                 sum_g += g
                 grads_buffer[curr_idx] = g.cpu()
-            all_results.append(results)
+            if not do_malicious:
+                all_results.append(results)
 
         if is_train:
             # process malicious queue
@@ -196,7 +199,6 @@ def worker_loop(input_model, ps_weights,
                             )
                     decay = args.fedavg_lr_decay ** step # if step = 0, decay = 1
                     step += 1
-                    # TODO: move lr later
                     local_ps_weights -= g * lr * decay
                     total_g = original_ps_weights - local_ps_weights
                     vec = torch.zeros_like(total_g)

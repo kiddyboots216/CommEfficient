@@ -16,13 +16,13 @@ import torchvision
 import models
 from fed_aggregator import FedModel, FedOptimizer
 from utils import make_logdir, union, Timer, TableLogger, parse_args
-from utils import PiecewiseLinear, Exp, num_classes_of_dataset, steps_per_epoch
-from data_utils import FedSampler, FedCIFAR10, FedImageNet, FedCIFAR100, FedFEMNIST, FedFashionMNIST
+from utils import PiecewiseLinear, Exp, num_classes_of_dataset, steps_per_epoch, Decay
+from data_utils import FedSampler, FedCIFAR10, FedImageNet, FedCIFAR100, FedFEMNIST, FedFashionMNIST, FedCIFAR10Pretrained
 from data_utils import fmnist_train_transforms, fmnist_test_transforms
 from data_utils import cifar10_train_transforms, cifar10_test_transforms
 from data_utils import cifar100_train_transforms, cifar100_test_transforms
 from data_utils import imagenet_train_transforms, imagenet_val_transforms
-from data_utils import femnist_train_transforms, femnist_test_transforms
+from data_utils import femnist_train_transforms, femnist_test_transforms, cifar10_pretrained_train_transforms, cifar10_pretrained_test_transforms
 
 import torch.multiprocessing as multiprocessing
 
@@ -116,7 +116,10 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
 
     # ceil in case num_epochs in case we want to do a
     # fractional number of epochs
-    for epoch in range(math.ceil(args.num_epochs)):
+    epoch_iter = range(math.ceil(args.num_epochs))
+    if args.do_finetune:
+        epoch_iter = range(args.finetune_epoch, math.ceil(args.num_epochs))
+    for epoch in epoch_iter:
         epoch_stats = {}
         if epoch == math.ceil(args.num_epochs) - 1:
             epoch_fraction = args.num_epochs - epoch
@@ -171,6 +174,13 @@ def train(model, opt, lr_scheduler, train_loader, test_loader,
             writer.add_scalar('Time/test',  test_time,        epoch)
             writer.add_scalar('Time/total', timer.total_time, epoch)
             writer.add_scalar('Lr',         lr,               epoch)
+        if args.do_checkpoint and epoch==args.checkpoint_epoch:
+            print("Checkpointing model...")
+            if not os.path.exists(args.checkpoint_path):
+                os.makedirs(args.checkpoint_path)
+            PATH = args.checkpoint_path + args.model + args.dataset_name + str(args.mode) + str(args.robustagg) + str(args.checkpoint_epoch) + '.pt'
+            torch.save(model.state_dict(), PATH)
+            print("Model checkpointed at ", PATH)
 
     return summary
 
@@ -261,6 +271,7 @@ def get_data_loaders(args):
     train_transforms, val_transforms = {
      "ImageNet": (imagenet_train_transforms, imagenet_val_transforms),
      "CIFAR10": (cifar10_train_transforms, cifar10_test_transforms),
+     "CIFAR10Pretrained": (cifar10_pretrained_train_transforms, cifar10_pretrained_test_transforms),
      "CIFAR100": (cifar100_train_transforms, cifar100_test_transforms),
      "FEMNIST": (femnist_train_transforms, femnist_test_transforms),
      "FashionMNIST": (fmnist_train_transforms, fmnist_test_transforms),
@@ -395,13 +406,22 @@ if __name__ == "__main__":
                         {"params": params_other, "lr": 1}]
     elif args.do_finetune:
         #PATH = args.checkpoint_path + args.model + str(args.mode) + str(args.do_dp) + str(do_malicious) + '.pt'
-        PATH = args.checkpoint_path + args.model + str('fedavg') + str(True) + str(False) + '.pt'
+        #PATH = args.checkpoint_path + args.model + str('fedavg') + str(True) + str(False) + '.pt'
+        #PATH = args.checkpoint_path + args.model + str(args.mode) + "none" + str(args.finetune_epoch) + '.pt'
+        if args.do_dp_finetune:
+            PATH = args.checkpoint_path + args.model + str(args.finetuned_from) + str(args.mode) + str(args.robustagg) + '.pt'
+        else:
+            PATH = args.checkpoint_path + args.model + args.dataset_name + "uncompressed" + "none" + str(args.finetune_epoch) + '.pt'
+            if args.dataset_name in ["CIFAR10"]:
+                PATH = args.checkpoint_path + args.model + "uncompressed" + "none" + str(args.finetune_epoch) + '.pt'
         print("Finetuning from ", PATH)
         model.load_state_dict(torch.load(PATH))
-        #for param in model.parameters():
-        #    param.requires_grad = False
-        #param_groups = model.finetune_parameters()
-        param_groups = model.parameters()
+        if args.do_dp_finetune:
+            for param in model.parameters():
+                param.requires_grad = False
+            param_groups = model.finetune_parameters()
+        else:
+            param_groups = model.parameters()
     else:
         param_groups = model.parameters()
     opt = optim.SGD(param_groups, lr=1)
@@ -413,6 +433,9 @@ if __name__ == "__main__":
     # original cifar10_fast repo uses [0, 5, 24] and [0, 0.4, 0]
     lr_schedule = PiecewiseLinear([0, args.pivot_epoch, args.num_epochs],
                                   [0, args.lr_scale,                  0])
+    if args.do_dp_finetune:
+    #if False:
+        lr_schedule = Decay(args.lr_scale)
 
     # grad_reduction only controls how gradients from different
     # workers are combined
@@ -422,6 +445,9 @@ if __name__ == "__main__":
                           args.num_workers)
     lambda_step = lambda step: lr_schedule(step / spe)
     lr_scheduler = LambdaLR(opt, lr_lambda=lambda_step)
+    if args.do_finetune:
+        for _ in range(int(spe * args.finetune_epoch)):
+            lr_scheduler.step()
 
     # set up output
     log_dir = make_logdir(args)
@@ -439,8 +465,19 @@ if __name__ == "__main__":
         print("Checkpointing model...")
         if not os.path.exists(args.checkpoint_path):
             os.makedirs(args.checkpoint_path)
-        PATH = args.checkpoint_path + args.model + str(args.mode) + str(args.robustagg) + '.pt'
-        torch.save(model.state_dict(), PATH)
-        print("Model checkpointed at ", PATH)
-        #loaded = torch.load(PATH)
-        #model.load_state_dict(loaded)
+        if args.do_dp_finetune:
+            PATH = "handcrafted_dp_clipped_pretrained.pt"
+            torch.save(model.state_dict(), PATH)
+            print("Model checkpointed at ", PATH)
+            BN_PATH = "bn_stats.pt"
+            torch.save(model.model.model[0].bn_stats, BN_PATH)
+            print("Bn stats checkpointed at ", BN_PATH)
+        else:
+            if args.do_malicious:
+                PATH = args.checkpoint_path + args.model + str(args.dataset_name) + str(args.mode) + str(args.robustagg) + '.pt'
+            else:
+                PATH = args.checkpoint_path + args.model + str(args.dataset_name) + str(args.mode) + str(False) + '.pt'
+            torch.save(model.state_dict(), PATH)
+            print("Model checkpointed at ", PATH)
+            #loaded = torch.load(PATH)
+            #model.load_state_dict(loaded)

@@ -3,3 +3,4 @@ from .resnet9_fmnist import *
 from .resnet101ln import *
 from .configs import *
 from .resnets import *
+from .linear_model import *

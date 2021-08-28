@@ -73,9 +73,13 @@ OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
     --backdoor ${29} \
     --dp_mode ${30} \
     --robustagg ${31} \
+    --finetuned_from FashionMNIST \
+    --finetune_epoch 12 \
+    --checkpoint \
     ${32} \
     ${33} \
     ${34} \
     ${35} \
     ${36} \
     ${37} \
+

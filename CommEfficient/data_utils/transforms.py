@@ -2,6 +2,8 @@ from torchvision import transforms
 
 __all__ = ["cifar10_train_transforms",	
            "cifar10_test_transforms",
+           "cifar10_pretrained_train_transforms",	
+           "cifar10_pretrained_test_transforms",	
            "cifar100_train_transforms",	
            "cifar100_test_transforms",
            "femnist_train_transforms",
@@ -28,6 +30,25 @@ cifar10_test_transforms = transforms.Compose([
         transforms.Normalize(cifar10_mean, cifar10_std)	
     ])
 
+
+cifar10_pretrained_normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225])
+
+"""
+cifar10_pretrained_train_transforms = [
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomCrop(32, 4),
+        transforms.ToTensor(),
+        normalize,
+    ]
+"""
+cifar10_pretrained_train_transforms = transforms.Compose([
+        transforms.ToTensor(),
+    ])
+
+cifar10_pretrained_test_transforms = transforms.Compose([
+        transforms.ToTensor(),
+    ])
 cifar100_mean = (0.5071, 0.4867, 0.4408)
 cifar100_std = (0.2675, 0.2565, 0.2761)
 

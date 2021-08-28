@@ -94,6 +94,13 @@ class BasicNet(nn.Module):
                 p.requires_grad = True
         return itertools.chain.from_iterable([m.parameters() for m in modules])
 
+    def dp_parameters(self):
+        modules = [self.linear, self.classifier]
+        for m in modules:
+            for p in m.parameters():
+                p.requires_grad = True
+        return itertools.chain.from_iterable([m.parameters() for m in modules])
+
 class ResNet9(nn.Module):
     def __init__(self, do_batchnorm=False, channels=None, weight=0.125, pool=nn.MaxPool2d(2),
                  extra_layers=(), res_layers=('layer1', 'layer3'), **kw):
@@ -111,3 +118,6 @@ class ResNet9(nn.Module):
 
     def finetune_parameters(self):
         return self.n.finetune_parameters(self.channels, self.weight, self.pool, **self.kw)
+
+    def dp_parameters(self):
+        return self.n.dp_parameters()

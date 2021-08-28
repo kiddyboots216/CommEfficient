@@ -33,8 +33,15 @@ class Exp(namedtuple("Exp", ("warmup_epochs", "amplitude", "decay_len"))):
         else:
             return self.amplitude * 10**(-(t - self.warmup_epochs) / self.decay_len)
 
+class Decay(namedtuple('Decay', ('scale'))):
+    def __call__(self, t):
+        #return self.scale * self.lr_scale/(self.shift + t)
+        #return self.scale/np.sqrt(t+1)
+        return self.scale
+
 fed_datasets = {"CIFAR10": 10,
                 "CIFAR100": 100,
+                "CIFAR10Pretrained": 10,
                 "FEMNIST": 62,
                 "ImageNet": 1000,
                 "PERSONA": -1,
@@ -123,9 +130,10 @@ def parse_args(default_lr=None):
                         help="Name of the model.",
                         choices=model_names)
     parser.add_argument("--finetune", action="store_true", dest="do_finetune")
+    parser.add_argument("--dp_finetune", action="store_true", dest="do_dp_finetune")
     parser.add_argument("--checkpoint", action="store_true", dest="do_checkpoint")
     parser.add_argument("--checkpoint_path", type=str,
-                        default='/data/scsi/ashwineep/CommEfficient/CommEfficient/checkpoints/',
+                        default='/data/nvme/ashwinee/CommEfficient/CommEfficient/checkpoints/',
                         help="Path or url to cache the model")
     parser.add_argument("--finetune_path", type=str,
                         default='./finetune',
@@ -211,6 +219,8 @@ def parse_args(default_lr=None):
     parser.add_argument("--eval_before_start", action='store_true',
                         help=("If true start with a first evaluation"
                               " before training"))
+    parser.add_argument("--checkpoint_epoch", type=int, default=-1)
+    parser.add_argument("--finetune_epoch", type=int, default=12)
 
     #mal args
     parser.add_argument("--malicious", action="store_true",
@@ -361,7 +371,13 @@ def sm2np(sm, shape, dtype=ctypes.c_float):
     assert(nparray.base is sm)
     return nparray
 
-def clip_grad(l2_norm_clip, record):
+def clip_grad(l2_norm_clip, record, do_l1=False):
+    if do_l1:
+        l1_norm = torch.norm(record, p=1)
+        if l1_norm < l2_norm_clip:
+            return record
+        else:
+            return record / float(torch.abs(torch.tensor(l1_norm) / l2_norm_clip))
     try:
         l2_norm = torch.norm(record)
     except:

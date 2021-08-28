@@ -3,29 +3,11 @@
 #SBATCH -p rise # partition (queue)
 #SBATCH -N 1 # number of nodes requested
 #SBATCH -n 1 # number of tasks (i.e. processes)
-#SBATCH --cpus-per-task=48 # number of cores per task
+#SBATCH --cpus-per-task=4 # number of cores per task
 # I think gpu:4 will request 4 of any kind of gpu per node,
 # and gpu:v100_32:8 should request 8 v100_32 per node
 #SBATCH --gres=gpu:1
-##SBATCH --nodelist=pavia # if you need specific nodes
-#SBATCH --exclude=r16,atlas,blaze,steropes,freddie,como,zanino # nodes not yet on SLURM-only
 #SBATCH -t 2-2:00 # time requested (D-HH:MM)
-# slurm will cd to this directory before running the script
-# you can also just run sbatch submit.sh from the directory
-# you want to be in
-##SBATCH -D /home/eecs/drothchild/slurm
-# use these two lines to control the output file. Default is
-# slurm-<jobid>.out. By default stdout and stderr go to the same
-# place, but if you use both commands below they'll be split up
-# filename patterns here: https://slurm.schedmd.com/sbatch.html
-# %N is the hostname (if used, will create output(s) per node)
-# %j is jobid
-##SBATCH -o slurm.%N.%j.out # STDOUT
-##SBATCH -e slurm.%N.%j.err # STDERR
-# if you want to get emails as your jobs run/fail
-##SBATCH --mail-type=NONE # Mail events (NONE, BEGIN, END, FAIL, ALL)
-##SBATCH --mail-user=<your_email> # Where to send mail 
-
 # print some info for context
 pwd
 hostname
@@ -38,7 +20,7 @@ echo starting job...
 # or do your conda magic, etc.
 source ~/.bashrc
 #conda init
-conda activate comm
+conda activate afl
 ulimit -n 50000
 
 # python will buffer output of your script unless you set this
@@ -48,12 +30,11 @@ ulimit -n 50000
 export PYTHONUNBUFFERED=1
 
 # do ALL the research
-rsync -zarh --exclude ".git/*" --exclude "*.out" ~/CommEfficient /data/ashwineep/
-cd /data/ashwineep/CommEfficient/CommEfficient
+rsync -zarh --exclude ".git/*" --exclude "*.out" ~/CommEfficient /data/nvme/ashwinee/
+cd /data/nvme/ashwinee/CommEfficient/CommEfficient
 OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
-    --dataset_dir /data/ashwineep/datasets/${1}/ \
+    --dataset_dir /data/nvme/ashwinee/datasets/${1}/ \
     --valid_batch_size 512 \
-    --tensorboard \
     --dataset_name ${1} \
     --model ${2} \
     --mode ${3} \
@@ -69,12 +50,12 @@ OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
     --weight_decay 5e-4 \
     --num_fedavg_epochs ${13} \
     --fedavg_lr_decay 1 \
+    --share_ps_gpu \
     --fedavg_batch_size ${14} \
     --num_devices 1 \
     --k ${15} \
     --num_rows 1 \
     --num_cols ${16} \
-    --share_ps_gpu \
     --port ${17} \
     --train_dataloader_workers 2 \
     --val_dataloader_workers 0 \
@@ -91,13 +72,13 @@ OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
     --mal_num_epochs ${28} \
     --backdoor ${29} \
     --dp_mode ${30} \
-    ${31} \
+    --robustagg ${31} \
+    --finetuned_from CIFAR10 \
+    --finetune_epoch 12 \
+    --checkpoint \
     ${32} \
     ${33} \
     ${34} \
     ${35} \
     ${36} \
     ${37} \
-
-# print completion time
-date

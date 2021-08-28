@@ -209,6 +209,7 @@ class FedModel:
 
         # batch is a tuple, with the client ids as the first tensor
         client_indices = batch[0]
+        cur_epoch = batch[-1][0]
         unique_clients = torch.unique(client_indices)
         g_participating_clients = unique_clients
 
@@ -252,7 +253,7 @@ class FedModel:
             # we need a timeout eventually in case the worker crashes
             #r = q.get(timeout=3600)
             if self.args.robustagg in ["trimmed_mean", "coordinate_median", "krum", "bulyan"]:
-                g, r = q.get(timeout=360)
+                g, r = q.get(timeout=600)
                 grads.extend(g)
             else:
                 r = q.get(timeout=360)
@@ -269,10 +270,14 @@ class FedModel:
         transmit = torch.zeros(shape).to(self.args.device).float()
         torch.distributed.reduce(transmit, 0)
         f = self.args.num_workers * (self.args.mal_num_clients/self.args.num_clients)
-        #f = 5
+        #f = 0
         f = int(f)
         if self.args.robustagg == "trimmed_mean":
-            g_minibatch_gradient[:] = self._trimmed_mean(grads, f).to(self.args.device).float()
+            trimmed = self._trimmed_mean(grads, f).to(self.args.device).float()
+            #transmitted = transmit / self.args.num_workers
+            #if f == 0:
+            #    assert torch.allclose(trimmed, transmitted)
+            g_minibatch_gradient[:] = trimmed
         elif self.args.robustagg == "coordinate_median":
             g_minibatch_gradient[:] = self._coordinate_median(grads).to(self.args.device).float()
         elif self.args.robustagg == "krum":
@@ -286,7 +291,7 @@ class FedModel:
         return split
 
     def _trimmed_mean(self, grads, f):
-        return torch.stack(grads).sort()[0][f:-f].mean()
+        return torch.stack(grads).sort(axis=0)[0][f:-f].mean(axis=0)
 
     def _coordinate_median(self, grads):
         return torch.stack(grads).cuda().permute(1,0).median(axis=1)[0]
@@ -352,8 +357,8 @@ class FedModel:
             s.append(grad)
         # return the trimmed mean of the candidate set
         del grads
-        return torch.stack(s).sort()[0][f:-f].mean()
-        #return self._trimmed_mean(s, f)
+        #return torch.stack(s).sort()[0][f:-f].mean()
+        return self._trimmed_mean(s, f)
 
     def _call_val(self, batch):
         split = [t.split(self.args.valid_batch_size) for t in batch]
@@ -546,14 +551,43 @@ def _server_helper_true_topk(gradient, Vvelocity, Verror, args, lr):
 
     rho = args.virtual_momentum
 
-    # Vvelocity = rho * Vvelocity + gradient
+
     torch.add(gradient,
               Vvelocity,
               alpha=rho,
               out=Vvelocity)
     Verror += Vvelocity
-
     update = _topk(Verror, k=args.k)
+    """
+    update = _topk(gradient, k=args.k)
+    def calc_gamma(u, w):
+        update_l1 = u.norm(p=1)
+        memory_l1 = w.norm(p=1)
+        gamma = update_l1 / memory_l1
+        print("GAMMA", 1-gamma)
+    def calc_gamma(g):
+        p = args.mal_num_clients / 400
+        budget = args.l2_norm_clip * p
+        n_swapped = 0
+        g = g.abs().sort(descending=True)[0]
+        alpha = g[:args.k]
+        beta = g[args.k:int(2*args.k)]
+        while budget > 0 and n_swapped < args.k:
+            spend = (alpha[-n_swapped].abs() - beta[n_swapped].abs())
+            budget -= spend
+            n_swapped += 1
+        gamma = alpha[-n_swapped:].abs() + beta[:n_swapped].abs()
+        gamma = gamma.sum()
+        print("GAMMA", gamma, "N_SWAPS", n_swapped)
+        return gamma
+
+    if calc_gamma(gradient) > 0.01:
+        update.zero_()
+        return update, Vvelocity, Verror
+    placeholder = torch.zeros_like(Verror)
+    placeholder[update.nonzero()] = Verror[update.nonzero()]
+    update = placeholder
+    """
 
     # we need to do momentum factor masking on the worker
     # momentum vectors for true_topk, which we can't do in

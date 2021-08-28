@@ -3,7 +3,7 @@
 #SBATCH -p rise # partition (queue)
 #SBATCH -N 1 # number of nodes requested
 #SBATCH -n 1 # number of tasks (i.e. processes)
-#SBATCH --cpus-per-task=6 # number of cores per task
+#SBATCH --cpus-per-task=4 # number of cores per task
 # I think gpu:4 will request 4 of any kind of gpu per node,
 # and gpu:v100_32:8 should request 8 v100_32 per node
 #SBATCH --gres=gpu:1
@@ -30,10 +30,10 @@ ulimit -n 50000
 export PYTHONUNBUFFERED=1
 
 # do ALL the research
-rsync -zarh --exclude ".git/*" --exclude "*.out" ~/CommEfficient /data/scsi/ashwineep/
-cd /data/scsi/ashwineep/CommEfficient/CommEfficient
-OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
-    --dataset_dir /data/scsi/ashwineep/datasets/${1}/ \
+rsync -zarh --exclude ".git/*" --exclude "*.out" ~/CommEfficient /data/nvme/ashwinee/
+cd /data/nvme/ashwinee/CommEfficient/CommEfficient
+OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python compare.py \
+    --dataset_dir /data/nvme/ashwinee/datasets/${1}/ \
     --valid_batch_size 512 \
     --dataset_name ${1} \
     --model ${2} \
@@ -73,6 +73,7 @@ OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
     --backdoor ${29} \
     --dp_mode ${30} \
     --robustagg ${31} \
+    --checkpoint \
     ${32} \
     ${33} \
     ${34} \

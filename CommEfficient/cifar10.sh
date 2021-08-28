@@ -1,7 +1,7 @@
-rsync -zarh --exclude ".git/*" --exclude "*.out" ~/CommEfficient /data/ashwineep/
-cd /data/ashwineep/CommEfficient/CommEfficient
+rsync -zarh --exclude ".git/*" --exclude "*.out" ~/CommEfficient /data/scsi/ashwineep/
+cd /data/scsi/ashwineep/CommEfficient/CommEfficient
 OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
-    --dataset_dir /data/ashwineep/datasets/${1}/ \
+    --dataset_dir /data/scsi/ashwineep/datasets/${1}/ \
     --valid_batch_size 512 \
     --tensorboard \
     --dataset_name ${1} \
@@ -41,7 +41,8 @@ OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
     --mal_num_epochs ${28} \
     --backdoor ${29} \
     --dp_mode ${30} \
-    ${31} \
+    --robustagg ${31} \
+    --dp_finetune \
     ${32} \
     ${33} \
     ${34} \

@@ -58,9 +58,9 @@ model_ben = model_cls(**model_config)
 
 
 #PATH_mal = args.checkpoint_path + args.model + str(args.mode) + str(args.do_dp) + str(True) + '.pt'
-PATH_ben = args.checkpoint_path + args.model + str(args.mode) + str(args.do_dp) + str(False) + '.pt'
+PATH_ben = args.checkpoint_path + args.model + str(args.dataset_name) + "uncompressed" + str(False) + '.pt'
 #PATH_ben = args.checkpoint_path + args.model + args.finetuned_from + args.dataset_name + str(args.mode) + str(args.do_dp) + '.pt'
-PATH_mal = args.checkpoint_path + args.model + str(args.mode) + str(args.robustagg) + '.pt'
+PATH_mal = args.checkpoint_path + args.model + str(args.dataset_name) + str(args.mode) + str(args.robustagg) + '.pt'
 print("Mal Model checkpointed at ", PATH_mal)
 print("Ben Model checkpointed at ", PATH_ben)
 loaded_mal = torch.load(PATH_mal)

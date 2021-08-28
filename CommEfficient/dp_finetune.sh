@@ -29,12 +29,12 @@ ulimit -n 50000
 # script you'll only get updated every several lines printed
 export PYTHONUNBUFFERED=1
 
-# do ALL the research
 rsync -zarh --exclude ".git/*" --exclude "*.out" ~/CommEfficient /data/scsi/ashwineep/
 cd /data/scsi/ashwineep/CommEfficient/CommEfficient
 OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
     --dataset_dir /data/scsi/ashwineep/datasets/${1}/ \
     --valid_batch_size 512 \
+    --tensorboard \
     --dataset_name ${1} \
     --model ${2} \
     --mode ${3} \
@@ -50,12 +50,12 @@ OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
     --weight_decay 5e-4 \
     --num_fedavg_epochs ${13} \
     --fedavg_lr_decay 1 \
-    --share_ps_gpu \
     --fedavg_batch_size ${14} \
     --num_devices 1 \
     --k ${15} \
     --num_rows 1 \
     --num_cols ${16} \
+    --share_ps_gpu \
     --port ${17} \
     --train_dataloader_workers 2 \
     --val_dataloader_workers 0 \
@@ -73,9 +73,16 @@ OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
     --backdoor ${29} \
     --dp_mode ${30} \
     --robustagg ${31} \
+    --checkpoint \
+    --checkpoint_epoch -1 \
+    --finetune \
+    --dp_finetune \
+    --finetuned_from CIFAR100 \
+    --finetune_epoch 0 \
     ${32} \
     ${33} \
     ${34} \
     ${35} \
     ${36} \
     ${37} \
+

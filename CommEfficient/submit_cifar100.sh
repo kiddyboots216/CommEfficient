@@ -3,7 +3,7 @@
 #SBATCH -p rise # partition (queue)
 #SBATCH -N 1 # number of nodes requested
 #SBATCH -n 1 # number of tasks (i.e. processes)
-#SBATCH --cpus-per-task=6 # number of cores per task
+#SBATCH --cpus-per-task=4 # number of cores per task
 # I think gpu:4 will request 4 of any kind of gpu per node,
 # and gpu:v100_32:8 should request 8 v100_32 per node
 #SBATCH --gres=gpu:1
@@ -73,9 +73,13 @@ OMP_NUM_THREADS=16 KMP_INIT_AT_FORK=FALSE python cv_train.py \
     --backdoor ${29} \
     --dp_mode ${30} \
     --robustagg ${31} \
+    --finetuned_from CIFAR100 \
+    --finetune_epoch 12 \
+    --checkpoint \
     ${32} \
     ${33} \
     ${34} \
     ${35} \
     ${36} \
     ${37} \
+
